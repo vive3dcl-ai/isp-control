@@ -1,0 +1,119 @@
+# Full stack for local development (hot reload)
+# Usage: docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile.dev
+    container_name: isp-control-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_USER: ${POSTGRES_USER:-isp}
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD:-isp}
+      DATABASE_NAME: ${POSTGRES_DB:-isp_control}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      PORT: 3000
+      CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173,http://localhost
+      WHATSAPP_BAILEYS_URL: http://whatsapp-baileys:3101
+      WHATSAPP_BAILEYS_SECRET: ${WHATSAPP_BAILEYS_SECRET:-dev-wa-secret-change-me}
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./apps/api/src:/app/apps/api/src
+      - ./apps/api/tsconfig.json:/app/apps/api/tsconfig.json
+      - ./apps/api/nest-cli.json:/app/apps/api/nest-cli.json
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile.dev
+    container_name: isp-control-web
+    restart: unless-stopped
+    environment:
+      VITE_API_URL: http://localhost:3000/api
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./apps/web/src:/app/apps/web/src
+      - ./apps/web/public:/app/apps/web/public
+      - ./apps/web/index.html:/app/apps/web/index.html
+      - ./apps/web/vite.config.ts:/app/apps/web/vite.config.ts
+      - ./apps/web/tsconfig.json:/app/apps/web/tsconfig.json
+      - ./apps/web/tsconfig.app.json:/app/apps/web/tsconfig.app.json
+      - ./apps/web/tsconfig.node.json:/app/apps/web/tsconfig.node.json
+    depends_on:
+      - api
+
+  landing:
+    build:
+      context: .
+      dockerfile: apps/landing/Dockerfile
+    container_name: isp-control-landing
+    restart: unless-stopped
+    ports:
+      - "${LANDING_PORT:-3040}:80"
+    environment:
+      PANEL_URL: ${PANEL_URL:-http://localhost:5173}
+    volumes:
+      - ./apps/landing/public:/usr/share/nginx/html
+
+  seed:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile.dev
+    container_name: isp-control-seed
+    profiles: ["seed"]
+    env_file:
+      - .env
+    environment:
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_USER: ${POSTGRES_USER:-isp}
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD:-isp}
+      DATABASE_NAME: ${POSTGRES_DB:-isp_control}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    volumes:
+      - ./apps/api/src:/app/apps/api/src
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_started
+    command: ["npm", "run", "seed"]
+    restart: "no"
+
+  whatsapp-baileys:
+    build:
+      context: .
+      dockerfile: apps/whatsapp-baileys/Dockerfile.dev
+    container_name: isp-control-whatsapp-baileys
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      PORT: 3101
+      WHATSAPP_BAILEYS_SECRET: ${WHATSAPP_BAILEYS_SECRET:-dev-wa-secret-change-me}
+      WHATSAPP_SESSIONS_DIR: /data/sessions
+      API_INTERNAL_URL: http://api:3000/api
+    volumes:
+      - ./apps/whatsapp-baileys/src:/app/apps/whatsapp-baileys/src
+      - wa_sessions_data:/data/sessions
+    expose:
+      - "3101"
+    depends_on:
+      - api
+
+volumes:
+  wa_sessions_data:

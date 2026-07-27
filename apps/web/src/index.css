@@ -1,0 +1,123 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #0b1220;
+  --bg-elevated: #121a2b;
+  --bg-sidebar: #0a101c;
+  --bg-header: #0f1726;
+  --border: #243047;
+  --text: #e8eef6;
+  --text-muted: #8b9cb3;
+  --accent: #2f9cff;
+  --accent-hover: #1f8aeb;
+  --danger: #f0434b;
+  --success: #22c55e;
+  --sidebar-width: 16rem;
+  font-family: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  color: var(--text);
+  background: var(--bg);
+  line-height: 1.5;
+  font-weight: 400;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: var(--bg);
+  overflow-x: hidden;
+}
+
+#root {
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+/* Leaflet divIcon: sin caja blanca alrededor de iconos custom del mapa. */
+.leaflet-div-icon.isp-map-element-icon {
+  background: transparent;
+  border: none;
+}
+
+/* —— Client portal theme (system preference; fallback dark) —— */
+.portal-root {
+  --portal-bg: #0c1219;
+  --portal-elevated: #141c27;
+  --portal-border: #2a3648;
+  --portal-text: #eef3f8;
+  --portal-muted: #8fa0b5;
+  --portal-accent: #0d9488;
+  color: var(--portal-text);
+  background: var(--portal-bg);
+  font-family: "Sora", "Segoe UI", system-ui, sans-serif;
+  color-scheme: dark;
+}
+
+html[data-portal-theme='light'] .portal-root {
+  --portal-bg: #f3f6f9;
+  --portal-elevated: #ffffff;
+  --portal-border: #d5dee8;
+  --portal-text: #142033;
+  --portal-muted: #5b6b80;
+  --portal-accent: #0f766e;
+  color-scheme: light;
+}
+
+.portal-brand {
+  font-family: "Fraunces", Georgia, serif;
+  letter-spacing: -0.02em;
+}
+
+
+/* Popup de detalle (mapa bloqueado). */
+.leaflet-popup.isp-map-detail-popup .leaflet-popup-content-wrapper {
+  background: var(--bg-elevated);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+}
+
+.leaflet-popup.isp-map-detail-popup .leaflet-popup-tip {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+}
+
+.leaflet-popup.isp-map-detail-popup .leaflet-popup-content {
+  margin: 12px 14px;
+  max-height: min(55vh, 420px);
+  overflow-y: auto;
+}
+
+.leaflet-popup.isp-map-detail-popup a.leaflet-popup-close-button {
+  color: var(--text-muted);
+}
+
+/* Confina los z-index internos de Leaflet (controles/atribución usan 1000)
+   al contenedor del mapa, para que no se dibujen sobre las modales. */
+.leaflet-container {
+  isolation: isolate;
+}
+
+/* —— Mobile field app (/movil) —— */
+.mobile-app {
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior-y: contain;
+}
+
+.mobile-tile {
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--border) 80%, transparent);
+}
+
+@media (min-width: 640px) {
+  .mobile-app main {
+    padding-top: 1.25rem;
+  }
+}
+
+

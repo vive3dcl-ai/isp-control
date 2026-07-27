@@ -1,0 +1,114 @@
+# Lab TR069: GenieACS CWMP + OpenVPN client (shared netns) toward MikroTik reverse server
+#
+#   npm run docker:lab:provision   # once: OVPN server on MikroTik + DB rows
+#   npm run docker:lab:up
+
+services:
+  lab-mongo:
+    image: mongo:6.0
+    container_name: isp-control-lab-mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - lab_mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.runCommand({ ping: 1 })"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # Shared network namespace: OpenVPN (tun) + published ACS ports
+  lab-vpnacs:
+    image: alpine:3.20
+    container_name: isp-control-lab-vpnacs
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "14501:14501"
+      - "7557:7557"
+      - "7567:7567"
+      - "3001:3000"
+    volumes:
+      - /home/andres/Projects/isp-control/deploy/lab-tr069/ovpn:/cfg:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        apk add --no-cache openvpn >/dev/null
+        test -f /cfg/acs.ovpn || { echo "missing acs.ovpn — run docker:lab:provision"; exit 1; }
+        cd /cfg
+        echo "OpenVPN client → MikroTik reverse (no RFC1918 routes — keep Docker DNS)"
+        openvpn --config /cfg/acs.ovpn --cd /cfg &
+        OVPN_PID=$!
+        # Wait for tun0, then route ONU mgmt VLAN via OVPN peer (Connection Request / lab probes).
+        for i in $(seq 1 30); do
+          if ip link show tun0 >/dev/null 2>&1; then break; fi
+          sleep 1
+        done
+        ip route replace 10.60.60.0/24 via 10.69.70.1 dev tun0 2>/dev/null || true
+        echo "lab route 10.60.60.0/24 via 10.69.70.1 (tun0)"
+        wait "$OVPN_PID"
+
+  lab-genieacs:
+    image: drumsergio/genieacs:1.2.13
+    container_name: isp-control-lab-acs
+    restart: unless-stopped
+    network_mode: service:lab-vpnacs
+    depends_on:
+      lab-mongo:
+        condition: service_healthy
+      lab-vpnacs:
+        condition: service_started
+    environment:
+      GENIEACS_MONGODB_CONNECTION_URL: mongodb://host.docker.internal:27017/genieacs
+      GENIEACS_CWMP_INTERFACE: 0.0.0.0
+      # Must match ACS URL port on the VPN (ONU → 10.69.70.2:14501).
+      # Host publish alone does NOT apply to tun0 — CWMP must listen in this netns.
+      GENIEACS_CWMP_PORT: "14501"
+      GENIEACS_NBI_INTERFACE: 0.0.0.0
+      GENIEACS_NBI_PORT: "7557"
+      GENIEACS_FS_INTERFACE: 0.0.0.0
+      GENIEACS_FS_PORT: "7567"
+      GENIEACS_UI_INTERFACE: 0.0.0.0
+      GENIEACS_UI_PORT: "3000"
+      GENIEACS_UI_JWT_SECRET: lab-tr069-change-me
+
+  lab-provision:
+    build:
+      context: ../..
+      dockerfile: apps/api/Dockerfile.dev
+    container_name: isp-control-lab-provision
+    profiles: ["lab-provision"]
+    env_file:
+      - ../../.env
+    environment:
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_USER: ${POSTGRES_USER:-isp}
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD:-isp}
+      DATABASE_NAME: ${POSTGRES_DB:-isp_control}
+      LAB_OUT_DIR: /lab/ovpn
+      LAB_TUNNEL_NAME: lab-tr069
+      LAB_SUBNET_N: "70"
+      LAB_OVPN_PORT: "1194"
+    volumes:
+      - ./provision-mikrotik-ovpn.cjs:/lab/provision-mikrotik-ovpn.cjs:ro
+      - /home/andres/Projects/isp-control/deploy/lab-tr069/ovpn:/lab/ovpn
+      - ../../apps/api/dist:/app/apps/api/dist:ro
+    working_dir: /app/apps/api
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_started
+    command: ["node", "/lab/provision-mikrotik-ovpn.cjs"]
+    restart: "no"
+
+volumes:
+  lab_mongo_data:

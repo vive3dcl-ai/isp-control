@@ -1,0 +1,31 @@
+{
+  "name": "isp-control",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev:api": "npm run start:dev --workspace=@isp-control/api",
+    "dev:web": "npm run dev --workspace=@isp-control/web",
+    "build": "npm run build --workspaces --if-present",
+    "seed": "npm run seed --workspace=@isp-control/api",
+    "docker:dev": "docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build",
+    "docker:dev:d": "docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build -d",
+    "docker:prod": "docker compose -f docker-compose.prod.yml --env-file .env.production up -d",
+    "docker:prod:pull": "docker compose -f docker-compose.prod.yml --env-file .env.production pull",
+    "docker:prod:down": "docker compose -f docker-compose.prod.yml --env-file .env.production down",
+    "docker:prod:logs": "docker compose -f docker-compose.prod.yml --env-file .env.production logs -f",
+    "docker:hub:push": "bash scripts/docker-hub-push.sh",
+    "docker:seed": "docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile seed run --rm seed",
+    "docker:seed:prod": "docker compose -f docker-compose.prod.yml --env-file .env.production --profile seed run --rm seed",
+    "docker:down": "docker compose -f docker-compose.yml -f docker-compose.dev.yml down",
+    "docker:lab:provision": "docker compose -f docker-compose.yml -f docker-compose.dev.yml -f deploy/lab-tr069/docker-compose.lab.yml --profile lab-provision run --rm lab-provision",
+    "docker:lab:up": "docker compose -f docker-compose.yml -f docker-compose.dev.yml -f deploy/lab-tr069/docker-compose.lab.yml up -d lab-mongo lab-vpnacs lab-genieacs",
+    "docker:lab:down": "docker compose -f docker-compose.yml -f docker-compose.dev.yml -f deploy/lab-tr069/docker-compose.lab.yml stop lab-mongo lab-vpnacs lab-genieacs lab-ovpn-client 2>/dev/null; docker compose -f docker-compose.yml -f docker-compose.dev.yml -f deploy/lab-tr069/docker-compose.lab.yml rm -f lab-mongo lab-vpnacs lab-genieacs lab-ovpn-client 2>/dev/null; true",
+    "docker:logs": "docker compose -f docker-compose.yml -f docker-compose.dev.yml logs -f"
+  },
+  "overrides": {
+    "typeorm": "0.3.27"
+  }
+}

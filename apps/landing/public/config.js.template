@@ -1,0 +1,3 @@
+window.ISP_LANDING = {
+  panelUrl: "${PANEL_URL}",
+};

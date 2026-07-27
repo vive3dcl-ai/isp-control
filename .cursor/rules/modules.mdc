@@ -1,0 +1,48 @@
+---
+description: Estructura del sistema de módulos (SMTP, Mercado Pago, pagos plataforma)
+globs: apps/api/src/modules/**/*,apps/web/src/components/*Module*,apps/web/src/components/Integraciones*,apps/web/src/components/Smtp*,apps/web/src/components/MercadoPago*,apps/web/src/pages/AdminPaymentMethodsPage.tsx,apps/web/src/pages/AdminModulesPage.tsx,apps/web/src/lib/modules.ts
+alwaysApply: false
+---
+
+# Sistema de módulos
+
+## Capas
+
+1. **Catálogo** (`module-catalog.ts`): `id`, `name`, `description`, `alwaysEnabled`, `billable`, `priceMonthly`, `priceCurrency`.
+2. **Entitlements** (`public.tenants.enabled_modules`): Admin → Empresas → Módulos.
+3. **Config tenant** (`{schema}.module_configs`): Ajustes → Empresa → Integraciones.
+4. **Pagos plataforma** (`public.platform_payment_methods`): Admin → Métodos de pago (suscripciones ISP Control).
+5. **Precios globales**: Admin → Módulos (`platform_module_pricing`); solo billable (sin SMTP).
+
+## Pagos: independientes por diseño
+
+- **Plataforma** → `platform_payment_methods` (Admin → Métodos de pago).
+- **Tenant** → `module_configs.mercadopago` (Facturación → Métodos de pago).
+- Credenciales, entorno y webhooks **nunca se comparten**.
+- Precio del add-on: USD en `platform_module_pricing`; ref. CLP con tasa diaria (`platform_fx_rates` ← mindicador.cl).
+- Mercado Pago Checkout Pro: AR, BR, CL, CO, MX, PE, UY (`MERCADOPAGO_CHECKOUT_PRO_COUNTRIES`).
+- Credenciales tenant según `tenants.country` (portal Developers de ese país).
+
+## Reglas
+
+- `alwaysEnabled` (smtp): siempre ON; checkbox bloqueado.
+- `billable` (mercadopago, mapa_red, whatsapp): opcional; mostrar precio en Admin.
+- Secretos: nunca devolver; `hasAccessToken` / `hasPassword` + vacío = no cambiar.
+- Entorno: `sandbox` | `production`.
+- Mercado Pago: integración **Checkout Pro** (`integration: checkout_pro`).
+- Módulo Mercado Pago disponible solo si el país del tenant está en la lista Checkout Pro.
+- `mapa_red`: sin config; menú tenant siempre visible; gate por `enabled_modules`.
+- `whatsapp`: Cloud API o Baileys; cupo global 30 Baileys (`WHATSAPP_BAILEYS_MAX_SLOTS`); Cloud API no resta.
+
+## Endpoints
+
+| Quién | Path |
+|-------|------|
+| Admin | `GET /admin/modules/catalog`, `PATCH /admin/modules/:id/pricing` |
+| Admin | `GET/PATCH /admin/tenants/:id/modules` |
+| Admin | `GET/PATCH /admin/payment-methods`, `GET/PATCH /admin/payment-methods/:id` |
+| Tenant | `GET /app/settings/modules` |
+| Tenant | `GET/PATCH /app/settings/modules/smtp` |
+| Tenant | `GET/PATCH /app/settings/modules/mercadopago` |
+| Tenant | `GET/PATCH /app/settings/modules/whatsapp` |
+| Tenant | `POST .../whatsapp/baileys/start|logout`, `GET .../whatsapp/baileys/status` |

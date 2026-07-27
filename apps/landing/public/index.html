@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="ISP Control — plataforma multi-tenant para operar CRM, red, mapa, facturación y campo en un solo panel."
+    />
+    <title>ISP Control</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Sora:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="/config.js" defer></script>
+    <script src="/main.js" defer></script>
+  </head>
+  <body>
+    <div class="atmosphere" aria-hidden="true">
+      <svg class="mesh" viewBox="0 0 1440 900" preserveAspectRatio="xMidYMid slice">
+        <defs>
+          <linearGradient id="fiber" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#2f9cff" stop-opacity="0.55" />
+            <stop offset="55%" stop-color="#38bdf8" stop-opacity="0.22" />
+            <stop offset="100%" stop-color="#0ea5e9" stop-opacity="0.08" />
+          </linearGradient>
+        </defs>
+        <path
+          class="path-a"
+          d="M-40 620 C 220 480, 380 740, 620 520 S 980 280, 1180 420 S 1480 640, 1520 520"
+          fill="none"
+          stroke="url(#fiber)"
+          stroke-width="1.6"
+        />
+        <path
+          class="path-b"
+          d="M-20 210 C 260 360, 420 120, 680 260 S 1020 520, 1280 340 S 1500 180, 1560 260"
+          fill="none"
+          stroke="url(#fiber)"
+          stroke-width="1.2"
+        />
+        <circle class="node n1" cx="620" cy="520" r="4" />
+        <circle class="node n2" cx="980" cy="280" r="3.5" />
+        <circle class="node n3" cx="680" cy="260" r="3.5" />
+        <circle class="node n4" cx="1280" cy="340" r="4" />
+      </svg>
+    </div>
+
+    <header class="top">
+      <a class="brand" href="#top">ISP Control</a>
+      <nav class="nav">
+        <a href="#producto">Producto</a>
+        <a href="#operacion">Operación</a>
+        <a class="nav-cta" id="nav-panel" href="#">Panel</a>
+      </nav>
+    </header>
+
+    <main id="top">
+      <section class="hero">
+        <p class="brand-hero">ISP Control</p>
+        <h1>Opera tu ISP<br />en un solo panel</h1>
+        <p class="lede">
+          CRM, topología, mapa de red, facturación y trabajo en campo —
+          multi-tenant, listo para producción.
+        </p>
+        <div class="cta-row">
+          <a class="btn primary" id="cta-panel" href="#">Entrar al panel</a>
+          <a class="btn ghost" href="#producto">Ver capacidades</a>
+        </div>
+      </section>
+
+      <section class="band" id="producto">
+        <h2>Todo el ciclo del servicio</h2>
+        <p class="section-lede">
+          Desde el lead hasta la ONU autorizada y la factura cobrada.
+        </p>
+        <ul class="capabilities">
+          <li>
+            <strong>CRM y clientes</strong>
+            <span>Leads, servicios, zonas e instalaciones guiadas.</span>
+          </li>
+          <li>
+            <strong>Red y OLT</strong>
+            <span>Topología, ONUs ZTE, VLANs, perfiles y monitoreo.</span>
+          </li>
+          <li>
+            <strong>Mapa de red</strong>
+            <span>NAP, mufas, postes, cables y capas en campo.</span>
+          </li>
+          <li>
+            <strong>Facturación</strong>
+            <span>Facturas, portal de clientes y cobros en línea.</span>
+          </li>
+        </ul>
+      </section>
+
+      <section class="ops" id="operacion">
+        <h2>Hecho para operación real</h2>
+        <p class="section-lede">
+          Panel web para la oficina. Vista móvil para el técnico. Un mismo
+          sistema, dos formas de trabajar.
+        </p>
+        <div class="ops-split">
+          <div>
+            <p class="ops-kicker">Escritorio</p>
+            <p>
+              Calendario, mapa, topología, soporte y ajustes de empresa con
+              control total.
+            </p>
+          </div>
+          <div>
+            <p class="ops-kicker">Móvil</p>
+            <p>
+              Instalar, agendas del día, NAP/mufas cercanas y postes con GPS.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="close">
+        <h2>Empieza a operar</h2>
+        <p class="section-lede">
+          Accede al panel de tu empresa o de la plataforma.
+        </p>
+        <a class="btn primary" id="cta-bottom" href="#">Abrir panel</a>
+      </section>
+    </main>
+
+    <footer class="foot">
+      <span>ISP Control</span>
+      <span id="year"></span>
+    </footer>
+  </body>
+</html>

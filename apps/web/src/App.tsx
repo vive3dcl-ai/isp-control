@@ -1,0 +1,98 @@
+import { Navigate, Route, Routes } from 'react-router-dom'
+import { AuthProvider } from './auth/AuthContext'
+import { GuestRoute, ProtectedRoute } from './auth/ProtectedRoute'
+import { NotifyProvider } from './components/NotifyProvider'
+import { LoginPage } from './pages/LoginPage'
+import { AdminDashboardPage } from './pages/AdminDashboardPage'
+import { AdminTenantsPage } from './pages/AdminTenantsPage'
+import { AdminTenantDetailPage } from './pages/AdminTenantDetailPage'
+import { TenantDashboardPage } from './pages/TenantDashboardPage'
+import { ClientsPage } from './pages/ClientsPage'
+import { ClientDetailPage } from './pages/ClientDetailPage'
+import { TopologyPage } from './pages/TopologyPage'
+import { NetworkMapPage } from './pages/NetworkMapPage'
+import { SettingsPage } from './pages/SettingsPage'
+import { AdminOnusPage } from './pages/AdminOnusPage'
+import { AdminPaymentMethodsPage } from './pages/AdminPaymentMethodsPage'
+import { AdminModulesPage } from './pages/AdminModulesPage'
+import { AdminSettingsPage } from './pages/AdminSettingsPage'
+import {
+  AdminTicketDetailPage,
+  AdminTicketsPage,
+} from './pages/AdminTicketsPage'
+import {
+  TenantSupportDetailPage,
+  TenantSupportPage,
+} from './pages/TenantSupportPage'
+import { UsersPage } from './pages/UsersPage'
+import { CalendarPage } from './pages/CalendarPage'
+import { AdminTenantUsersPage } from './pages/AdminTenantUsersPage'
+import { PortalRoutes } from './portal/PortalRoutes'
+import { MobileRoutes } from './mobile/MobileRoutes'
+import { PLATFORM_ROLES } from './lib/api'
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <NotifyProvider>
+        <Routes>
+          <Route path="/:slug/portal/*" element={<PortalRoutes />} />
+
+          <Route element={<GuestRoute />}>
+            <Route path="/login" element={<LoginPage />} />
+          </Route>
+
+          <Route element={<ProtectedRoute roles={[...PLATFORM_ROLES]} />}>
+            <Route path="/admin" element={<AdminDashboardPage />} />
+            <Route path="/admin/tenants" element={<AdminTenantsPage />} />
+            <Route
+              path="/admin/tenants/:id"
+              element={<AdminTenantDetailPage />}
+            />
+            <Route path="/admin/tickets" element={<AdminTicketsPage />} />
+            <Route
+              path="/admin/tickets/:id"
+              element={<AdminTicketDetailPage />}
+            />
+            <Route path="/admin/onus" element={<AdminOnusPage />} />
+            <Route path="/admin/modules" element={<AdminModulesPage />} />
+            <Route
+              path="/admin/tenant-users"
+              element={<AdminTenantUsersPage />}
+            />
+            <Route path="/admin/settings" element={<AdminSettingsPage />} />
+            <Route
+              path="/admin/payment-methods"
+              element={<AdminPaymentMethodsPage />}
+            />
+          </Route>
+
+          <Route element={<ProtectedRoute roles={['tenant_user']} />}>
+            <Route path="/app" element={<TenantDashboardPage />} />
+            <Route path="/app/clients" element={<ClientsPage />} />
+            <Route path="/app/clients/:id" element={<ClientDetailPage />} />
+            <Route path="/app/calendar" element={<CalendarPage />} />
+            <Route path="/app/users" element={<UsersPage />} />
+            <Route
+              path="/app/plans"
+              element={<Navigate to="/app/settings?tab=plans" replace />}
+            />
+            <Route path="/app/topology" element={<TopologyPage />} />
+            <Route path="/app/network-map" element={<NetworkMapPage />} />
+            <Route path="/app/support" element={<TenantSupportPage />} />
+            <Route
+              path="/app/support/:id"
+              element={<TenantSupportDetailPage />}
+            />
+            <Route path="/app/settings" element={<SettingsPage />} />
+          </Route>
+
+          <Route path="/movil/*" element={<MobileRoutes />} />
+
+          <Route path="/" element={<Navigate to="/login" replace />} />
+          <Route path="*" element={<Navigate to="/login" replace />} />
+        </Routes>
+      </NotifyProvider>
+    </AuthProvider>
+  )
+}
