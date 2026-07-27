@@ -36,20 +36,30 @@ npm run docker:logs   # logs en desarrollo
 npm run docker:down   # apagar todo
 ```
 
-### Producción (compose + env únicos)
+### Producción (imágenes Docker Hub)
 
-Tres subdominios típicos: **panel** (SPA), **api** (`/api`), **vpn** (puertos OpenVPN/WireGuard).
+Imágenes públicas bajo **`dubidubidu`**:
+
+- `dubidubidu/isp-control-api`
+- `dubidubidu/isp-control-web`
+- `dubidubidu/isp-control-landing`
+- `dubidubidu/isp-control-whatsapp-baileys`
 
 ```bash
-cp .env.production.example .env.production
-# Editar: secretos, PUBLIC_WEB_URL, PUBLIC_API_URL, VITE_API_URL,
-# VPN_PUBLIC_HOST, VPN_PORT_*, WEB_PORT, API_PORT, LANDING_PORT, CORS_ORIGINS
+# Build + push (máquina de desarrollo, con docker login a Docker Hub)
+cp .env.production.example .env.production   # o usa el tuyo con secretos
+# Editar dominios reales (VITE_API_URL se bakea en el web al build)
+docker login
+npm run docker:hub:push
 
+# Servidor de producción
+cp .env.production.example .env.production   # secretos + dominios
+npm run docker:prod:pull
 npm run docker:prod
-npm run docker:seed:prod     # opcional, primera vez
-npm run docker:prod:logs
-npm run docker:prod:down
+npm run docker:seed:prod     # primera vez (desde el repo)
 ```
+
+Tres subdominios típicos: **panel** (SPA), **api** (`/api`), **vpn** (puertos OpenVPN/WireGuard).
 
 Archivos: `docker-compose.prod.yml` + `.env.production` (no se sube a git).
 El panel ya no hace proxy de `/api` (el front llama al subdominio API). Solo conserva el path del portal cautivo `/{slug}/suspension`.
