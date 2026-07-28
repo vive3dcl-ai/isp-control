@@ -20,6 +20,8 @@ import { billingTimezonesForCountry } from '../lib/billing-timezones'
 import { useNotify } from './NotifyProvider'
 import { SettingsSubTabs } from './SettingsSubTabs'
 import { CreateInvoiceModal } from './CreateInvoiceModal'
+import { ModalPortal } from './ModalPortal'
+
 
 const inputClass =
   'w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2.5 outline-none ring-[var(--accent)] focus:ring-2'
@@ -658,8 +660,8 @@ function TemplatePreviewModal({
   }, [onClose])
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto bg-black/60 p-4 sm:items-center">
-      <div className="flex max-h-[min(92vh,100dvh)] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl">
+    <ModalPortal><div className="fixed inset-0 z-[60] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/60 sm:items-center sm:p-4">
+      <div className="flex h-[100dvh] max-h-[100dvh] w-full max-w-3xl flex-col overflow-hidden rounded-none border-0 sm:h-auto sm:max-h-[min(92dvh,920px)] sm:rounded-xl sm:border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl">
         <div className="flex items-center justify-between border-b border-[var(--border)] px-5 py-4">
           <div>
             <h2 className="text-lg font-semibold">Preview · {name}</h2>
@@ -699,7 +701,7 @@ function TemplatePreviewModal({
           </button>
         </div>
       </div>
-    </div>
+    </div></ModalPortal>
   )
 }
 
@@ -760,8 +762,8 @@ function TemplateFormModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/60 p-4 sm:items-center">
-      <div className="max-h-[min(92vh,100dvh)] overflow-y-auto w-full max-w-2xl rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl">
+    <ModalPortal><div className="fixed inset-0 z-[100] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/60 sm:items-center sm:p-4">
+      <div className="h-[100dvh] max-h-[100dvh] overflow-y-auto overscroll-contain w-full max-w-2xl rounded-none border-0 sm:h-auto sm:max-h-[min(92dvh,920px)] sm:rounded-xl sm:border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl">
         <div className="flex items-center justify-between border-b border-[var(--border)] px-5 py-4">
           <h2 className="text-lg font-semibold">
             {template ? 'Editar plantilla' : 'Nueva plantilla'}
@@ -875,7 +877,7 @@ function TemplateFormModal({
           </div>
         </form>
       </div>
-    </div>
+    </div></ModalPortal>
   )
 }
 

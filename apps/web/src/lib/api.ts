@@ -109,8 +109,25 @@ export function clearAllAuthTokens() {
   clearPortalToken()
 }
 
-// Dev: http://localhost:3000/api · Prod (nginx): /api
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000/api'
+// Dev: preferir /api (proxy Vite). Si VITE_API_URL apunta a localhost pero
+// abres el panel por IP LAN, forzamos /api para que el móvil/otro PC funcione.
+function resolveApiUrl(): string {
+  const configured = (import.meta.env.VITE_API_URL as string | undefined)?.trim()
+  if (import.meta.env.DEV && typeof window !== 'undefined') {
+    const host = window.location.hostname
+    const onLanHost = host !== 'localhost' && host !== '127.0.0.1'
+    if (
+      onLanHost &&
+      (!configured || /localhost|127\.0\.0\.1/.test(configured))
+    ) {
+      return '/api'
+    }
+  }
+  if (configured) return configured
+  return import.meta.env.DEV ? '/api' : 'http://localhost:3000/api'
+}
+
+export const API_URL = resolveApiUrl()
 
 export async function apiFetch<T>(
   path: string,
@@ -123,10 +140,21 @@ export async function apiFetch<T>(
     headers.set('Authorization', `Bearer ${token}`)
   }
 
-  const res = await fetch(`${API_URL}${path}`, {
-    ...options,
-    headers,
-  })
+  let res: Response
+  try {
+    res = await fetch(`${API_URL}${path}`, {
+      ...options,
+      headers,
+    })
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    if (/failed to fetch|networkerror|load failed/i.test(msg)) {
+      throw new Error(
+        'Sin respuesta del API (timeout/red). Reintenta; si persiste, revisa que isp-control-api esté arriba.',
+      )
+    }
+    throw e instanceof Error ? e : new Error(msg)
+  }
 
   if (!res.ok) {
     let message = 'Request failed'
@@ -180,4 +208,64 @@ export async function logoutRequest(): Promise<void> {
   } finally {
     clearAllAuthTokens()
   }
+}
+
+/** Download full Postgres dump (custom format). */
+export async function downloadDbBackup(): Promise<void> {
+  const token = getToken()
+  const res = await fetch(`${API_URL}/admin/backup/download`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  })
+  if (!res.ok) {
+    let message = 'No se pudo descargar el respaldo'
+    try {
+      const body = (await res.json()) as { message?: string | string[] }
+      if (Array.isArray(body.message)) message = body.message.join(', ')
+      else if (body.message) message = body.message
+    } catch {
+      // ignore
+    }
+    throw new Error(message)
+  }
+  const dispo = res.headers.get('Content-Disposition') || ''
+  const match = /filename="?([^";]+)"?/i.exec(dispo)
+  const filename = match?.[1] || `isp-control-backup.backup`
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
+/** Restore full DB from a custom-format dump (superadmin). */
+export async function restoreDbBackup(file: File): Promise<{
+  ok: true
+  message: string
+  warnings?: string
+}> {
+  const token = getToken()
+  const form = new FormData()
+  form.append('file', file)
+  form.append('confirm', 'RESTORE')
+  const res = await fetch(`${API_URL}/admin/backup/restore`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: form,
+  })
+  if (!res.ok) {
+    let message = 'No se pudo restaurar el respaldo'
+    try {
+      const body = (await res.json()) as { message?: string | string[] }
+      if (Array.isArray(body.message)) message = body.message.join(', ')
+      else if (body.message) message = body.message
+    } catch {
+      // ignore
+    }
+    throw new Error(message)
+  }
+  return res.json() as Promise<{ ok: true; message: string; warnings?: string }>
 }

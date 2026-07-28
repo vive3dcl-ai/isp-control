@@ -1,6 +1,8 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '../lib/api'
+import { ModalPortal } from './ModalPortal'
+
 
 const inputClass =
   'w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 outline-none ring-[var(--accent)] focus:ring-2'
@@ -66,12 +68,12 @@ export function CreateVlanModal({
   }
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto bg-black/60 p-3 sm:items-center sm:p-4">
+    <ModalPortal><div className="fixed inset-0 z-[70] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/60 sm:items-center sm:p-4">
       <form
         role="dialog"
         aria-modal="true"
         onSubmit={onSubmit}
-        className="flex max-h-[min(92vh,100dvh)] w-full max-w-md flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl"
+        className="flex h-[100dvh] max-h-[100dvh] w-full max-w-md flex-col overflow-hidden rounded-none border-0 sm:h-auto sm:max-h-[min(92dvh,920px)] sm:rounded-xl sm:border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl"
       >
         <div className="flex shrink-0 items-center justify-between border-b border-[var(--border)] px-5 py-4">
           <h2 className="text-lg font-semibold">Nueva VLAN</h2>
@@ -146,6 +148,6 @@ export function CreateVlanModal({
           </button>
         </div>
       </form>
-    </div>
+    </div></ModalPortal>
   )
 }

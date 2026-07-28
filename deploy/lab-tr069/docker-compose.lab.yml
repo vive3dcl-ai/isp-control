@@ -2,12 +2,15 @@
 #
 #   npm run docker:lab:provision   # once: OVPN server on MikroTik + DB rows
 #   npm run docker:lab:up
+#
+# lab-vpnacs = gateway VPN en isp_net (172.28.10.20). API enruta 10.69/16 + RFC1918 vía este host.
 
 services:
   lab-mongo:
     image: mongo:6.0
     container_name: isp-control-lab-mongo
     restart: unless-stopped
+    networks: [isp_net]
     ports:
       - "27017:27017"
     volumes:
@@ -18,15 +21,22 @@ services:
       timeout: 5s
       retries: 10
 
-  # Shared network namespace: OpenVPN (tun) + published ACS ports
+  # Shared network namespace: OpenVPN (tun) + published ACS ports + forward Docker↔túnel
   lab-vpnacs:
     image: alpine:3.20
     container_name: isp-control-lab-vpnacs
     restart: unless-stopped
+    networks:
+      isp_net:
+        ipv4_address: 172.28.10.20
     cap_add:
       - NET_ADMIN
     devices:
       - /dev/net/tun:/dev/net/tun
+    sysctls:
+      net.ipv4.ip_forward: "1"
+      net.ipv4.conf.all.rp_filter: "0"
+      net.ipv4.conf.default.rp_filter: "0"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
@@ -35,30 +45,35 @@ services:
       - "7567:7567"
       - "3001:3000"
     volumes:
-      - /home/andres/Projects/isp-control/deploy/lab-tr069/ovpn:/cfg:ro
+      - ./deploy/lab-tr069/ovpn:/cfg:ro
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
         set -e
-        apk add --no-cache openvpn >/dev/null
+        apk add --no-cache openvpn iptables >/dev/null
         test -f /cfg/acs.ovpn || { echo "missing acs.ovpn — run docker:lab:provision"; exit 1; }
         cd /cfg
         echo "OpenVPN client → MikroTik reverse (no RFC1918 routes — keep Docker DNS)"
         openvpn --config /cfg/acs.ovpn --cd /cfg &
-        OVPN_PID=$!
-        # Wait for tun0, then route ONU mgmt VLAN via OVPN peer (Connection Request / lab probes).
-        for i in $(seq 1 30); do
+        OVPN_PID=$$!
+        for i in $$(seq 1 30); do
           if ip link show tun0 >/dev/null 2>&1; then break; fi
           sleep 1
         done
         ip route replace 10.60.60.0/24 via 10.69.70.1 dev tun0 2>/dev/null || true
         echo "lab route 10.60.60.0/24 via 10.69.70.1 (tun0)"
-        wait "$OVPN_PID"
+        # API/otros contenedores → túnel (OLT/ONU/router)
+        iptables -C FORWARD -j ACCEPT 2>/dev/null || iptables -A FORWARD -j ACCEPT
+        iptables -t nat -C POSTROUTING -o tun0 -j MASQUERADE 2>/dev/null \
+          || iptables -t nat -A POSTROUTING -o tun0 -j MASQUERADE
+        echo "lab-vpnacs: forwarding Docker↔túnel OK"
+        wait "$$OVPN_PID"
 
   lab-genieacs:
     image: drumsergio/genieacs:1.2.13
     container_name: isp-control-lab-acs
     restart: unless-stopped
+    # Mismo netns que el túnel: CWMP en 10.69.70.2:14501
     network_mode: service:lab-vpnacs
     depends_on:
       lab-mongo:
@@ -66,10 +81,8 @@ services:
       lab-vpnacs:
         condition: service_started
     environment:
-      GENIEACS_MONGODB_CONNECTION_URL: mongodb://host.docker.internal:27017/genieacs
+      GENIEACS_MONGODB_CONNECTION_URL: mongodb://lab-mongo:27017/genieacs
       GENIEACS_CWMP_INTERFACE: 0.0.0.0
-      # Must match ACS URL port on the VPN (ONU → 10.69.70.2:14501).
-      # Host publish alone does NOT apply to tun0 — CWMP must listen in this netns.
       GENIEACS_CWMP_PORT: "14501"
       GENIEACS_NBI_INTERFACE: 0.0.0.0
       GENIEACS_NBI_PORT: "7557"
@@ -81,12 +94,13 @@ services:
 
   lab-provision:
     build:
-      context: ../..
+      context: .
       dockerfile: apps/api/Dockerfile.dev
     container_name: isp-control-lab-provision
     profiles: ["lab-provision"]
+    networks: [isp_net]
     env_file:
-      - ../../.env
+      - .env
     environment:
       DATABASE_HOST: postgres
       DATABASE_PORT: 5432
@@ -98,16 +112,23 @@ services:
       LAB_SUBNET_N: "70"
       LAB_OVPN_PORT: "1194"
     volumes:
-      - ./provision-mikrotik-ovpn.cjs:/lab/provision-mikrotik-ovpn.cjs:ro
-      - /home/andres/Projects/isp-control/deploy/lab-tr069/ovpn:/lab/ovpn
-      - ../../apps/api/dist:/app/apps/api/dist:ro
+      - ./deploy/lab-tr069/provision-mikrotik-ovpn.cjs:/lab/provision-mikrotik-ovpn.cjs:ro
+      - ./deploy/lab-tr069/ovpn:/lab/ovpn
+      - ./apps/api/dist:/app/apps/api/dist:ro
     working_dir: /app/apps/api
     depends_on:
       postgres:
         condition: service_healthy
       api:
         condition: service_started
-    command: ["node", "/lab/provision-mikrotik-ovpn.cjs"]
+    entrypoint:
+      - sh
+      - -c
+      - |
+        set -e
+        cp /lab/provision-mikrotik-ovpn.cjs /app/apps/api/_lab_provision.cjs
+        cd /app/apps/api
+        node ./_lab_provision.cjs
     restart: "no"
 
 volumes:

@@ -7,6 +7,7 @@ import {
   runProgressSteps,
   type ProgressStep,
 } from './OperationProgressModal'
+import { ModalPortal } from './ModalPortal'
 
 const inputClass =
   'w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 outline-none ring-[var(--accent)] focus:ring-2'
@@ -318,8 +319,8 @@ export function OltSpeedProfilesPanel({
       </div>
 
       {modal && (
-        <div className="fixed inset-0 z-[110] flex items-start justify-center overflow-y-auto bg-black/60 p-3 sm:items-center sm:p-4">
-          <div className="max-h-[min(92vh,100dvh)] overflow-y-auto w-full max-w-md rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--text)] shadow-xl">
+        <ModalPortal><div className="fixed inset-0 z-[110] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/60 sm:items-center sm:p-4">
+          <div className="h-[100dvh] max-h-[100dvh] overflow-y-auto overscroll-contain w-full max-w-md rounded-none border-0 sm:h-auto sm:max-h-[min(92dvh,920px)] sm:rounded-xl sm:border border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--text)] shadow-xl">
             <div className="flex items-center justify-between border-b border-[var(--border)] px-5 py-3">
               <h3 className="text-lg font-semibold">
                 {modal === 'create'
@@ -404,7 +405,7 @@ export function OltSpeedProfilesPanel({
               </button>
             </div>
           </div>
-        </div>
+        </div></ModalPortal>
       )}
 
       <OperationProgressModal

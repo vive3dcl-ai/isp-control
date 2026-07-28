@@ -12,13 +12,12 @@ export const vpnProtocolLabel: Record<VpnProtocol, string> = {
   wireguard: 'WireGuard',
 }
 
-export const VPN_MODES = ['outbound', 'reverse'] as const
-
-export type VpnMode = (typeof VPN_MODES)[number]
-
-export const vpnModeLabel: Record<VpnMode, string> = {
-  outbound: 'Concentrador (MikroTik cliente)',
-  reverse: 'Inverso lab TR069 (MikroTik servidor)',
+export const vpnStatusLabel: Record<string, string> = {
+  pending: 'Pendiente',
+  configured: 'Configurado',
+  connected: 'Conectado',
+  online: 'Conectado',
+  offline: 'Desconectado',
 }
 
 export const DEFAULT_VPN_ROUTES = `10.0.0.0/8
@@ -30,9 +29,6 @@ export interface VpnTunnel {
   name: string
   protocol: string
   protocolLabel?: string
-  mode?: string
-  modeLabel?: string
-  endpointHost?: string | null
   tunnelSubnet: string
   clientAddress: string
   serverAddress: string
@@ -51,24 +47,12 @@ export interface VpnTunnel {
 export interface VpnSetupPayload {
   tunnel: VpnTunnel
   protocolLabel: string
-  mode?: string
-  modeLabel?: string
   expiresInSeconds: number
   endpoint: { host: string; port: number }
   script: string
-  /** Reverse mode: OpenVPN client config for the local ACS host */
-  acsClientConfig?: string | null
-  /** Suggested ACS URL for TR069 (reverse → clientAddress) */
+  /** Suggested ACS URL for TR069 via concentrator (serverAddress) */
   acsUrlHint?: string | null
   bootstrap: string | null
   fetchUrl: string | null
-  /** WireGuard outbound: bloque [Peer] para el concentrador */
-  concentratorPeerConfig?: string | null
-  /** WireGuard outbound: wg set + ip address en el concentrador */
-  concentratorApplyCommands?: string | null
-  /** OpenVPN outbound: CCD + credenciales para el concentrador */
-  concentratorOpenVpnConfig?: string | null
-  /** OpenVPN outbound: comandos si el concentrador es MikroTik */
-  concentratorOpenVpnMikrotik?: string | null
   note: string
 }

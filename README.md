@@ -38,12 +38,16 @@ npm run docker:down   # apagar todo
 
 ### Producción (imágenes Docker Hub)
 
-Imágenes públicas bajo **`dubidubidu`**:
+Imágenes públicas bajo **`vive3d`**:
 
-- `dubidubidu/isp-control-api`
-- `dubidubidu/isp-control-web`
-- `dubidubidu/isp-control-landing`
-- `dubidubidu/isp-control-whatsapp-baileys`
+- `vive3d/isp-control-api`
+- `vive3d/isp-control-web`
+- `vive3d/isp-control-landing`
+- `vive3d/isp-control-whatsapp-baileys`
+
+También: `mongo` + `drumsergio/genieacs` (ACS). VPN/TR069 por tenant se configuran en el panel (sin OVPN hardcode).
+
+Postgres, Redis, Mongo y NBI/CWMP del ACS **no** publican puertos al host: solo red Docker interna (`isp_net`).
 
 ```bash
 # Build + push (máquina de desarrollo, con docker login a Docker Hub)

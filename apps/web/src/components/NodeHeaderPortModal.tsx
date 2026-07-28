@@ -169,11 +169,11 @@ export function NodeHeaderPortModal({
     fiberId && selectedCable ? findFiberInCable(selectedCable, fiberId) : null
 
   return createPortal(
-    <div className="fixed inset-0 z-[720] flex items-start justify-center overflow-y-auto bg-black/60 p-4 sm:items-center">
+    <div className="fixed inset-0 z-[720] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/60 sm:items-center sm:p-4">
       <div
         role="dialog"
         aria-modal="true"
-        className="flex max-h-[min(92vh,100dvh)] w-full max-w-lg flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl"
+        className="flex h-[100dvh] max-h-[100dvh] w-full max-w-lg flex-col overflow-hidden rounded-none border-0 sm:h-auto sm:max-h-[min(92dvh,920px)] sm:rounded-xl sm:border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex shrink-0 items-center justify-between border-b border-[var(--border)] px-5 py-4">
@@ -194,7 +194,7 @@ export function NodeHeaderPortModal({
           </button>
         </div>
 
-        <div className="flex-1 space-y-3 overflow-y-auto px-5 py-4">
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-5 py-4">
           <label className="block text-sm">
             <span className="mb-1 block text-[var(--text-muted)]">Activo</span>
             <select

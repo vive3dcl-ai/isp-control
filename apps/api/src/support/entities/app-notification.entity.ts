@@ -12,6 +12,8 @@ export type NotificationType =
   | 'ticket_created'
   | 'ticket_reply'
   | 'ticket_status'
+  | 'calendar_assigned'
+  | 'device_down'
   | 'generic';
 
 @Entity({ name: 'notifications', schema: 'public' })

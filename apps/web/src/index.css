@@ -33,9 +33,72 @@ body {
   overflow-x: hidden;
 }
 
+body.modal-open,
+html:has(.modal-backdrop) {
+  overflow: hidden;
+  touch-action: none;
+}
+
+html:has(.modal-backdrop) body {
+  overflow: hidden;
+}
+
+/* En móvil real el header/sidebar del shell no debe tapar la modal */
+html:has(.modal-backdrop) .app-shell > aside,
+html:has(.modal-backdrop) .app-shell header,
+html:has(.modal-backdrop) .app-shell footer,
+html:has(.modal-backdrop) .mobile-app > header {
+  z-index: 0 !important;
+}
+
+.modal-backdrop {
+  /* Por encima de sidebar (z-40) y FAB; el portal a body evita el stacking del shell */
+  isolation: isolate;
+}
+
+/*
+ * Móvil: anclar la modal al visualViewport para que al abrir el teclado
+ * el alto se reduzca y los inputs sigan siendo alcanzables con scroll.
+ */
+@media (max-width: 639px) {
+  .modal-backdrop.fixed {
+    top: var(--vv-top, 0px) !important;
+    left: var(--vv-left, 0px) !important;
+    right: auto !important;
+    bottom: auto !important;
+    width: var(--vv-width, 100%) !important;
+    height: var(--vv-height, 100dvh) !important;
+    max-height: var(--vv-height, 100dvh) !important;
+  }
+
+  .modal-backdrop > [role='dialog'],
+  .modal-backdrop > form,
+  .modal-backdrop > .modal-panel,
+  .modal-backdrop > div:not([aria-hidden='true']) {
+    height: 100% !important;
+    max-height: 100% !important;
+  }
+}
+
 #root {
   min-height: 100vh;
   min-height: 100dvh;
+}
+
+/* Shells: una sola columna con scroll interno */
+.app-shell {
+  height: 100dvh;
+  max-height: 100dvh;
+  overflow: hidden;
+}
+
+.app-shell-main {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 /* Leaflet divIcon: sin caja blanca alrededor de iconos custom del mapa. */

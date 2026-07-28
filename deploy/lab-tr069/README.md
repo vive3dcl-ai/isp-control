@@ -16,8 +16,9 @@ npm run docker:lab:up
 |-------|--------|
 | MikroTik Core Router | OpenVPN TCP **:1194** (API-provisioned) |
 | Tunnel `lab-tr069` | mode=`reverse`, ACS IP **10.69.70.2** (no usar 10.69.69 — choca con SmartOLT-VPN) |
-| `isp-control-lab-vpnacs` | OpenVPN client (`tun0` = 10.69.70.2) |
+| `isp-control-lab-vpnacs` | OpenVPN client + **gateway** `172.28.10.20` (`tun0` = 10.69.70.2) |
 | `isp-control-lab-acs` | GenieACS (same netns as VPN) |
+| API | Rutas `10.69/16` + RFC1918 vía `lab-vpnacs` (OLT/ONU/router) |
 | CWMP | **10.69.70.2:14501** (también en host `:14501`) |
 | GenieACS UI | http://localhost:3001 |
 | Profile | **Lab TR069** → `http://10.69.70.2:14501` (attached to OLT Central) |

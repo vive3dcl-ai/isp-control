@@ -1,7 +1,13 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '../lib/api'
 import { PanelShell } from '../components/PanelShell'
+import { ModalPortal } from '../components/ModalPortal'
+import {
+  ListSearchInput,
+  matchesSearch,
+} from '../components/ListSearchInput'
+
 
 const inputClass =
   'w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 outline-none ring-[var(--accent)] focus:ring-2'
@@ -53,6 +59,7 @@ export function AdminOnusPage() {
   const [editing, setEditing] = useState<CatalogItem | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [msg, setMsg] = useState<string | null>(null)
+  const [search, setSearch] = useState('')
 
   const [vendor, setVendor] = useState('zte')
   const [name, setName] = useState('')
@@ -199,10 +206,25 @@ export function AdminOnusPage() {
     return () => clearTimeout(t)
   }, [msg])
 
-  const items = listQuery.data?.items ?? []
-  const pendingCount = items.filter(
+  const allItems = listQuery.data?.items ?? []
+  const pendingCount = allItems.filter(
     (i) => i.registrationStatus === 'pending',
   ).length
+  const items = useMemo(
+    () =>
+      allItems.filter((item) =>
+        matchesSearch(
+          search,
+          item.name,
+          item.vendorLabel,
+          item.ponTypeLabel,
+          item.registrationStatus,
+          item.isActive ? 'activo' : 'inactivo',
+          item.defaultProfileCode,
+        ),
+      ),
+    [allItems, search],
+  )
 
   return (
     <PanelShell
@@ -211,30 +233,31 @@ export function AdminOnusPage() {
       variant="admin"
     >
       <div className="space-y-4">
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={openCreate}
-            className="rounded-lg bg-[var(--accent)] px-3 py-2 text-sm font-medium text-white hover:bg-[var(--accent-hover)]"
-          >
-            + Agregar modelo ONU
-          </button>
-          <button
-            type="button"
-            disabled={listQuery.isFetching}
-            onClick={() => void listQuery.refetch()}
-            className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--bg)]"
-          >
-            Refrescar
-          </button>
+        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+          <ListSearchInput
+            value={search}
+            onChange={setSearch}
+            placeholder="Buscar modelo, fabricante…"
+            className="sm:max-w-sm"
+          />
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={openCreate}
+              className="rounded-lg bg-[var(--accent)] px-3 py-2 text-sm font-medium text-white hover:bg-[var(--accent-hover)]"
+            >
+              + Agregar modelo ONU
+            </button>
+            <button
+              type="button"
+              disabled={listQuery.isFetching}
+              onClick={() => void listQuery.refetch()}
+              className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--bg)]"
+            >
+              Refrescar
+            </button>
+          </div>
         </div>
-
-        <p className="text-sm text-[var(--text-muted)]">
-          Catálogo maestro. Los tenants solo ven modelos que detectaron en sus
-          OLTs o crearon ellos. Al <strong>aprobar</strong>, otros tenants
-          pueden reutilizar esos specs cuando detecten el mismo modelo (no se
-          vuelca el catálogo entero).
-        </p>
 
         {pendingCount > 0 && (
           <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
@@ -253,7 +276,68 @@ export function AdminOnusPage() {
           <p className="text-sm text-[var(--danger)]">{error}</p>
         )}
 
-        <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
+        {/* Mobile: lista compacta */}
+        <div className="overflow-hidden rounded-xl border border-[var(--border)] md:hidden">
+          {items.length === 0 && !listQuery.isLoading && (
+            <p className="px-4 py-8 text-center text-sm text-[var(--text-muted)]">
+              Sin modelos en el catálogo.
+            </p>
+          )}
+          {listQuery.isLoading && (
+            <p className="px-4 py-6 text-sm text-[var(--text-muted)]">
+              Cargando…
+            </p>
+          )}
+          <ul className="divide-y divide-[var(--border)]">
+            {items.map((item) => (
+              <li key={item.id} className="space-y-1 px-3 py-2.5">
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    className="min-w-0 flex-1 truncate text-left text-sm font-semibold text-[var(--accent)] hover:underline"
+                    onClick={() => openEdit(item)}
+                  >
+                    {item.name}
+                  </button>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <button
+                      type="button"
+                      className="text-xs text-[var(--accent)] hover:underline"
+                      onClick={() => openEdit(item)}
+                    >
+                      Editar
+                    </button>
+                    {item.registrationStatus === 'pending' && (
+                      <button
+                        type="button"
+                        className="text-xs font-medium text-emerald-400 hover:underline"
+                        disabled={approveMutation.isPending}
+                        onClick={() => approveMutation.mutate(item.id)}
+                      >
+                        Aprobar
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center justify-between gap-2 text-[11px] text-[var(--text-muted)]">
+                  <span className="min-w-0 truncate">{item.vendorLabel}</span>
+                  <span className="shrink-0 text-right">
+                    {item.registrationStatus === 'pending'
+                      ? 'Pendiente'
+                      : 'Aprobado'}
+                    {' · '}
+                    WiFi {item.wifiSsids}
+                    {' · '}
+                    {item.isActive ? 'Activo' : 'Inactivo'}
+                  </span>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        {/* Desktop: tabla completa */}
+        <div className="hidden overflow-x-auto rounded-xl border border-[var(--border)] md:block">
           <table className="w-full min-w-[960px] text-left text-sm">
             <thead>
               <tr className="border-b border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--text-muted)]">
@@ -347,8 +431,8 @@ export function AdminOnusPage() {
       </div>
 
       {modal && (
-        <div className="fixed inset-0 z-[80] flex items-start justify-center overflow-y-auto bg-black/60 p-4 sm:items-center">
-          <div className="max-h-[min(92vh,100dvh)] overflow-y-auto w-full max-w-lg rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl">
+        <ModalPortal><div className="fixed inset-0 z-[80] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/60 sm:items-center sm:p-4">
+          <div className="h-[100dvh] max-h-[100dvh] overflow-y-auto overscroll-contain w-full max-w-lg rounded-none border-0 sm:h-auto sm:max-h-[min(92dvh,920px)] sm:rounded-xl sm:border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl">
             <div className="flex items-center justify-between border-b border-[var(--border)] px-5 py-4">
               <h3 className="text-lg font-semibold">
                 {modal === 'create' ? 'Agregar modelo ONU' : 'Editar modelo ONU'}
@@ -637,7 +721,7 @@ export function AdminOnusPage() {
               </button>
             </div>
           </div>
-        </div>
+        </div></ModalPortal>
       )}
     </PanelShell>
   )

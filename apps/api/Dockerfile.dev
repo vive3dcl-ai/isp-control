@@ -3,7 +3,7 @@ FROM node:22-alpine
 
 WORKDIR /app
 
-RUN apk add --no-cache python3 make g++
+RUN apk add --no-cache python3 make g++ postgresql-client iproute2
 
 COPY package.json package-lock.json ./
 COPY apps/api/package.json ./apps/api/
@@ -13,9 +13,12 @@ COPY apps/whatsapp-baileys/package.json ./apps/whatsapp-baileys/
 RUN npm ci --workspace=@isp-control/api
 
 COPY apps/api ./apps/api
+COPY deploy/vpn-routes/install-routes.sh /vpn-routes/install-routes.sh
+COPY apps/api/docker-entrypoint.dev.sh /docker-entrypoint.dev.sh
+RUN chmod +x /vpn-routes/install-routes.sh /docker-entrypoint.dev.sh
 
 WORKDIR /app/apps/api
 
 EXPOSE 3000
 
-CMD ["npm", "run", "start:dev"]
+ENTRYPOINT ["/docker-entrypoint.dev.sh"]

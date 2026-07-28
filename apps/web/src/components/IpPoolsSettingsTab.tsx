@@ -11,6 +11,7 @@ import {
 } from '../lib/ip-pools'
 import { useNotify } from './NotifyProvider'
 import { SettingsSubTabs } from './SettingsSubTabs'
+import { ModalPortal } from './ModalPortal'
 
 const inputClass =
   'w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 outline-none ring-[var(--accent)] focus:ring-2'
@@ -457,8 +458,8 @@ export function IpPoolsSettingsTab({ canWrite }: { canWrite: boolean }) {
       )}
 
       {formModal && (
-        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-3 sm:items-center sm:p-4">
-          <div className="max-h-[min(92vh,100dvh)] w-full max-w-md overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] p-5 text-[var(--text)] shadow-xl">
+        <ModalPortal><div className="fixed inset-0 z-[100] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/50 sm:items-center sm:p-4">
+          <div className="h-[100dvh] max-h-[100dvh] w-full max-w-md overflow-y-auto overscroll-contain rounded-none border-0 sm:h-auto sm:max-h-[min(92dvh,920px)] sm:rounded-xl sm:border border-[var(--border)] bg-[var(--bg-elevated)] p-5 text-[var(--text)] shadow-xl">
             <h3 className="text-lg font-semibold">
               {formModal === 'create'
                 ? `Nuevo pool · ${purposeLabel}`
@@ -728,12 +729,12 @@ export function IpPoolsSettingsTab({ canWrite }: { canWrite: boolean }) {
               </button>
             </div>
           </div>
-        </div>
+        </div></ModalPortal>
       )}
 
       {viewPool && (
-        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-3 sm:items-center sm:p-4">
-          <div className="flex max-h-[min(92vh,100dvh)] w-full max-w-lg flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--text)] shadow-xl">
+        <ModalPortal><div className="fixed inset-0 z-[100] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/50 sm:items-center sm:p-4">
+          <div className="flex h-[100dvh] max-h-[100dvh] w-full max-w-lg flex-col overflow-hidden rounded-none border-0 sm:h-auto sm:max-h-[min(92dvh,920px)] sm:rounded-xl sm:border border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--text)] shadow-xl">
             <div className="border-b border-[var(--border)] px-5 py-4">
               <h3 className="text-lg font-semibold">
                 Pool VLAN {viewPool.vlanId}
@@ -794,7 +795,7 @@ export function IpPoolsSettingsTab({ canWrite }: { canWrite: boolean }) {
               </button>
             </div>
           </div>
-        </div>
+        </div></ModalPortal>
       )}
     </div>
   )

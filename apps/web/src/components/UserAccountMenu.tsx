@@ -6,11 +6,14 @@ export function UserAccountMenu({
   subtitle,
   canEditAccount,
   onLogout,
+  onGoDesktop,
 }: {
   displayName: string
   subtitle?: string
   canEditAccount: boolean
   onLogout: () => void | Promise<void>
+  /** Solo móvil: enlace a la vista escritorio dentro del menú. */
+  onGoDesktop?: () => void
 }) {
   const [open, setOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -63,7 +66,7 @@ export function UserAccountMenu({
         {open && (
           <div
             role="menu"
-            className="absolute right-0 z-50 mt-1.5 min-w-[11rem] overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] py-1 shadow-lg"
+            className="absolute right-0 z-[60] mt-1.5 min-w-[11rem] overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] py-1 shadow-lg"
           >
             {subtitle && (
               <p className="truncate border-b border-[var(--border)] px-3 py-1.5 text-[11px] text-[var(--text-muted)]">
@@ -81,6 +84,19 @@ export function UserAccountMenu({
                 }}
               >
                 Ajustes
+              </button>
+            )}
+            {onGoDesktop && (
+              <button
+                type="button"
+                role="menuitem"
+                className="flex w-full px-3 py-2 text-left text-sm transition hover:bg-[var(--bg)]"
+                onClick={() => {
+                  setOpen(false)
+                  onGoDesktop()
+                }}
+              >
+                Escritorio
               </button>
             )}
             <button

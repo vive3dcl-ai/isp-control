@@ -14,6 +14,8 @@ import { apiFetch } from '../lib/api'
 import { formatBytes, type TopologyDevice } from '../lib/topology'
 import { mikrotikBoardImageUrl } from '../lib/mikrotikBoardImage'
 import { oltBoardImageUrl } from '../lib/oltBoardImage'
+import { ModalPortal } from './ModalPortal'
+
 
 interface MetricHistory {
   deviceId: string
@@ -104,11 +106,11 @@ export function RouterMetricsModal({
   const cur = historyQuery.data?.current
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto bg-black/60 p-3 sm:items-center sm:p-4">
+    <ModalPortal><div className="fixed inset-0 z-[70] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/60 sm:items-center sm:p-4">
       <div
         role="dialog"
         aria-modal="true"
-        className="flex max-h-[min(92vh,100dvh)] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl"
+        className="flex h-[100dvh] max-h-[100dvh] w-full max-w-3xl flex-col overflow-hidden rounded-none border-0 sm:h-auto sm:max-h-[min(92dvh,920px)] sm:rounded-xl sm:border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl"
       >
         <div className="flex shrink-0 items-start justify-between gap-4 border-b border-[var(--border)] px-5 py-4">
           <div className="flex min-w-0 items-center gap-4">
@@ -254,7 +256,7 @@ export function RouterMetricsModal({
           )}
         </div>
       </div>
-    </div>
+    </div></ModalPortal>
   )
 }
 

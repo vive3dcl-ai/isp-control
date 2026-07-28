@@ -19,6 +19,8 @@ import { ModuleExpiryScheduler } from './module-expiry.scheduler';
 import { PlatformSettingsAdminController } from './platform-settings.admin.controller';
 import { PlatformSubscriptionAppController } from './platform-subscription.app.controller';
 import { PlatformBrandingPublicController } from './platform-branding.public.controller';
+import { BackupAdminController } from './backup.admin.controller';
+import { BackupService } from './backup.service';
 
 @Module({
   imports: [
@@ -38,6 +40,7 @@ import { PlatformBrandingPublicController } from './platform-branding.public.con
     PlatformSettingsAdminController,
     PlatformSubscriptionAppController,
     PlatformBrandingPublicController,
+    BackupAdminController,
   ],
   providers: [
     PlatformSmtpService,
@@ -47,6 +50,7 @@ import { PlatformBrandingPublicController } from './platform-branding.public.con
     PlatformSubscriptionService,
     PlatformBrandingService,
     ModuleExpiryScheduler,
+    BackupService,
   ],
   exports: [
     PlatformSmtpService,

@@ -34,6 +34,7 @@ import { OltVlansPanel } from './OltVlansPanel'
 import { OltSpeedProfilesPanel } from './OltSpeedProfilesPanel'
 import { OnuImportModal } from './OnuImportModal'
 import { useNotify } from './NotifyProvider'
+import { ModalPortal } from './ModalPortal'
 
 const inputClass =
   'w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 outline-none ring-[var(--accent)] focus:ring-2'
@@ -336,11 +337,11 @@ export function DeviceDetailModal({
 
   return (
     <>
-      <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/60 p-3 sm:items-center sm:p-4">
+      <ModalPortal><div className="fixed inset-0 z-[100] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/60 sm:items-center sm:p-4">
         <div
           role="dialog"
           aria-modal="true"
-          className="flex max-h-[min(92vh,100dvh)] w-full max-w-6xl flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl"
+          className="flex h-[100dvh] max-h-[100dvh] w-full max-w-6xl flex-col overflow-hidden rounded-none border-0 sm:h-auto sm:max-h-[min(92dvh,920px)] sm:rounded-xl sm:border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl"
         >
             <div className="flex shrink-0 flex-wrap items-start justify-between gap-2 border-b border-[var(--border)] px-4 py-3 sm:px-5 sm:py-4">
             <div className="min-w-0">
@@ -1440,7 +1441,7 @@ export function DeviceDetailModal({
             )}
           </div>
         </div>
-      </div>
+      </div></ModalPortal>
 
       <PortSelectModal
         open={!!selectPortId}

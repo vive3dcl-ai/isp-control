@@ -1,32 +1,32 @@
-# ISP Control — producción (imágenes Docker Hub)
+# ISP Control — producción limpia (aaPanel / Docker Hub)
 #
-# Namespace público: dubidubidu
-#   dubidubidu/isp-control-api
-#   dubidubidu/isp-control-web
-#   dubidubidu/isp-control-landing
-#   dubidubidu/isp-control-whatsapp-baileys
+# Stack:
+#   postgres, redis, api, web, landing, whatsapp-baileys
+#   acs-mongo + acs (GenieACS) — TR069 vía NBI interno
+#   vpn-concentrator — OpenVPN TCP/UDP + WireGuard (MikroTik = cliente)
 #
-# En el servidor:
-#   1) cp .env.production.example .env.production  # o copia el tuyo
-#   2) Ajusta dominios / secretos
-#   3) docker compose -f docker-compose.prod.yml --env-file .env.production pull
-#   4) docker compose -f docker-compose.prod.yml --env-file .env.production up -d
-#   5) Seed (requiere repo o imagen api con tools): npm run docker:seed:prod
+# Túneles VPN y perfiles ACS se configuran en el panel por tenant.
 #
-# Publicar imágenes (desde la máquina de build, con docker login):
-#   npm run docker:hub:push
+# Red `isp_net`: Postgres/Redis/Mongo/WhatsApp/NBI/CWMP internos.
+# Host: WEB_PORT, API_PORT, LANDING_PORT, ACS_UI_PORT, VPN_PORT_*.
 #
-# Reverse proxy:
-#   panel.* → WEB_PORT | api.* → API_PORT | landing → LANDING_PORT
-#   vpn.*   → VPN_PORT_* (concentrador externo)
+# aaPanel: pega este YAML + .env.production.aapanel (KEY=value, sin env_file).
 
 name: isp-control
+
+networks:
+  isp_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.10.0/24
 
 services:
   postgres:
     image: postgres:16-alpine
     container_name: isp-control-db
     restart: unless-stopped
+    networks: [isp_net]
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -47,6 +47,7 @@ services:
     image: redis:7-alpine
     container_name: isp-control-redis
     restart: unless-stopped
+    networks: [isp_net]
     volumes:
       - redis_data:/data
     healthcheck:
@@ -55,12 +56,29 @@ services:
       timeout: 3s
       retries: 10
 
+  acs-mongo:
+    image: mongo:6.0
+    container_name: isp-control-acs-mongo
+    restart: unless-stopped
+    networks: [isp_net]
+    volumes:
+      - acs_mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.runCommand({ ping: 1 })"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   api:
-    image: ${DOCKERHUB_USER:-dubidubidu}/isp-control-api:${IMAGE_TAG:-latest}
+    image: vive3d/isp-control-api:latest
     container_name: isp-control-api
     restart: unless-stopped
-    env_file:
-      - .env.production
+    pull_policy: always
+    networks:
+      isp_net:
+        ipv4_address: 172.28.10.10
+    cap_add:
+      - NET_ADMIN
     environment:
       NODE_ENV: production
       DATABASE_HOST: postgres
@@ -82,11 +100,22 @@ services:
       VPN_PORT_WIREGUARD: ${VPN_PORT_WIREGUARD:-51820}
       VPN_WIREGUARD_SERVER_PUBLIC_KEY: ${VPN_WIREGUARD_SERVER_PUBLIC_KEY:-}
       VPN_WIREGUARD_SERVER_PRIVATE_KEY: ${VPN_WIREGUARD_SERVER_PRIVATE_KEY:-}
+      VPN_SYNC_SECRET: ${VPN_SYNC_SECRET:-}
+      VPN_ROUTE_GATEWAY_HOST: vpn-concentrator
+      VPN_ROUTE_GATEWAY_IP: 172.28.10.20
+      VPN_TUNNEL_CIDR: 10.69.0.0/16
+      VPN_RUNTIME_STATUS_DIR: /vpn-runtime
       WHATSAPP_BAILEYS_URL: http://whatsapp-baileys:3101
       WHATSAPP_BAILEYS_SECRET: ${WHATSAPP_BAILEYS_SECRET}
       WHATSAPP_GRAPH_API_VERSION: ${WHATSAPP_GRAPH_API_VERSION:-v23.0}
+      TR069_NBI_URL: ${TR069_NBI_URL:-http://vpn-concentrator:7557}
+      WEB_PUSH_VAPID_PUBLIC_KEY: ${WEB_PUSH_VAPID_PUBLIC_KEY:-}
+      WEB_PUSH_VAPID_PRIVATE_KEY: ${WEB_PUSH_VAPID_PRIVATE_KEY:-}
+      WEB_PUSH_SUBJECT: ${WEB_PUSH_SUBJECT:-mailto:soporte@tudominio.com}
     ports:
       - "${API_PORT}:3000"
+    volumes:
+      - vpn_runtime_data:/vpn-runtime:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -94,27 +123,33 @@ services:
         condition: service_healthy
 
   web:
-    image: ${DOCKERHUB_USER:-dubidubidu}/isp-control-web:${IMAGE_TAG:-latest}
+    image: vive3d/isp-control-web:latest
     container_name: isp-control-web
     restart: unless-stopped
+    pull_policy: always
+    networks: [isp_net]
     ports:
       - "${WEB_PORT}:80"
     depends_on:
       - api
 
   landing:
-    image: ${DOCKERHUB_USER:-dubidubidu}/isp-control-landing:${IMAGE_TAG:-latest}
+    image: vive3d/isp-control-landing:latest
     container_name: isp-control-landing
     restart: unless-stopped
+    pull_policy: always
+    networks: [isp_net]
     ports:
       - "${LANDING_PORT}:80"
     environment:
       PANEL_URL: ${PANEL_URL}
 
   whatsapp-baileys:
-    image: ${DOCKERHUB_USER:-dubidubidu}/isp-control-whatsapp-baileys:${IMAGE_TAG:-latest}
+    image: vive3d/isp-control-whatsapp-baileys:latest
     container_name: isp-control-whatsapp-baileys
     restart: unless-stopped
+    pull_policy: always
+    networks: [isp_net]
     environment:
       PORT: "3101"
       WHATSAPP_BAILEYS_SECRET: ${WHATSAPP_BAILEYS_SECRET}
@@ -122,20 +157,83 @@ services:
       API_INTERNAL_URL: http://api:3000/api
     volumes:
       - wa_sessions_data:/data/sessions
-    expose:
-      - "3101"
     depends_on:
       - api
 
-  # Seed: construye desde el repo (no está en la imagen slim de API).
+  # GenieACS comparte netns con el concentrador: CWMP en 10.69.x.1:14501 (túnel).
+  # Connection Request y Inform usan el mismo plano VPN que OLT/ONU/routers.
+  acs:
+    image: drumsergio/genieacs:1.2.13
+    container_name: isp-control-acs
+    restart: unless-stopped
+    network_mode: service:vpn-concentrator
+    depends_on:
+      acs-mongo:
+        condition: service_healthy
+      vpn-concentrator:
+        condition: service_started
+    environment:
+      GENIEACS_MONGODB_CONNECTION_URL: ${GENIEACS_MONGODB_URL:-mongodb://acs-mongo:27017/genieacs}
+      GENIEACS_CWMP_INTERFACE: 0.0.0.0
+      GENIEACS_CWMP_PORT: "${GENIEACS_CWMP_PORT:-14501}"
+      GENIEACS_NBI_INTERFACE: 0.0.0.0
+      GENIEACS_NBI_PORT: "${GENIEACS_NBI_PORT:-7557}"
+      GENIEACS_FS_INTERFACE: 0.0.0.0
+      GENIEACS_FS_PORT: "${GENIEACS_FS_PORT:-7567}"
+      GENIEACS_UI_INTERFACE: 0.0.0.0
+      GENIEACS_UI_PORT: "3000"
+      GENIEACS_UI_JWT_SECRET: ${GENIEACS_UI_JWT_SECRET}
+
+  # Concentrador OpenVPN (TCP/UDP) + WireGuard. Sync peers desde la API.
+  # También publica UI GenieACS (ACS comparte este netns).
+  vpn-concentrator:
+    image: vive3d/isp-control-vpn:latest
+    container_name: isp-control-vpn
+    restart: unless-stopped
+    pull_policy: always
+    networks:
+      isp_net:
+        ipv4_address: 172.28.10.20
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    sysctls:
+      net.ipv4.ip_forward: "1"
+      net.ipv4.conf.all.rp_filter: "0"
+      net.ipv4.conf.default.rp_filter: "0"
+    environment:
+      VPN_SYNC_API_URL: http://api:3000/api/internal/vpn/concentrator-state
+      VPN_SYNC_SECRET: ${VPN_SYNC_SECRET}
+      VPN_SYNC_INTERVAL_SEC: "30"
+      VPN_PORT_OPENVPN_TCP: ${VPN_PORT_OPENVPN_TCP:-1194}
+      VPN_PORT_OPENVPN_UDP: ${VPN_PORT_OPENVPN_UDP:-1195}
+      VPN_PORT_WIREGUARD: ${VPN_PORT_WIREGUARD:-51820}
+      VPN_WIREGUARD_SERVER_PRIVATE_KEY: ${VPN_WIREGUARD_SERVER_PRIVATE_KEY:-}
+      VPN_ACS_HOST: 127.0.0.1
+      GENIEACS_CWMP_PORT: ${GENIEACS_CWMP_PORT:-14501}
+    ports:
+      - "${VPN_PORT_OPENVPN_TCP:-1194}:${VPN_PORT_OPENVPN_TCP:-1194}/tcp"
+      - "${VPN_PORT_OPENVPN_UDP:-1195}:${VPN_PORT_OPENVPN_UDP:-1195}/udp"
+      - "${VPN_PORT_WIREGUARD:-51820}:${VPN_PORT_WIREGUARD:-51820}/udp"
+      - "${ACS_UI_PORT}:3000"
+    volumes:
+      - vpn_pki_data:/pki
+      - vpn_runtime_data:/runtime
+    depends_on:
+      api:
+        condition: service_started
+      acs-mongo:
+        condition: service_healthy
+
+  # BD vacía: docker compose ... --profile seed run --rm seed
   seed:
-    build:
-      context: .
-      dockerfile: apps/api/Dockerfile.dev
+    image: vive3d/isp-control-api:latest
     container_name: isp-control-seed
     profiles: ["seed"]
-    env_file:
-      - .env.production
+    pull_policy: always
+    networks:
+      isp_net: {}
     environment:
       NODE_ENV: production
       DATABASE_HOST: postgres
@@ -146,15 +244,32 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-8h}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+      PUBLIC_API_URL: ${PUBLIC_API_URL:-}
+      PUBLIC_WEB_URL: ${PUBLIC_WEB_URL:-}
+      VPN_PUBLIC_HOST: ${VPN_PUBLIC_HOST:-}
+      VPN_SYNC_SECRET: ${VPN_SYNC_SECRET:-}
+      WHATSAPP_BAILEYS_SECRET: ${WHATSAPP_BAILEYS_SECRET:-}
+    working_dir: /app/apps/api
+    entrypoint: ["node", "dist/seed/seed.js"]
     depends_on:
       postgres:
         condition: service_healthy
-      api:
-        condition: service_started
-    command: ["npm", "run", "seed"]
+      redis:
+        condition: service_healthy
     restart: "no"
 
 volumes:
   postgres_data:
+    name: isp-control_postgres_data
   redis_data:
+    name: isp-control_redis_data
   wa_sessions_data:
+    name: isp-control_wa_sessions
+  acs_mongo_data:
+    name: isp-control_acs_mongo
+  vpn_pki_data:
+    name: isp-control_vpn_pki
+  vpn_runtime_data:
+    name: isp-control_vpn_runtime

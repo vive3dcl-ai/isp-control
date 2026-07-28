@@ -24,6 +24,8 @@ import {
   type NapSplitter,
 } from '../lib/map-elements'
 import { MapElementTypeIcon } from './MapElementTypeIcon'
+import { ModalPortal } from './ModalPortal'
+
 
 const DND_TUBE = 'application/x-mufa-tube'
 const DND_FIBER = 'application/x-mufa-fiber'
@@ -1605,9 +1607,9 @@ export function MufaViewModal({
   }
 
   return (
-    <div
+    <ModalPortal><div
       className={[
-        'fixed inset-0 z-[600] flex overflow-y-auto bg-black/60',
+        'modal-backdrop fixed inset-0 z-[600] flex overflow-hidden bg-black/60',
         mobile
           ? 'items-stretch p-0'
           : 'items-start justify-center p-3 sm:items-center sm:p-4',
@@ -1625,6 +1627,6 @@ export function MufaViewModal({
       >
         {body}
       </div>
-    </div>
+    </div></ModalPortal>
   )
 }

@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '../lib/api'
+import { ModalPortal } from './ModalPortal'
+
 
 type RogueCard = {
   slot: string
@@ -146,11 +148,11 @@ export function RogueOnuDetectModal({
   }
 
   return (
-    <div className="fixed inset-0 z-[85] flex items-start justify-center overflow-y-auto bg-black/60 p-3 sm:items-center sm:p-4">
+    <ModalPortal><div className="fixed inset-0 z-[85] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/60 sm:items-center sm:p-4">
       <div
         role="dialog"
         aria-modal="true"
-        className="my-2 flex max-h-[min(92vh,100dvh)] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl"
+        className="flex h-[100dvh] max-h-[100dvh] w-full max-w-2xl flex-col overflow-hidden rounded-none border-0 sm:h-auto sm:max-h-[min(92dvh,920px)] sm:rounded-xl sm:border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl"
       >
         <div className="flex shrink-0 items-start justify-between gap-2 border-b border-[var(--border)] px-4 py-3 sm:px-5 sm:py-4">
           <h3 className="flex min-w-0 items-center gap-2 text-base font-semibold sm:text-lg">
@@ -337,6 +339,6 @@ export function RogueOnuDetectModal({
           )}
         </div>
       </div>
-    </div>
+    </div></ModalPortal>
   )
 }

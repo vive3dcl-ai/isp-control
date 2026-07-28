@@ -8,6 +8,8 @@ import {
   type ProgressStep,
 } from './OperationProgressModal'
 import { useNotify } from './NotifyProvider'
+import { ModalPortal } from './ModalPortal'
+
 
 const inputClass =
   'w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 outline-none ring-[var(--accent)] focus:ring-2'
@@ -415,8 +417,8 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
       )}
 
       {modal && (
-        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-3 sm:items-center sm:p-4">
-          <div className="max-h-[min(92vh,100dvh)] w-full max-w-lg overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] p-5 text-[var(--text)] shadow-xl">
+        <ModalPortal><div className="fixed inset-0 z-[100] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/50 sm:items-center sm:p-4">
+          <div className="h-[100dvh] max-h-[100dvh] w-full max-w-lg overflow-y-auto overscroll-contain rounded-none border-0 sm:h-auto sm:max-h-[min(92dvh,920px)] sm:rounded-xl sm:border border-[var(--border)] bg-[var(--bg-elevated)] p-5 text-[var(--text)] shadow-xl">
             <h3 className="text-lg font-semibold">
               {modal === 'create'
                 ? 'Añadir VLAN'
@@ -682,12 +684,12 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
               )}
             </div>
           </div>
-        </div>
+        </div></ModalPortal>
       )}
 
       {pendingDelete && (
-        <div className="fixed inset-0 z-[110] flex items-start justify-center overflow-y-auto bg-black/60 p-3 sm:items-center sm:p-4">
-          <div className="max-h-[min(92vh,100dvh)] overflow-y-auto w-full max-w-sm rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] p-5 text-[var(--text)] shadow-xl">
+        <ModalPortal><div className="fixed inset-0 z-[110] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/60 sm:items-center sm:p-4">
+          <div className="h-[100dvh] max-h-[100dvh] overflow-y-auto overscroll-contain w-full max-w-sm rounded-none border-0 sm:h-auto sm:max-h-[min(92dvh,920px)] sm:rounded-xl sm:border border-[var(--border)] bg-[var(--bg-elevated)] p-5 text-[var(--text)] shadow-xl">
             <h3 className="text-lg font-semibold text-[var(--danger)]">
               Eliminar VLAN {pendingDelete.vlanId}
             </h3>
@@ -729,7 +731,7 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
               </button>
             </div>
           </div>
-        </div>
+        </div></ModalPortal>
       )}
 
       <OperationProgressModal

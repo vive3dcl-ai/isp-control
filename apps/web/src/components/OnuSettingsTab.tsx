@@ -10,6 +10,7 @@ import type {
 import { OnuConnectedPanel } from './OnuConnectedPanel'
 import { OnuOrphansPanel } from './OnuOrphansPanel'
 import { SettingsSubTabs } from './SettingsSubTabs'
+import { ModalPortal } from './ModalPortal'
 
 const inputClass =
   'w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 outline-none ring-[var(--accent)] focus:ring-2'
@@ -400,8 +401,8 @@ export function OnuSettingsTab({ canWrite }: { canWrite: boolean }) {
       {view === 'orphans' && <OnuOrphansPanel canWrite={canWrite} />}
 
       {typeModal && (
-        <div className="fixed inset-0 z-[80] flex items-start justify-center overflow-y-auto bg-black/60 p-4 sm:items-center">
-          <div className="max-h-[min(92vh,100dvh)] overflow-y-auto w-full max-w-lg rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl">
+        <ModalPortal><div className="fixed inset-0 z-[80] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/60 sm:items-center sm:p-4">
+          <div className="h-[100dvh] max-h-[100dvh] overflow-y-auto overscroll-contain w-full max-w-lg rounded-none border-0 sm:h-auto sm:max-h-[min(92dvh,920px)] sm:rounded-xl sm:border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl">
             <div className="flex items-center justify-between border-b border-[var(--border)] px-5 py-4">
               <h3 className="text-lg font-semibold">
                 {typeModal === 'create'
@@ -673,12 +674,12 @@ export function OnuSettingsTab({ canWrite }: { canWrite: boolean }) {
               )}
             </div>
           </div>
-        </div>
+        </div></ModalPortal>
       )}
 
       {profileEdit && (
-        <div className="fixed inset-0 z-[80] flex items-start justify-center overflow-y-auto bg-black/60 p-4 sm:items-center">
-          <div className="max-h-[min(92vh,100dvh)] overflow-y-auto w-full max-w-md rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl">
+        <ModalPortal><div className="fixed inset-0 z-[80] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/60 sm:items-center sm:p-4">
+          <div className="h-[100dvh] max-h-[100dvh] overflow-y-auto overscroll-contain w-full max-w-md rounded-none border-0 sm:h-auto sm:max-h-[min(92dvh,920px)] sm:rounded-xl sm:border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl">
             <div className="flex items-center justify-between border-b border-[var(--border)] px-5 py-4">
               <h3 className="text-lg font-semibold">
                 Editar perfil {profileEdit.name}
@@ -760,7 +761,7 @@ export function OnuSettingsTab({ canWrite }: { canWrite: boolean }) {
               </button>
             </div>
           </div>
-        </div>
+        </div></ModalPortal>
       )}
     </div>
   )

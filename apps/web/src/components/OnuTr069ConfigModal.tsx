@@ -7,6 +7,8 @@ import type {
   Tr069OnuConfig,
 } from '../lib/onu-tr069-config'
 import type { TenantModuleCard } from '../lib/modules'
+import { ModalPortal } from './ModalPortal'
+
 
 const inputClass =
   'w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm outline-none ring-[var(--accent)] focus:ring-2'
@@ -181,8 +183,8 @@ export function OnuTr069ConfigModal({
   }, [onuUnlockEnabled, tab])
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto bg-black/60 p-3 sm:items-center sm:p-4">
-      <div className="flex max-h-[min(92vh,100dvh)] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--text)] shadow-xl">
+    <ModalPortal><div className="fixed inset-0 z-[60] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/60 sm:items-center sm:p-4">
+      <div className="flex h-[100dvh] max-h-[100dvh] w-full max-w-2xl flex-col overflow-hidden rounded-none border-0 sm:h-auto sm:max-h-[min(92dvh,920px)] sm:rounded-xl sm:border border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--text)] shadow-xl">
         <div className="flex items-start justify-between gap-3 border-b border-[var(--border)] px-5 py-4">
           <div>
             <h3 className="text-lg font-semibold">Configurar ONU (TR069)</h3>
@@ -229,7 +231,7 @@ export function OnuTr069ConfigModal({
           ))}
         </nav>
 
-        <div className="flex-1 overflow-y-auto px-5 py-4">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4">
           {configQuery.isLoading && (
             <p className="text-sm text-[var(--text-muted)]">
               Consultando GenieACS…
@@ -541,6 +543,6 @@ export function OnuTr069ConfigModal({
           </div>
         </div>
       </div>
-    </div>
+    </div></ModalPortal>
   )
 }

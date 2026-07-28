@@ -34,45 +34,21 @@ const TILES = [
 
 export function MobileHomePage() {
   const { user } = useAuth()
-  const first = (user?.name || user?.email || 'U').trim().slice(0, 1).toUpperCase()
   const canInstall = canInstallField(user?.tenantRole)
 
   return (
-    <div className="flex flex-1 flex-col">
-      <section className="mb-6 rounded-2xl border border-[var(--border)] bg-[var(--bg-elevated)] p-4">
-        <div className="flex items-center gap-3">
-          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-[var(--accent)]/20 text-lg font-semibold text-[var(--accent)]">
-            {first}
-          </div>
-          <div className="min-w-0">
-            <p className="truncate text-lg font-semibold leading-tight">
-              {user?.name || 'Usuario'}
-            </p>
-            <p className="truncate text-sm text-[var(--text-muted)]">
-              {user?.email}
-            </p>
-            {user?.tenantSlug ? (
-              <p className="mt-0.5 text-xs text-[var(--text-muted)]">
-                {user.tenantSlug}
-              </p>
-            ) : null}
-          </div>
-        </div>
-      </section>
-
-      <h1 className="mb-3 text-sm font-medium uppercase tracking-wide text-[var(--text-muted)]">
-        Funciones
-      </h1>
-
-      <div className="grid flex-1 grid-cols-1 gap-3">
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="grid flex-1 grid-cols-1 grid-rows-3 gap-3">
         {TILES.map((tile) => {
           const enabled = tile.ready && (!tile.requiresInstall || canInstall)
+          const baseClass = `mobile-tile group relative flex min-h-0 flex-1 items-center gap-4 overflow-hidden rounded-2xl border border-[var(--border)] bg-gradient-to-br ${tile.accent} px-5 py-5`
+
           if (enabled) {
             return (
               <Link
                 key={tile.to}
                 to={tile.to}
-                className={`mobile-tile group relative flex min-h-[7.5rem] items-center gap-4 overflow-hidden rounded-2xl border border-[var(--border)] bg-gradient-to-br ${tile.accent} px-5 py-5 transition active:scale-[0.98]`}
+                className={`${baseClass} transition active:scale-[0.98]`}
               >
                 <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-[var(--bg)]/60 text-2xl text-[var(--accent)] shadow-sm">
                   {tile.icon}
@@ -94,7 +70,7 @@ export function MobileHomePage() {
           return (
             <div
               key={tile.to}
-              className={`mobile-tile relative flex min-h-[7.5rem] items-center gap-4 overflow-hidden rounded-2xl border border-[var(--border)] bg-gradient-to-br ${tile.accent} px-5 py-5 opacity-55`}
+              className={`${baseClass} opacity-55`}
             >
               <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-[var(--bg)]/60 text-2xl text-[var(--text-muted)]">
                 {tile.icon}

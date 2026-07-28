@@ -4,15 +4,15 @@ import { apiFetch } from '../lib/api'
 import {
   DEFAULT_VPN_ROUTES,
   VPN_PROTOCOLS,
-  vpnModeLabel,
   vpnProtocolLabel,
-  type VpnMode,
+  vpnStatusLabel,
   type VpnProtocol,
   type VpnSetupPayload,
   type VpnTunnel,
 } from '../lib/vpn'
 import type { TopologyDevice } from '../lib/topology'
 import { useNotify } from './NotifyProvider'
+import { ModalPortal } from './ModalPortal'
 
 const inputClass =
   'w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 outline-none ring-[var(--accent)] focus:ring-2'
@@ -34,15 +34,27 @@ export function VpnModal({
   const [selected, setSelected] = useState<VpnTunnel | null>(null)
   const [setup, setSetup] = useState<VpnSetupPayload | null>(null)
   const [expiresLeft, setExpiresLeft] = useState(0)
-  const [mode, setMode] = useState<VpnMode>('outbound')
   const [protocol, setProtocol] = useState<VpnProtocol>('openvpn_tcp')
   const [name, setName] = useState('')
-  const [endpointHost, setEndpointHost] = useState('')
   const [tunnelSubnet, setTunnelSubnet] = useState('')
   const [tunnelRoutes, setTunnelRoutes] = useState(DEFAULT_VPN_ROUTES)
   const [password, setPassword] = useState('')
   const [importDeviceId, setImportDeviceId] = useState('')
   const [importResult, setImportResult] = useState<string | null>(null)
+  const [importRunning, setImportRunning] = useState(false)
+  const [importSteps, setImportSteps] = useState<
+    Array<{
+      id: string
+      label: string
+      status: 'pending' | 'running' | 'ok' | 'error'
+      detail?: string
+    }>
+  >([])
+  const [probeReport, setProbeReport] = useState<{
+    summary: string
+    ok: boolean
+    steps: Array<{ id: string; label: string; ok: boolean; detail: string }>
+  } | null>(null)
   const [copied, setCopied] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [helpOpen, setHelpOpen] = useState(false)
@@ -52,6 +64,39 @@ export function VpnModal({
     queryFn: () =>
       apiFetch<{ tunnels: VpnTunnel[] }>('/app/topology/vpn/tunnels'),
     enabled: open,
+    refetchInterval: open ? 15_000 : false,
+  })
+
+  const probeMutation = useMutation({
+    mutationFn: (id: string) =>
+      apiFetch<{
+        ok: boolean
+        status: string
+        reachable: boolean
+        summary?: string
+        detail?: string
+        steps?: Array<{
+          id: string
+          label: string
+          ok: boolean
+          detail: string
+        }>
+      }>(`/app/topology/vpn/tunnels/${id}/probe`, { method: 'POST' }),
+    onSuccess: (data) => {
+      setProbeReport({
+        ok: data.ok,
+        summary: data.summary || data.detail || (data.ok ? 'OK' : 'Falló'),
+        steps: data.steps ?? [],
+      })
+      setError(null)
+      void queryClient.invalidateQueries({
+        queryKey: ['app', 'topology', 'vpn', 'tunnels'],
+      })
+    },
+    onError: (e: Error) => {
+      setProbeReport(null)
+      setError(e.message)
+    },
   })
 
   const topologyQuery = useQuery({
@@ -66,7 +111,7 @@ export function VpnModal({
       (topologyQuery.data?.devices ?? []).filter(
         (d) =>
           d.type === 'router' &&
-          d.subtype === 'mikrotik' &&
+          (d.subtype === 'mikrotik' || !d.subtype) &&
           d.isActive &&
           d.mgmtHost,
       ),
@@ -80,6 +125,9 @@ export function VpnModal({
       setSetup(null)
       setError(null)
       setImportResult(null)
+      setImportSteps([])
+      setImportRunning(false)
+      setProbeReport(null)
       setHelpOpen(false)
     }
   }, [open])
@@ -112,11 +160,8 @@ export function VpnModal({
       apiFetch<VpnTunnel>('/app/topology/vpn/tunnels', {
         method: 'POST',
         body: JSON.stringify({
-          mode,
-          protocol: mode === 'reverse' ? 'openvpn_tcp' : protocol,
+          protocol,
           name: name.trim() || undefined,
-          endpointHost:
-            mode === 'reverse' ? endpointHost.trim() : undefined,
           tunnelSubnet: tunnelSubnet.trim() || undefined,
           tunnelRoutes: tunnelRoutes.trim() || DEFAULT_VPN_ROUTES,
           password: password.trim() || undefined,
@@ -128,11 +173,9 @@ export function VpnModal({
       })
       setView('list')
       setName('')
-      setEndpointHost('')
       setTunnelSubnet('')
       setPassword('')
       setTunnelRoutes(DEFAULT_VPN_ROUTES)
-      setMode('outbound')
       setProtocol('openvpn_tcp')
       setError(null)
     },
@@ -145,10 +188,6 @@ export function VpnModal({
         method: 'PATCH',
         body: JSON.stringify({
           name: name.trim(),
-          endpointHost:
-            selected?.mode === 'reverse'
-              ? endpointHost.trim() || undefined
-              : undefined,
           tunnelSubnet: tunnelSubnet.trim() || undefined,
           tunnelRoutes: tunnelRoutes.trim() || DEFAULT_VPN_ROUTES,
           password: password.trim() || undefined,
@@ -192,18 +231,104 @@ export function VpnModal({
   })
 
   const importMutation = useMutation({
-    mutationFn: () =>
-      apiFetch<{
+    mutationFn: async () => {
+      type PhaseResult = {
         ok: boolean
+        phase?: string
         mode?: string
         note?: string
+        detail?: string
         addedRoutes?: string[]
         skippedRoutes?: string[]
+        firewallPending?: string[]
+        pendingCommands?: number
+        applied?: number
+        failed?: number
         errors?: string[]
-      }>(`/app/topology/vpn/tunnels/${selected!.id}/import`, {
-        method: 'POST',
-        body: JSON.stringify({ deviceId: importDeviceId }),
-      }),
+        checks?: Array<{
+          id: string
+          label: string
+          ok: boolean
+          detail: string
+        }>
+      }
+
+      const phases: Array<{
+        id: 'connect' | 'plan' | 'apply' | 'verify'
+        label: string
+      }> = [
+        { id: 'connect', label: 'Conectar API RouterOS' },
+        { id: 'plan', label: 'Analizar rutas y reglas' },
+        { id: 'apply', label: 'Aplicar cambios' },
+        { id: 'verify', label: 'Verificar reglas creadas' },
+      ]
+
+      setImportRunning(true)
+      setImportSteps(
+        phases.map((p) => ({
+          id: p.id,
+          label: p.label,
+          status: 'pending' as const,
+        })),
+      )
+      setError(null)
+
+      let last: PhaseResult | null = null
+      for (const p of phases) {
+        setImportSteps((prev) =>
+          prev.map((s) =>
+            s.id === p.id ? { ...s, status: 'running', detail: '…' } : s,
+          ),
+        )
+        try {
+          const data = await apiFetch<PhaseResult>(
+            `/app/topology/vpn/tunnels/${selected!.id}/import`,
+            {
+              method: 'POST',
+              body: JSON.stringify({
+                deviceId: importDeviceId,
+                phase: p.id,
+              }),
+            },
+          )
+          last = data
+          setImportSteps((prev) =>
+            prev.map((s) =>
+              s.id === p.id
+                ? {
+                    ...s,
+                    status: data.ok ? 'ok' : 'error',
+                    detail: data.detail || data.note || (data.ok ? 'OK' : 'Error'),
+                  }
+                : s,
+            ),
+          )
+          if (!data.ok) {
+            throw new Error(
+              data.errors?.filter(Boolean).join('; ') ||
+                data.detail ||
+                data.note ||
+                `Falló: ${p.label}`,
+            )
+          }
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e)
+          setImportSteps((prev) =>
+            prev.map((s) =>
+              s.id === p.id
+                ? {
+                    ...s,
+                    status: s.status === 'ok' ? 'ok' : 'error',
+                    detail: msg,
+                  }
+                : s,
+            ),
+          )
+          throw e
+        }
+      }
+      return last!
+    },
     onSuccess: (data) => {
       void queryClient.invalidateQueries({
         queryKey: ['app', 'topology', 'vpn', 'tunnels'],
@@ -212,7 +337,7 @@ export function VpnModal({
         ? ` Añadidas: ${data.addedRoutes.join(', ')}.`
         : ''
       const skipped = data.skippedRoutes?.length
-        ? ` Ya existían: ${data.skippedRoutes.length}.`
+        ? ` Ya existían / faltan post-check: ${data.skippedRoutes.length}.`
         : ''
       setImportResult(
         (data.note ||
@@ -225,9 +350,12 @@ export function VpnModal({
           ? data.errors.filter(Boolean).join('; ')
           : null,
       )
-      setView('list')
+      setImportRunning(false)
     },
-    onError: (e: Error) => setError(e.message),
+    onError: (e: Error) => {
+      setError(e.message)
+      setImportRunning(false)
+    },
   })
 
   if (!open) return null
@@ -245,7 +373,6 @@ export function VpnModal({
   function openEdit(t: VpnTunnel) {
     setSelected(t)
     setName(t.name)
-    setEndpointHost(t.endpointHost ?? '')
     setTunnelSubnet(t.tunnelSubnet)
     setTunnelRoutes(t.tunnelRoutes || DEFAULT_VPN_ROUTES)
     setPassword('')
@@ -253,25 +380,21 @@ export function VpnModal({
   }
 
   function resetCreateForm() {
-    setMode('outbound')
     setProtocol('openvpn_tcp')
     setName('')
-    setEndpointHost('')
     setTunnelSubnet('')
     setPassword('')
     setTunnelRoutes(DEFAULT_VPN_ROUTES)
     setView('create')
   }
 
-  const isReverseSetup = setup?.mode === 'reverse' || setup?.tunnel.mode === 'reverse'
-
   return (
     <>
-    <div className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto bg-black/60 p-4 sm:items-center">
+    <ModalPortal><div className="fixed inset-0 z-[70] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/60 sm:items-center sm:p-4">
       <div
         role="dialog"
         aria-modal="true"
-        className="flex max-h-[min(92vh,100dvh)] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl"
+        className="flex h-[100dvh] max-h-[100dvh] w-full max-w-2xl flex-col overflow-hidden rounded-none border-0 sm:h-auto sm:max-h-[min(92dvh,920px)] sm:rounded-xl sm:border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl"
       >
         <div className="flex shrink-0 items-center justify-between border-b border-[var(--border)] px-5 py-4">
           <div>
@@ -280,10 +403,7 @@ export function VpnModal({
                 {view === 'list' && 'VPN tunnels'}
                 {view === 'create' && 'Add tunnel'}
                 {view === 'edit' && 'Edit tunnel'}
-                {view === 'setup' &&
-                  (isReverseSetup
-                    ? 'VPN inverso — setup'
-                    : 'MikroTik VPN setup')}
+                {view === 'setup' && 'MikroTik VPN setup'}
                 {view === 'import' && 'Import to MikroTik'}
               </h2>
               {view === 'list' && (
@@ -300,7 +420,7 @@ export function VpnModal({
             </div>
             {view === 'setup' && setup && (
               <p className="text-xs text-[var(--text-muted)]">
-                {setup.modeLabel ?? setup.protocolLabel} · {setup.tunnel.name}@
+                {setup.protocolLabel} · {setup.tunnel.name}@
                 {setup.endpoint.host}:{setup.endpoint.port}
                 {expiresLeft > 0
                   ? ` · expira en ${expiresLeft}s`
@@ -326,12 +446,44 @@ export function VpnModal({
               {importResult}
             </p>
           )}
+          {probeReport && view === 'list' && (
+            <div
+              className={`mb-3 rounded-lg border px-3 py-2 text-sm ${
+                probeReport.ok
+                  ? 'border-emerald-500/40 bg-emerald-500/5'
+                  : 'border-[var(--danger)]/40 bg-[var(--bg)]'
+              }`}
+            >
+              <p className="font-medium">{probeReport.summary}</p>
+              {probeReport.steps.length > 0 && (
+                <ul className="mt-2 space-y-1.5 text-xs">
+                  {probeReport.steps.map((s) => (
+                    <li key={s.id}>
+                      <span
+                        className={
+                          s.ok
+                            ? 'text-emerald-600'
+                            : 'text-[var(--danger)]'
+                        }
+                      >
+                        {s.ok ? '✓' : '✗'} {s.label}
+                      </span>
+                      <span className="mt-0.5 block pl-4 text-[var(--text-muted)]">
+                        {s.detail}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
 
           {view === 'list' && (
             <div className="space-y-3">
               <p className="text-sm text-[var(--text-muted)]">
-                Concentrador (MikroTik cliente) o inverso lab TR069 (MikroTik
-                servidor / ACS local cliente). Routes por defecto = RFC1918.
+                El MikroTik se conecta al concentrador de plataforma
+                (OpenVPN/WireGuard). El concentrador sincroniza peers
+                automáticamente. Routes por defecto = RFC1918.
               </p>
               {tunnelsQuery.isLoading && (
                 <p className="text-sm text-[var(--text-muted)]">Cargando…</p>
@@ -351,27 +503,34 @@ export function VpnModal({
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
                         <p className="font-medium">{t.name}</p>
-                        {t.mode === 'reverse' ? (
-                          <span className="rounded border border-[var(--accent)]/40 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-[var(--accent)]">
-                            Inverso
-                          </span>
-                        ) : (
-                          <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-[var(--text-muted)]">
-                            Concentrador
-                          </span>
-                        )}
+                        <span
+                          className={
+                            t.status === 'connected' || t.status === 'online'
+                              ? 'rounded border border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-emerald-600'
+                              : t.status === 'offline' || t.status === 'error'
+                                ? 'rounded border border-[var(--danger)]/40 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-[var(--danger)]'
+                                : 'rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-[var(--text-muted)]'
+                          }
+                        >
+                          {vpnStatusLabel[t.status] ?? t.status}
+                        </span>
                       </div>
                       <p className="truncate text-xs text-[var(--text-muted)]">
-                        {t.protocolLabel ?? t.protocol} · {t.tunnelSubnet}
-                        {t.mode === 'reverse' && t.endpointHost
-                          ? ` · ${t.endpointHost}`
-                          : ''}{' '}
-                        · {t.status}
+                        {t.protocolLabel ?? t.protocol} · {t.tunnelSubnet} ·{' '}
+                        {t.clientAddress}
                       </p>
                     </div>
                     <div className="flex flex-wrap gap-1.5">
                       {canWrite && (
                         <>
+                          <button
+                            type="button"
+                            className="rounded-md border border-[var(--border)] px-2 py-1 text-xs hover:border-[var(--accent)]"
+                            disabled={probeMutation.isPending}
+                            onClick={() => probeMutation.mutate(t.id)}
+                          >
+                            Verificar
+                          </button>
                           <button
                             type="button"
                             className="rounded-md border border-[var(--border)] px-2 py-1 text-xs hover:border-[var(--accent)]"
@@ -426,78 +585,29 @@ export function VpnModal({
               className="space-y-3"
               onSubmit={(e) => {
                 e.preventDefault()
-                if (view === 'create' && mode === 'reverse' && !endpointHost.trim()) {
-                  setError('Indica la IP/hostname público del MikroTik')
-                  return
-                }
                 if (view === 'create') createMutation.mutate()
                 else updateMutation.mutate()
               }}
             >
               {view === 'create' && (
-                <>
-                  <label className="block text-sm">
-                    <span className="mb-1 block text-[var(--text-muted)]">
-                      Modo
-                    </span>
-                    <select
-                      className={inputClass}
-                      value={mode}
-                      onChange={(e) => {
-                        const m = e.target.value as VpnMode
-                        setMode(m)
-                        if (m === 'reverse') setProtocol('openvpn_tcp')
-                      }}
-                    >
-                      <option value="outbound">
-                        {vpnModeLabel.outbound}
+                <label className="block text-sm">
+                  <span className="mb-1 block text-[var(--text-muted)]">
+                    Tipo
+                  </span>
+                  <select
+                    className={inputClass}
+                    value={protocol}
+                    onChange={(e) =>
+                      setProtocol(e.target.value as VpnProtocol)
+                    }
+                  >
+                    {VPN_PROTOCOLS.map((p) => (
+                      <option key={p} value={p}>
+                        {vpnProtocolLabel[p]}
                       </option>
-                      <option value="reverse">
-                        {vpnModeLabel.reverse}
-                      </option>
-                    </select>
-                  </label>
-                  {mode === 'reverse' && (
-                    <p className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-xs text-[var(--text-muted)]">
-                      Lab TR069: el MikroTik (IP pública) es servidor OpenVPN
-                      TCP; el ACS interno se conecta como cliente y recibe la
-                      IP .2 del túnel.
-                    </p>
-                  )}
-                  {mode === 'outbound' && (
-                    <label className="block text-sm">
-                      <span className="mb-1 block text-[var(--text-muted)]">
-                        Tipo
-                      </span>
-                      <select
-                        className={inputClass}
-                        value={protocol}
-                        onChange={(e) =>
-                          setProtocol(e.target.value as VpnProtocol)
-                        }
-                      >
-                        {VPN_PROTOCOLS.map((p) => (
-                          <option key={p} value={p}>
-                            {vpnProtocolLabel[p]}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  )}
-                  {mode === 'reverse' && (
-                    <label className="block text-sm">
-                      <span className="mb-1 block text-[var(--text-muted)]">
-                        Protocolo
-                      </span>
-                      <input
-                        className={inputClass}
-                        value="OpenVPN TCP"
-                        disabled
-                        readOnly
-                      />
-                    </label>
-                  )}
-                </>
+                    ))}
+                  </select>
+                </label>
               )}
               <label className="block text-sm">
                 <span className="mb-1 block text-[var(--text-muted)]">
@@ -511,21 +621,6 @@ export function VpnModal({
                   required={view === 'edit'}
                 />
               </label>
-              {(view === 'create' && mode === 'reverse') ||
-              (view === 'edit' && selected?.mode === 'reverse') ? (
-                <label className="block text-sm">
-                  <span className="mb-1 block text-[var(--text-muted)]">
-                    IP / hostname público del MikroTik *
-                  </span>
-                  <input
-                    className={inputClass}
-                    value={endpointHost}
-                    onChange={(e) => setEndpointHost(e.target.value)}
-                    placeholder="vpn.tuisp.com o 45.x.x.x"
-                    required={view === 'create'}
-                  />
-                </label>
-              ) : null}
               <label className="block text-sm">
                 <span className="mb-1 block text-[var(--text-muted)]">
                   Tunnel subnet
@@ -537,8 +632,7 @@ export function VpnModal({
                   placeholder="Auto 10.69.x.0/24"
                 />
               </label>
-              {((view === 'create' &&
-                (mode === 'reverse' || protocol !== 'wireguard')) ||
+              {((view === 'create' && protocol !== 'wireguard') ||
                 (view === 'edit' &&
                   selected?.protocol !== 'wireguard')) && (
                 <label className="block text-sm">
@@ -601,100 +695,17 @@ export function VpnModal({
           {view === 'setup' && setup && (
             <div className="space-y-4">
               <p className="text-sm text-[var(--text-muted)]">
-                {isReverseSetup
-                  ? 'Aplica el script servidor en el MikroTik; luego conecta el ACS con el .ovpn (remote = IP pública del MikroTik).'
-                  : setup.concentratorPeerConfig
-                    ? 'Primero el peer en el concentrador WireGuard; luego bootstrap/script en el MikroTik.'
-                    : setup.concentratorOpenVpnConfig
-                      ? 'Primero el usuario/CCD en el concentrador OpenVPN; luego bootstrap/script en el MikroTik.'
-                      : 'Copia y pega en el terminal RouterOS. Mantén esta ventana abierta hasta terminar.'}
+                El concentrador ya sincroniza el usuario/peer solo. Copia el
+                bootstrap o el script en el MikroTik (cliente →{' '}
+                {setup.endpoint.host}:{setup.endpoint.port}).
               </p>
-              {setup.concentratorOpenVpnConfig && (
-                <div>
-                  <p className="mb-1 text-xs font-medium text-[var(--text-muted)]">
-                    Usuario concentrador OpenVPN (CCD)
-                  </p>
-                  <pre className="max-h-40 overflow-auto rounded-lg border border-[var(--border)] bg-[var(--bg)] p-3 text-xs whitespace-pre-wrap">
-                    {setup.concentratorOpenVpnConfig}
-                  </pre>
-                  <button
-                    type="button"
-                    className="mt-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:border-[var(--accent)]"
-                    onClick={() =>
-                      copyText(setup.concentratorOpenVpnConfig!, 'ovpn-ccd')
-                    }
-                  >
-                    {copied === 'ovpn-ccd' ? 'Copiado' : 'Copiar CCD / user'}
-                  </button>
-                </div>
-              )}
-              {setup.concentratorOpenVpnMikrotik && (
-                <div>
-                  <p className="mb-1 text-xs font-medium text-[var(--text-muted)]">
-                    Si el concentrador es MikroTik (ppp secret)
-                  </p>
-                  <pre className="max-h-32 overflow-auto rounded-lg border border-[var(--border)] bg-[var(--bg)] p-3 text-xs whitespace-pre-wrap">
-                    {setup.concentratorOpenVpnMikrotik}
-                  </pre>
-                  <button
-                    type="button"
-                    className="mt-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:border-[var(--accent)]"
-                    onClick={() =>
-                      copyText(
-                        setup.concentratorOpenVpnMikrotik!,
-                        'ovpn-mt',
-                      )
-                    }
-                  >
-                    {copied === 'ovpn-mt' ? 'Copiado' : 'Copiar comandos'}
-                  </button>
-                </div>
-              )}
-              {setup.concentratorPeerConfig && (
-                <div>
-                  <p className="mb-1 text-xs font-medium text-[var(--text-muted)]">
-                    Peer concentrador WireGuard ([Peer])
-                  </p>
-                  <pre className="max-h-40 overflow-auto rounded-lg border border-[var(--border)] bg-[var(--bg)] p-3 text-xs whitespace-pre-wrap">
-                    {setup.concentratorPeerConfig}
-                  </pre>
-                  <button
-                    type="button"
-                    className="mt-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:border-[var(--accent)]"
-                    onClick={() =>
-                      copyText(setup.concentratorPeerConfig!, 'wg-peer')
-                    }
-                  >
-                    {copied === 'wg-peer' ? 'Copiado' : 'Copiar [Peer]'}
-                  </button>
-                </div>
-              )}
-              {setup.concentratorApplyCommands && (
-                <div>
-                  <p className="mb-1 text-xs font-medium text-[var(--text-muted)]">
-                    Comandos en vivo (wg0 en el concentrador)
-                  </p>
-                  <pre className="max-h-32 overflow-auto rounded-lg border border-[var(--border)] bg-[var(--bg)] p-3 text-xs whitespace-pre-wrap">
-                    {setup.concentratorApplyCommands}
-                  </pre>
-                  <button
-                    type="button"
-                    className="mt-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:border-[var(--accent)]"
-                    onClick={() =>
-                      copyText(setup.concentratorApplyCommands!, 'wg-apply')
-                    }
-                  >
-                    {copied === 'wg-apply' ? 'Copiado' : 'Copiar comandos'}
-                  </button>
-                </div>
-              )}
               {setup.acsUrlHint && (
                 <p className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-xs">
-                  ACS URL sugerida (TR069):{' '}
+                  ACS URL sugerida (TR069 vía túnel):{' '}
                   <code className="font-mono">{setup.acsUrlHint}</code>
                 </p>
               )}
-              {setup.bootstrap && !isReverseSetup && (
+              {setup.bootstrap && (
                 <div>
                   <p className="mb-1 text-xs font-medium text-[var(--text-muted)]">
                     Instalación rápida (bootstrap)
@@ -715,9 +726,7 @@ export function VpnModal({
               )}
               <div>
                 <p className="mb-1 text-xs font-medium text-[var(--text-muted)]">
-                  {isReverseSetup
-                    ? 'Script MikroTik (servidor OpenVPN)'
-                    : 'Script completo (manual)'}
+                  Script MikroTik (cliente OVPN/WG)
                 </p>
                 <pre className="max-h-56 overflow-auto rounded-lg border border-[var(--border)] bg-[var(--bg)] p-3 text-xs whitespace-pre-wrap">
                   {setup.script}
@@ -732,25 +741,6 @@ export function VpnModal({
                     : 'Copiar script completo'}
                 </button>
               </div>
-              {isReverseSetup && setup.acsClientConfig && (
-                <div>
-                  <p className="mb-1 text-xs font-medium text-[var(--text-muted)]">
-                    Config cliente ACS (.ovpn)
-                  </p>
-                  <pre className="max-h-56 overflow-auto rounded-lg border border-[var(--border)] bg-[var(--bg)] p-3 text-xs whitespace-pre-wrap">
-                    {setup.acsClientConfig}
-                  </pre>
-                  <button
-                    type="button"
-                    className="mt-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:border-[var(--accent)]"
-                    onClick={() =>
-                      copyText(setup.acsClientConfig!, 'acs')
-                    }
-                  >
-                    {copied === 'acs' ? 'Copiado' : 'Copiar .ovpn'}
-                  </button>
-                </div>
-              )}
               <p className="text-xs text-[var(--text-muted)]">{setup.note}</p>
               <button
                 type="button"
@@ -768,20 +758,10 @@ export function VpnModal({
           {view === 'import' && selected && (
             <div className="space-y-3">
               <p className="text-sm text-[var(--text-muted)]">
-                {selected.mode === 'reverse' ? (
-                  <>
-                    Aplica el <strong>servidor</strong> OpenVPN del túnel{' '}
-                    <strong>{selected.name}</strong> al MikroTik (API). El ACS
-                    se conecta aparte con el .ovpn.
-                  </>
-                ) : (
-                  <>
-                    Si el túnel <strong>ya existe</strong> en el router, solo se
-                    añaden rutas/reglas <strong>faltantes</strong> (redes nuevas
-                    que hayas editado). Si no existe, se aplica el script
-                    completo.
-                  </>
-                )}
+                Si el túnel <strong>{selected.name}</strong> ya existe en el
+                router, solo se añaden rutas/reglas <strong>faltantes</strong>.
+                Si no existe, se aplica el script completo (cliente →
+                concentrador). Verás el progreso por etapas.
               </p>
               <label className="block text-sm">
                 <span className="mb-1 block text-[var(--text-muted)]">
@@ -792,6 +772,7 @@ export function VpnModal({
                   value={importDeviceId}
                   onChange={(e) => setImportDeviceId(e.target.value)}
                   required
+                  disabled={importRunning}
                 >
                   <option value="">Seleccionar…</option>
                   {mikrotikRouters.map((d) => (
@@ -808,23 +789,68 @@ export function VpnModal({
                   Topología primero.
                 </p>
               )}
+
+              {importSteps.length > 0 && (
+                <ol className="space-y-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] p-3 text-sm">
+                  {importSteps.map((s, i) => (
+                    <li key={s.id} className="flex gap-3">
+                      <span
+                        className={
+                          s.status === 'ok'
+                            ? 'text-emerald-600'
+                            : s.status === 'error'
+                              ? 'text-red-600'
+                              : s.status === 'running'
+                                ? 'text-[var(--accent)]'
+                                : 'text-[var(--text-muted)]'
+                        }
+                      >
+                        {s.status === 'ok'
+                          ? '✓'
+                          : s.status === 'error'
+                            ? '✗'
+                            : s.status === 'running'
+                              ? '…'
+                              : `${i + 1}.`}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <div className="font-medium">{s.label}</div>
+                        {s.detail && (
+                          <div className="mt-0.5 break-words text-xs text-[var(--text-muted)]">
+                            {s.detail}
+                          </div>
+                        )}
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+              )}
+
               <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
                   className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm"
-                  onClick={() => setView('list')}
+                  disabled={importRunning}
+                  onClick={() => {
+                    setView('list')
+                    setImportSteps([])
+                  }}
                 >
-                  Cancelar
+                  {importRunning ? 'En curso…' : 'Cancelar'}
                 </button>
                 <button
                   type="button"
-                  disabled={!importDeviceId || importMutation.isPending}
+                  disabled={
+                    !importDeviceId || importRunning || importMutation.isPending
+                  }
                   className="rounded-lg bg-[var(--accent)] px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
                   onClick={() => importMutation.mutate()}
                 >
-                  {importMutation.isPending
+                  {importRunning || importMutation.isPending
                     ? 'Importando…'
-                    : 'Importar al router'}
+                    : importSteps.some((s) => s.status === 'error')
+                      ? 'Reintentar'
+                      : 'Importar al router'}
                 </button>
               </div>
             </div>
@@ -843,15 +869,15 @@ export function VpnModal({
           </div>
         )}
       </div>
-    </div>
+    </div></ModalPortal>
 
     {helpOpen && (
-      <div className="fixed inset-0 z-[80] flex items-start justify-center overflow-y-auto bg-black/60 p-4 sm:items-center">
+      <ModalPortal><div className="fixed inset-0 z-[80] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/60 sm:items-center sm:p-4">
         <div
           role="dialog"
           aria-modal="true"
           aria-labelledby="vpn-help-title"
-          className="flex max-h-[min(92vh,100dvh)] w-full max-w-lg flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl"
+          className="flex h-[100dvh] max-h-[100dvh] w-full max-w-lg flex-col overflow-hidden rounded-none border-0 sm:h-auto sm:max-h-[min(92dvh,920px)] sm:rounded-xl sm:border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl"
         >
           <div className="flex shrink-0 items-center justify-between border-b border-[var(--border)] px-5 py-4">
             <h3 id="vpn-help-title" className="text-lg font-semibold">
@@ -868,38 +894,26 @@ export function VpnModal({
           <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-5 py-4 text-sm leading-relaxed">
             <section className="space-y-3">
               <h4 className="font-semibold text-[var(--accent)]">
-                Modo concentrador (MikroTik cliente)
+                Concentrador ISP Control
               </h4>
               <p className="text-[var(--text-muted)]">
-                El MikroTik se conecta al concentrador de plataforma. Usa
-                Importar o Script como hasta ahora.
-              </p>
-            </section>
-
-            <section className="space-y-3 border-t border-[var(--border)] pt-6">
-              <h4 className="font-semibold text-[var(--accent)]">
-                Modo inverso lab TR069
-              </h4>
-              <p className="text-[var(--text-muted)]">
-                MikroTik con IP pública = servidor OpenVPN TCP. Tu ACS local =
-                cliente. Ideal cuando el servidor ISP Control está detrás de
-                NAT.
+                El MikroTik es cliente OpenVPN o WireGuard hacia{' '}
+                <code className="font-mono text-xs">VPN_PUBLIC_HOST</code>.
+                Al crear el túnel, el contenedor concentrador sincroniza
+                usuario/peer automáticamente.
               </p>
               <ol className="list-decimal space-y-2 pl-5">
                 <li>
-                  Añadir túnel → modo <strong>Inverso lab TR069</strong> → IP
-                  pública del MikroTik.
+                  Crea el túnel con <strong>Añadir</strong> (protocolo, nombre,
+                  redes LAN).
                 </li>
                 <li>
-                  <strong>Importar</strong> o pegar el script servidor en el
-                  MikroTik.
+                  Espera ~30s o usa <strong>Importar</strong> /{' '}
+                  <strong>Script</strong> en el MikroTik.
                 </li>
                 <li>
-                  Exportar el CA del MikroTik y pegarlo en el .ovpn del ACS.
-                </li>
-                <li>
-                  Conectar el OpenVPN en la máquina del ACS; TR069 usará
-                  http://10.69.x.2:14501 por defecto.
+                  Verifica que el ovpn-client / wireguard quede connected hacia
+                  el concentrador.
                 </li>
               </ol>
             </section>
@@ -913,10 +927,6 @@ export function VpnModal({
                 hablar con él (API REST / Winbox).
               </p>
               <ol className="list-decimal space-y-2 pl-5">
-                <li>
-                  Crea el túnel con <strong>Añadir</strong> (elige protocolo,
-                  nombre y contraseña).
-                </li>
                 <li>
                   En la lista del túnel, pulsa <strong>Importar</strong>.
                 </li>
@@ -937,7 +947,7 @@ export function VpnModal({
             </button>
           </div>
         </div>
-      </div>
+      </div></ModalPortal>
     )}
     </>
   )

@@ -2,6 +2,12 @@ import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { apiFetch } from '../lib/api'
+import {
+  enablePushNotifications,
+  pushPermission,
+  pushSupported,
+  syncPushSubscription,
+} from '../lib/webPush'
 
 export type NotificationAudienceVariant = 'admin' | 'tenant'
 
@@ -51,6 +57,8 @@ export function NotificationBell({
   const prefix = variant === 'admin' ? '/admin' : '/app'
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
+  const [pushState, setPushState] = useState(() => pushPermission())
+  const [pushBusy, setPushBusy] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
 
   const summaryQuery = useNotificationSummary(variant)
@@ -80,6 +88,12 @@ export function NotificationBell({
   })
 
   useEffect(() => {
+    void syncPushSubscription(variant).then(() => {
+      setPushState(pushPermission())
+    })
+  }, [variant])
+
+  useEffect(() => {
     if (!open) return
     function onDocClick(e: MouseEvent) {
       if (!rootRef.current?.contains(e.target as Node)) setOpen(false)
@@ -95,8 +109,20 @@ export function NotificationBell({
     }
   }, [open])
 
+  async function onEnablePush() {
+    setPushBusy(true)
+    try {
+      await enablePushNotifications(variant)
+      setPushState(pushPermission())
+    } finally {
+      setPushBusy(false)
+    }
+  }
+
   const unread = summaryQuery.data?.unreadCount ?? 0
   const items = listQuery.data ?? []
+  const showPushCta =
+    pushSupported() && pushState !== 'granted' && pushState !== 'unsupported'
 
   return (
     <div className="relative" ref={rootRef}>
@@ -129,7 +155,7 @@ export function NotificationBell({
       </button>
 
       {open && (
-        <div className="absolute right-0 z-50 mt-2 w-[min(22rem,calc(100vw-2rem))] overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] shadow-lg">
+        <div className="absolute right-0 z-[60] mt-2 w-[min(22rem,calc(100vw-2rem))] overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] shadow-lg">
           <div className="flex items-center justify-between border-b border-[var(--border)] px-3 py-2">
             <p className="text-sm font-medium">Notificaciones</p>
             <button
@@ -141,6 +167,22 @@ export function NotificationBell({
               Marcar leídas
             </button>
           </div>
+          {showPushCta && (
+            <div className="border-b border-[var(--border)] bg-[var(--bg)]/50 px-3 py-2">
+              <button
+                type="button"
+                disabled={pushBusy || pushState === 'denied'}
+                onClick={() => void onEnablePush()}
+                className="w-full rounded-md border border-[var(--border)] px-2.5 py-1.5 text-left text-xs hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:opacity-50"
+              >
+                {pushState === 'denied'
+                  ? 'Avisos bloqueados en el navegador'
+                  : pushBusy
+                    ? 'Activando avisos…'
+                    : 'Activar avisos en este dispositivo'}
+              </button>
+            </div>
+          )}
           <div className="max-h-80 overflow-y-auto">
             {listQuery.isLoading && (
               <p className="px-3 py-4 text-sm text-[var(--text-muted)]">

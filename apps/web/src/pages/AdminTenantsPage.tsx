@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link, useNavigate } from 'react-router-dom'
 import { apiFetch } from '../lib/api'
@@ -10,11 +10,21 @@ import { EditTenantModal } from '../components/EditTenantModal'
 import { DeleteTenantModal } from '../components/DeleteTenantModal'
 import { TenantModulesModal } from '../components/TenantModulesModal'
 import { useNotify } from '../components/NotifyProvider'
+import {
+  ListSearchInput,
+  matchesSearch,
+} from '../components/ListSearchInput'
 
 const statusLabel: Record<TenantStatus, string> = {
   active: 'Activa',
   inactive: 'Inactiva',
   suspended: 'Suspendida',
+}
+
+const statusTone: Record<TenantStatus, string> = {
+  active: 'bg-emerald-500/15 text-emerald-700',
+  inactive: 'bg-[var(--bg)] text-[var(--text-muted)]',
+  suspended: 'bg-[var(--danger)]/15 text-[var(--danger)]',
 }
 
 export function AdminTenantsPage() {
@@ -28,13 +38,27 @@ export function AdminTenantsPage() {
   const [editTenant, setEditTenant] = useState<Tenant | null>(null)
   const [deleteTenant, setDeleteTenant] = useState<Tenant | null>(null)
   const [modulesTenant, setModulesTenant] = useState<Tenant | null>(null)
+  const [search, setSearch] = useState('')
 
   const tenantsQuery = useQuery({
     queryKey: ['admin', 'tenants'],
     queryFn: () => apiFetch<Tenant[]>('/admin/tenants'),
   })
 
-  const tenants = tenantsQuery.data ?? []
+  const tenants = useMemo(() => {
+    const all = tenantsQuery.data ?? []
+    return all.filter((t) =>
+      matchesSearch(
+        search,
+        t.name,
+        t.legalName,
+        t.slug,
+        t.phone,
+        t.status,
+        statusLabel[t.status],
+      ),
+    )
+  }, [tenantsQuery.data, search])
 
   async function onEnter(tenantId: string) {
     setEnteringId(tenantId)
@@ -51,20 +75,61 @@ export function AdminTenantsPage() {
     }
   }
 
+  function TenantActions({ t }: { t: Tenant }) {
+    return (
+      <div className="flex flex-wrap gap-1.5">
+        <button
+          type="button"
+          onClick={() => setEditTenant(t)}
+          className="rounded-md border border-[var(--border)] px-2.5 py-1 text-xs hover:border-[var(--accent)] hover:text-[var(--accent)]"
+        >
+          Editar
+        </button>
+        <button
+          type="button"
+          onClick={() => setModulesTenant(t)}
+          className="rounded-md border border-[var(--border)] px-2.5 py-1 text-xs hover:border-[var(--accent)] hover:text-[var(--accent)]"
+        >
+          Módulos
+        </button>
+        <button
+          type="button"
+          disabled={enteringId === t.id}
+          onClick={() => void onEnter(t.id)}
+          className="rounded-md border border-[var(--border)] px-2.5 py-1 text-xs hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:opacity-60"
+        >
+          {enteringId === t.id ? 'Entrando…' : 'Ingresar'}
+        </button>
+        {canDelete && (
+          <button
+            type="button"
+            onClick={() => setDeleteTenant(t)}
+            className="rounded-md border border-[var(--danger)]/50 px-2.5 py-1 text-xs text-[var(--danger)] hover:bg-[var(--danger)]/10"
+          >
+            Eliminar
+          </button>
+        )}
+      </div>
+    )
+  }
+
   return (
     <PanelShell
       title="Empresas"
       subtitle="Administración multi-tenant"
       variant="admin"
     >
-      <div className="mb-6 flex items-center justify-between gap-3">
-        <p className="text-sm text-[var(--text-muted)]">
-          Cada empresa obtiene su propio schema PostgreSQL y usuario owner.
-        </p>
+      <div className="mb-4 flex flex-col gap-3 md:mb-6 md:flex-row md:items-center md:justify-between">
+        <ListSearchInput
+          value={search}
+          onChange={setSearch}
+          placeholder="Buscar empresa, slug, teléfono…"
+          className="md:max-w-sm"
+        />
         <button
           type="button"
           onClick={() => setCreateOpen(true)}
-          className="shrink-0 rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white hover:bg-[var(--accent-hover)]"
+          className="hidden shrink-0 rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white hover:bg-[var(--accent-hover)] md:inline-flex"
         >
           Nueva empresa
         </button>
@@ -76,7 +141,55 @@ export function AdminTenantsPage() {
         </p>
       )}
 
-      <div className="overflow-x-auto overflow-hidden rounded-xl border border-[var(--border)]">
+      {/* Mobile: tarjetas */}
+      <div className="space-y-3 pb-28 md:hidden">
+        {tenants.map((t) => (
+          <article
+            key={t.id}
+            className="rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] p-4"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <Link
+                  to={`/admin/tenants/${t.id}`}
+                  className="block truncate text-base font-semibold text-[var(--accent)] hover:underline"
+                >
+                  {t.name}
+                </Link>
+                <p className="mt-0.5 truncate text-sm text-[var(--text-muted)]">
+                  {t.legalName || 'Sin razón social'}
+                </p>
+              </div>
+              <span
+                className={`shrink-0 rounded-full px-2.5 py-0.5 text-[11px] font-medium ${statusTone[t.status]}`}
+              >
+                {statusLabel[t.status]}
+              </span>
+            </div>
+            <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
+              <div>
+                <dt className="text-[var(--text-muted)]">Slug</dt>
+                <dd className="mt-0.5 font-mono">{t.slug}</dd>
+              </div>
+              <div>
+                <dt className="text-[var(--text-muted)]">Teléfono</dt>
+                <dd className="mt-0.5">{t.phone || '—'}</dd>
+              </div>
+            </dl>
+            <div className="mt-3 border-t border-[var(--border)] pt-3">
+              <TenantActions t={t} />
+            </div>
+          </article>
+        ))}
+        {tenants.length === 0 && !tenantsQuery.isLoading && (
+          <p className="rounded-xl border border-dashed border-[var(--border)] px-4 py-10 text-center text-sm text-[var(--text-muted)]">
+            Sin empresas. Toca + para crear la primera.
+          </p>
+        )}
+      </div>
+
+      {/* Desktop: tabla */}
+      <div className="hidden overflow-x-auto overflow-hidden rounded-xl border border-[var(--border)] md:block">
         <table className="w-full min-w-[640px] text-left text-sm">
           <thead className="bg-[var(--bg)] text-[var(--text-muted)]">
             <tr>
@@ -106,39 +219,7 @@ export function AdminTenantsPage() {
                 <td className="px-4 py-3 font-mono text-xs">{t.slug}</td>
                 <td className="px-4 py-3">{statusLabel[t.status]}</td>
                 <td className="px-4 py-3">
-                  <div className="flex flex-wrap gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => setEditTenant(t)}
-                      className="rounded-md border border-[var(--border)] px-2.5 py-1 text-xs hover:border-[var(--accent)] hover:text-[var(--accent)]"
-                    >
-                      Editar
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setModulesTenant(t)}
-                      className="rounded-md border border-[var(--border)] px-2.5 py-1 text-xs hover:border-[var(--accent)] hover:text-[var(--accent)]"
-                    >
-                      Módulos
-                    </button>
-                    <button
-                      type="button"
-                      disabled={enteringId === t.id}
-                      onClick={() => void onEnter(t.id)}
-                      className="rounded-md border border-[var(--border)] px-2.5 py-1 text-xs hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:opacity-60"
-                    >
-                      {enteringId === t.id ? 'Entrando…' : 'Ingresar'}
-                    </button>
-                    {canDelete && (
-                      <button
-                        type="button"
-                        onClick={() => setDeleteTenant(t)}
-                        className="rounded-md border border-[var(--danger)]/50 px-2.5 py-1 text-xs text-[var(--danger)] hover:bg-[var(--danger)]/10"
-                      >
-                        Eliminar
-                      </button>
-                    )}
-                  </div>
+                  <TenantActions t={t} />
                 </td>
               </tr>
             ))}
@@ -155,6 +236,27 @@ export function AdminTenantsPage() {
           </tbody>
         </table>
       </div>
+
+      {/* FAB móvil */}
+        <button
+          type="button"
+          onClick={() => setCreateOpen(true)}
+          aria-label="Nueva empresa"
+          className="fixed bottom-20 right-5 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-[var(--accent)] text-white shadow-lg shadow-black/25 hover:bg-[var(--accent-hover)] md:hidden"
+        >
+          <svg
+            width="28"
+            height="28"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            aria-hidden
+          >
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+        </button>
 
       <CreateTenantModal
         open={createOpen}

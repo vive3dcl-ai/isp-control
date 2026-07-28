@@ -74,6 +74,15 @@ export class VpnController {
     return this.vpn.getSetup(user, id);
   }
 
+  @Post('tunnels/:id/probe')
+  @TenantRoles(...CRM_WRITE_ROLES)
+  probe(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.vpn.probeTunnelReachability(user, id);
+  }
+
   @Post('tunnels/:id/import')
   @TenantRoles(...CRM_WRITE_ROLES)
   importToRouter(
@@ -81,7 +90,12 @@ export class VpnController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ImportVpnToRouterDto,
   ) {
-    return this.vpn.importToRouter(user, id, dto.deviceId);
+    return this.vpn.importToRouter(
+      user,
+      id,
+      dto.deviceId,
+      dto.phase ?? 'all',
+    );
   }
 }
 

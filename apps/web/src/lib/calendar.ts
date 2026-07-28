@@ -166,6 +166,8 @@ export function eventsOnLocalDay(events: CalendarEvent[], day: Date) {
     )
 }
 
+export const WEEKDAY_SHORT = ['LU', 'MA', 'MI', 'JU', 'VI', 'SA', 'DO']
+
 export function formatTime(iso: string) {
   const d = new Date(iso)
   return d.toLocaleTimeString(undefined, {
@@ -175,16 +177,17 @@ export function formatTime(iso: string) {
 }
 
 export function formatDayHeading(d: Date) {
-  return d.toLocaleDateString(undefined, {
-    weekday: 'long',
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
-  })
+  const weekday = WEEKDAY_SHORT[d.getDay() === 0 ? 6 : d.getDay() - 1]
+  const month = d
+    .toLocaleDateString('es', { month: 'short' })
+    .replace(/\./g, '')
+    .trim()
+  return `${weekday} ${d.getDate()} ${month} ${d.getFullYear()}`
 }
 
 export function formatMonthHeading(d: Date) {
-  return d.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })
+  const month = d.toLocaleDateString(undefined, { month: 'long' })
+  return `${month} ${d.getFullYear()}`
 }
 
 /** Value for <input type="datetime-local"> */
@@ -207,5 +210,3 @@ export function defaultEventTimes(base = new Date()) {
   end.setHours(end.getHours() + 1)
   return { start, end }
 }
-
-export const WEEKDAY_SHORT = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom']

@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '../lib/api'
 import type { DeniedOnusResponse } from '../lib/onu-connected'
 import { useNotify } from './NotifyProvider'
+import { ModalPortal } from './ModalPortal'
 
 type Props = {
   onClose: () => void
@@ -31,8 +32,8 @@ export function OnuDeniedModal({ onClose }: Props) {
   const rows = deniedQuery.data?.denied ?? []
 
   return (
-    <div className="fixed inset-0 z-[90] flex items-start justify-center overflow-y-auto bg-black/60 p-3 sm:items-center sm:p-4">
-      <div className="my-2 flex max-h-[min(92vh,100dvh)] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl">
+    <ModalPortal><div className="fixed inset-0 z-[90] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/60 sm:items-center sm:p-4">
+      <div className="flex h-[100dvh] max-h-[100dvh] w-full max-w-3xl flex-col overflow-hidden rounded-none border-0 sm:h-auto sm:max-h-[min(92dvh,920px)] sm:rounded-xl sm:border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl">
         <div className="flex shrink-0 items-start justify-between gap-2 border-b border-[var(--border)] px-4 py-3 sm:px-5">
           <div className="min-w-0">
             <h3 className="text-lg font-semibold">ONUs bloqueadas</h3>
@@ -132,6 +133,6 @@ export function OnuDeniedModal({ onClose }: Props) {
           </button>
         </div>
       </div>
-    </div>
+    </div></ModalPortal>
   )
 }

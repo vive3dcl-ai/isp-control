@@ -10,6 +10,7 @@ import type {
 import { useCompanyCurrency } from '../lib/currency'
 import type { SpeedProfile } from '../lib/speed-profiles'
 import { MoneyInput } from './MoneyInput'
+import { ModalPortal } from './ModalPortal'
 
 const inputClass =
   'w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2.5 outline-none ring-[var(--accent)] focus:ring-2'
@@ -165,11 +166,11 @@ export function ServicePlanFormModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/60 p-4 sm:items-center">
+    <ModalPortal><div className="fixed inset-0 z-[100] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/60 sm:items-center sm:p-4">
       <div
         role="dialog"
         aria-modal="true"
-        className="max-h-[min(92vh,100dvh)] overflow-y-auto w-full max-w-lg rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl"
+        className="h-[100dvh] max-h-[100dvh] overflow-y-auto overscroll-contain w-full max-w-lg rounded-none border-0 sm:h-auto sm:max-h-[min(92dvh,920px)] sm:rounded-xl sm:border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl"
       >
         <div className="flex items-center justify-between border-b border-[var(--border)] px-5 py-4">
           <h2 className="text-lg font-semibold">
@@ -385,6 +386,6 @@ export function ServicePlanFormModal({
           </div>
         </form>
       </div>
-    </div>
+    </div></ModalPortal>
   )
 }

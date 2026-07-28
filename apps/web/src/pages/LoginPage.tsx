@@ -38,23 +38,23 @@ export function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center px-4">
+    <div className="flex min-h-dvh items-start justify-center overflow-x-hidden px-4 pb-6 pt-8 sm:items-center sm:pt-0">
       <div className="w-full max-w-md">
-        <div className="mb-8 text-center">
-          <div className="mb-4 flex justify-center">
-            <BrandMark size={56} className="rounded-xl" />
+        <div className="mb-5 text-center sm:mb-8">
+          <div className="mb-3 flex justify-center sm:mb-4">
+            <BrandMark size={48} className="rounded-xl" />
           </div>
           <p className="text-sm font-semibold tracking-[0.2em] text-[var(--accent)] uppercase">
             {branding.productName}
           </p>
-          <h1 className="mt-2 text-3xl font-semibold tracking-tight text-[var(--text)]">
+          <h1 className="mt-1.5 text-2xl font-semibold tracking-tight text-[var(--text)] sm:mt-2 sm:text-3xl">
             Iniciar sesión
           </h1>
         </div>
 
         <form
           onSubmit={onSubmit}
-          className="rounded-2xl border border-[var(--border)] bg-[var(--bg-elevated)] p-6 shadow-xl shadow-black/20"
+          className="rounded-2xl border border-[var(--border)] bg-[var(--bg-elevated)] p-5 shadow-xl shadow-black/20 sm:p-6"
         >
           <label className="mb-4 block">
             <span className="mb-1.5 block text-sm text-[var(--text-muted)]">

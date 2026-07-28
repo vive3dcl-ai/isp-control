@@ -3,7 +3,9 @@ type TabItem<T extends string> = {
   label: string
 }
 
-/** Shared underline sub-tabs used across Ajustes sections. */
+/**
+ * Pestañas tipo chips con scroll horizontal (mismo patrón que filtros de Tickets).
+ */
 export function SettingsSubTabs<T extends string>({
   tabs,
   value,
@@ -19,7 +21,7 @@ export function SettingsSubTabs<T extends string>({
     <nav
       role="tablist"
       aria-label={ariaLabel}
-      className="flex flex-wrap gap-4 border-b border-[var(--border)]"
+      className="-mx-1 mb-4 flex flex-nowrap gap-2 overflow-x-auto overflow-y-hidden overscroll-x-contain px-1 pb-1 touch-pan-x [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
     >
       {tabs.map((tab) => {
         const active = value === tab.id
@@ -31,10 +33,10 @@ export function SettingsSubTabs<T extends string>({
             aria-selected={active}
             onClick={() => onChange(tab.id)}
             className={[
-              '-mb-px border-b-2 pb-2 text-sm font-medium',
+              'shrink-0 rounded-full border px-3 py-1.5 text-xs font-medium transition',
               active
-                ? 'border-[var(--accent)] text-[var(--text)]'
-                : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text)]',
+                ? 'border-[var(--accent)] bg-[var(--accent)] text-white'
+                : 'border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--text-muted)] hover:border-[var(--accent)] hover:text-[var(--accent)]',
             ].join(' ')}
           >
             {tab.label}

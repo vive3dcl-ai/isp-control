@@ -47,6 +47,8 @@ import {
 import type { NetworkMapClientMarker } from '../lib/network-map'
 import { GoogleMapsCoords } from './GoogleMapsCoords'
 import { MapElementTypeIcon } from './MapElementTypeIcon'
+import { ModalPortal } from './ModalPortal'
+
 
 const inputClass =
   'w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2.5 text-sm outline-none ring-[var(--accent)] focus:ring-2'
@@ -461,11 +463,11 @@ export function MapElementEditModal({
   }
 
   return (
-    <div className="fixed inset-0 z-[600] flex items-start justify-center overflow-y-auto bg-black/60 p-3 sm:items-center sm:p-4">
+    <ModalPortal><div className="fixed inset-0 z-[600] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/60 sm:items-center sm:p-4">
       <div
         role="dialog"
         aria-modal="true"
-        className={`flex max-h-[min(92vh,100dvh)] w-full flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl ${
+        className={`flex h-[100dvh] max-h-[100dvh] w-full flex-col overflow-hidden rounded-none border-0 sm:h-auto sm:max-h-[min(92dvh,920px)] sm:rounded-xl sm:border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl ${
           isCable || isDrop || isEnclosure ? 'max-w-xl' : 'max-w-md'
         }`}
       >
@@ -1208,6 +1210,6 @@ export function MapElementEditModal({
           </div>
         </form>
       </div>
-    </div>
+    </div></ModalPortal>
   )
 }

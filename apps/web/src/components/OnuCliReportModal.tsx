@@ -1,3 +1,4 @@
+import { ModalPortal } from './ModalPortal'
 type Props = {
   title: string
   subtitle?: string
@@ -27,8 +28,8 @@ export function OnuCliReportModal({
 }: Props) {
   const cleaned = stripOltPrompts(body)
   return (
-    <div className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-black/70 p-4 sm:items-center">
-      <div className="flex max-h-[min(92vh,100dvh)] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl">
+    <ModalPortal><div className="fixed inset-0 z-[100] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/70 sm:items-center sm:p-4">
+      <div className="flex h-[100dvh] max-h-[100dvh] w-full max-w-3xl flex-col overflow-hidden rounded-none border-0 sm:h-auto sm:max-h-[min(92dvh,920px)] sm:rounded-xl sm:border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl">
         <div className="flex shrink-0 items-start justify-between gap-3 border-b border-[var(--border)] px-5 py-3">
           <div className="min-w-0">
             <h3 className="text-lg font-semibold">{title}</h3>
@@ -67,6 +68,6 @@ export function OnuCliReportModal({
           </button>
         </div>
       </div>
-    </div>
+    </div></ModalPortal>
   )
 }

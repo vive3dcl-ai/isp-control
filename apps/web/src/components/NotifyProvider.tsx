@@ -7,6 +7,7 @@ import {
   useState,
   type ReactNode,
 } from 'react'
+import { ModalPortal } from './ModalPortal'
 
 export type NotifyAlertOptions = {
   title?: string
@@ -116,7 +117,8 @@ function NotifyModal({
   const lines = request.message.split('\n')
 
   return (
-    <div className="fixed inset-0 z-[1000] flex items-start justify-center overflow-y-auto p-3 sm:items-center sm:p-4">
+    <ModalPortal>
+    <div className="modal-backdrop fixed inset-0 z-[1000] flex items-center justify-center overflow-hidden p-0 sm:p-4">
       <button
         type="button"
         aria-label="Cerrar"
@@ -130,9 +132,9 @@ function NotifyModal({
         role="dialog"
         aria-modal="true"
         aria-labelledby="notify-modal-title"
-        className={`relative z-10 my-2 max-h-[min(90vh,100dvh)] w-full max-w-md overflow-y-auto rounded-xl border bg-[var(--bg-elevated)] text-[var(--text)] shadow-2xl ${styles.border}`}
+        className={`relative z-10 flex max-h-[100dvh] w-full max-w-md flex-col overflow-hidden rounded-none border-0 bg-[var(--bg-elevated)] text-[var(--text)] shadow-2xl sm:max-h-[min(90dvh,920px)] sm:rounded-xl sm:border ${styles.border}`}
       >
-        <div className="border-b border-[var(--border)] px-5 py-4">
+        <div className="shrink-0 border-b border-[var(--border)] px-5 py-4">
           <h2
             id="notify-modal-title"
             className={`text-lg font-semibold ${styles.title}`}
@@ -140,7 +142,7 @@ function NotifyModal({
             {title}
           </h2>
         </div>
-        <div className="space-y-2 px-5 py-4 text-sm text-[var(--text-muted)]">
+        <div className="min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain px-5 py-4 text-sm text-[var(--text-muted)]">
           {lines.map((line, i) =>
             line.trim() === '' ? (
               <div key={i} className="h-2" />
@@ -169,7 +171,7 @@ function NotifyModal({
             </label>
           )}
         </div>
-        <div className="flex flex-wrap justify-end gap-2 border-t border-[var(--border)] px-5 py-3">
+        <div className="flex shrink-0 flex-wrap justify-end gap-2 border-t border-[var(--border)] px-5 py-3">
           {request.kind === 'confirm' && (
             <button
               type="button"
@@ -197,6 +199,7 @@ function NotifyModal({
         </div>
       </div>
     </div>
+    </ModalPortal>
   )
 }
 

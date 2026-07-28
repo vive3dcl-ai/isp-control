@@ -1,12 +1,17 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { apiFetch } from '../lib/api'
 import type { PlatformPaymentMethod } from '../lib/modules'
 import { PanelShell } from '../components/PanelShell'
 import { MercadoPagoConfigModal } from '../components/MercadoPagoConfigModal'
+import {
+  ListSearchInput,
+  matchesSearch,
+} from '../components/ListSearchInput'
 
 export function AdminPaymentMethodsPage() {
   const [editId, setEditId] = useState<string | null>(null)
+  const [search, setSearch] = useState('')
 
   const query = useQuery({
     queryKey: ['admin', 'payment-methods'],
@@ -14,7 +19,19 @@ export function AdminPaymentMethodsPage() {
       apiFetch<PlatformPaymentMethod[]>('/admin/payment-methods'),
   })
 
-  const methods = query.data ?? []
+  const methods = useMemo(() => {
+    const all = query.data ?? []
+    return all.filter((m) =>
+      matchesSearch(
+        search,
+        m.name,
+        m.description,
+        m.environment,
+        m.enabled ? 'activo' : 'inactivo',
+        m.configured ? 'configurado' : 'pendiente',
+      ),
+    )
+  }, [query.data, search])
 
   return (
     <PanelShell
@@ -22,24 +39,21 @@ export function AdminPaymentMethodsPage() {
       subtitle="Cuenta de cobro de la plataforma"
       variant="admin"
     >
-      <div className="mb-5 max-w-2xl rounded-lg border border-sky-500/30 bg-sky-500/10 px-4 py-3 text-sm text-sky-100">
-        Estas credenciales son <strong>exclusivas de la plataforma</strong> para
-        cobrar suscripciones a las empresas. Cada ISP configura su propia
-        cuenta Mercado Pago en Ajustes → Integraciones, sin compartir tokens
-        con la plataforma.
-      </div>
-
-      <p className="mb-5 max-w-2xl text-sm text-[var(--text-muted)]">
-        El precio del módulo Mercado Pago (lo que se cobra a las empresas por
-        usarlo) se edita en el menú <strong>Módulos</strong>.
-      </p>
-
       {query.isLoading && (
         <p className="text-sm text-[var(--text-muted)]">Cargando…</p>
       )}
       {query.error && (
         <p className="mb-4 text-sm text-[var(--danger)]">{query.error.message}</p>
       )}
+
+      <div className="mb-4">
+        <ListSearchInput
+          value={search}
+          onChange={setSearch}
+          placeholder="Buscar método…"
+          className="md:max-w-sm"
+        />
+      </div>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {methods.map((m) => (

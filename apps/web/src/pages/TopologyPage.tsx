@@ -259,6 +259,8 @@ export function TopologyPage() {
 
   const viewportRef = useRef<HTMLDivElement>(null)
   const [view, setView] = useState<ViewTransform>({ x: 0, y: 0, scale: 1 })
+  const viewRef = useRef(view)
+  viewRef.current = view
   const [size, setSize] = useState({ w: 800, h: 480 })
   const [isPanning, setIsPanning] = useState(false)
   const panRef = useRef<{
@@ -267,7 +269,22 @@ export function TopologyPage() {
     lastY: number
     moved: boolean
   } | null>(null)
+  const pointersRef = useRef(
+    new Map<number, { x: number; y: number }>(),
+  )
+  const pinchRef = useRef<{
+    dist: number
+    scale: number
+    midX: number
+    midY: number
+    viewX: number
+    viewY: number
+  } | null>(null)
   const skipClickRef = useRef(false)
+  /** Tras pan/zoom del usuario no auto-centramos hasta recargar. */
+  const userMovedRef = useRef(false)
+  /** Auto-fit solo una vez por carga de página. */
+  const fittedOnceRef = useRef(false)
 
   const graphQuery = useQuery({
     queryKey: ['app', 'topology'],
@@ -295,8 +312,6 @@ export function TopologyPage() {
     [onusQuery.data?.onus, positions, devices],
   )
 
-  /** Solo auto-centrar la primera vez (o tras vaciar el grafo). Refetch no toca el zoom. */
-  const fittedOnceRef = useRef(false)
   const layoutRef = useRef<{
     positions: Map<string, { x: number; y: number }>
     devices: TopologyDevice[]
@@ -334,38 +349,53 @@ export function TopologyPage() {
     if (!el) return
     const { positions: pos, devices: devs, bounds } = layoutRef.current
     const rect = el.getBoundingClientRect()
+    if (rect.width <= 0 || rect.height <= 0) return
     setSize({ w: rect.width, h: rect.height })
     setView(fitView(pos, devs, rect.width, rect.height, bounds))
     fittedOnceRef.current = true
   }, [])
 
-  // Auto-fit solo al primer contenido (no en cada refetch de topology/onus).
-  useEffect(() => {
-    if (positions.size === 0) {
-      fittedOnceRef.current = false
-      return
-    }
-    if (fittedOnceRef.current) return
-    centerView()
-  }, [positions.size, centerView])
+  function markUserMoved() {
+    userMovedRef.current = true
+  }
 
-  // Resize: actualizar tamaño del SVG, sin resetear zoom/pan.
+  // Auto-fit una sola vez al cargar (espera datos + viewport medible).
+  // No se resetea en refetch; si el usuario movió, no se vuelve a centrar.
+  useEffect(() => {
+    if (userMovedRef.current || fittedOnceRef.current) return
+    if (positions.size === 0) return
+    if (graphQuery.isLoading || onusQuery.isLoading) return
+    centerView()
+  }, [positions.size, graphQuery.isLoading, onusQuery.isLoading, centerView])
+
+  // Resize: tamaño del SVG; primer fit si aún no hubo interacción.
   useEffect(() => {
     const el = viewportRef.current
     if (!el) return
     const ro = new ResizeObserver(() => {
       const rect = el.getBoundingClientRect()
       setSize({ w: rect.width, h: rect.height })
+      if (
+        !userMovedRef.current &&
+        !fittedOnceRef.current &&
+        layoutRef.current.positions.size > 0 &&
+        rect.width > 0 &&
+        rect.height > 0
+      ) {
+        centerView()
+      }
     })
     ro.observe(el)
     return () => ro.disconnect()
-  }, [])
+  }, [centerView])
+
   useEffect(() => {
     const el = viewportRef.current
     if (!el) return
 
     function onWheel(e: WheelEvent) {
       e.preventDefault()
+      markUserMoved()
       const rect = el!.getBoundingClientRect()
       const mx = e.clientX - rect.left
       const my = e.clientY - rect.top
@@ -390,10 +420,63 @@ export function TopologyPage() {
     return () => el.removeEventListener('wheel', onWheel)
   }, [])
 
-  function onPointerDown(e: React.PointerEvent) {
-    if (e.button !== 1) return
+  function syncPinch(
+    el: HTMLDivElement,
+    a: { x: number; y: number },
+    b: { x: number; y: number },
+  ) {
+    const dist = Math.hypot(b.x - a.x, b.y - a.y)
+    if (dist < 1) return
+    const rect = el.getBoundingClientRect()
+    const midX = (a.x + b.x) / 2 - rect.left
+    const midY = (a.y + b.y) / 2 - rect.top
+    const pinch = pinchRef.current
+    if (!pinch) {
+      const prev = viewRef.current
+      pinchRef.current = {
+        dist,
+        scale: prev.scale,
+        midX,
+        midY,
+        viewX: prev.x,
+        viewY: prev.y,
+      }
+      return
+    }
+    markUserMoved()
+    const nextScale = Math.min(
+      MAX_SCALE,
+      Math.max(MIN_SCALE, pinch.scale * (dist / pinch.dist)),
+    )
+    const worldX = (pinch.midX - pinch.viewX) / pinch.scale
+    const worldY = (pinch.midY - pinch.viewY) / pinch.scale
+    setView({
+      scale: nextScale,
+      x: midX - worldX * nextScale,
+      y: midY - worldY * nextScale,
+    })
+  }
+
+  function onPointerDown(e: React.PointerEvent<HTMLDivElement>) {
+    if (e.button !== 0 && e.button !== 1) return
     e.preventDefault()
-    e.currentTarget.setPointerCapture(e.pointerId)
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId)
+    } catch {
+      // ignore
+    }
+    pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
+
+    if (pointersRef.current.size >= 2) {
+      panRef.current = null
+      setIsPanning(false)
+      const [a, b] = [...pointersRef.current.values()]
+      pinchRef.current = null
+      syncPinch(e.currentTarget, a, b)
+      return
+    }
+
+    pinchRef.current = null
     panRef.current = {
       active: true,
       lastX: e.clientX,
@@ -403,27 +486,63 @@ export function TopologyPage() {
     setIsPanning(true)
   }
 
-  function onPointerMove(e: React.PointerEvent) {
+  function onPointerMove(e: React.PointerEvent<HTMLDivElement>) {
+    if (!pointersRef.current.has(e.pointerId)) return
+    pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
+
+    if (pointersRef.current.size >= 2) {
+      const [a, b] = [...pointersRef.current.values()]
+      syncPinch(e.currentTarget, a, b)
+      return
+    }
+
     const pan = panRef.current
     if (!pan?.active) return
     const dx = e.clientX - pan.lastX
     const dy = e.clientY - pan.lastY
-    if (Math.abs(dx) > 2 || Math.abs(dy) > 2) pan.moved = true
+    if (Math.abs(dx) > 2 || Math.abs(dy) > 2) {
+      pan.moved = true
+      markUserMoved()
+    }
     pan.lastX = e.clientX
     pan.lastY = e.clientY
     setView((prev) => ({ ...prev, x: prev.x + dx, y: prev.y + dy }))
   }
 
-  function onPointerUp(e: React.PointerEvent) {
-    if (e.button !== 1 && !panRef.current?.active) return
-    if (panRef.current?.moved) skipClickRef.current = true
-    panRef.current = null
-    setIsPanning(false)
+  function onPointerUp(e: React.PointerEvent<HTMLDivElement>) {
+    pointersRef.current.delete(e.pointerId)
     try {
       e.currentTarget.releasePointerCapture(e.pointerId)
     } catch {
       // ignore
     }
+
+    if (pointersRef.current.size >= 2) {
+      const [a, b] = [...pointersRef.current.values()]
+      pinchRef.current = null
+      syncPinch(e.currentTarget, a, b)
+      return
+    }
+
+    if (pointersRef.current.size === 1) {
+      pinchRef.current = null
+      const only = [...pointersRef.current.values()][0]
+      panRef.current = {
+        active: true,
+        lastX: only.x,
+        lastY: only.y,
+        moved: false,
+      }
+      setIsPanning(true)
+      return
+    }
+
+    if (panRef.current?.moved || pinchRef.current) {
+      skipClickRef.current = true
+    }
+    panRef.current = null
+    pinchRef.current = null
+    setIsPanning(false)
   }
 
   function onDeviceClick(id: string) {
@@ -439,10 +558,7 @@ export function TopologyPage() {
       subtitle="Activos de red y conexiones"
       variant="tenant"
     >
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-[var(--text-muted)]">
-          Rueda = zoom · clic central = mover · el plano se centra al cargar
-        </p>
+      <div className="mb-4 flex flex-wrap items-center justify-end gap-3">
         <div className="flex shrink-0 flex-wrap gap-2">
           <button
             type="button"
@@ -457,7 +573,7 @@ export function TopologyPage() {
                 type="button"
                 onClick={() => setVpnOpen(true)}
                 className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:border-[var(--accent)] hover:text-[var(--accent)] sm:px-4"
-                title="OpenVPN / WireGuard / VPN inverso lab"
+                title="OpenVPN / WireGuard al concentrador"
               >
                 VPN
               </button>
@@ -483,7 +599,7 @@ export function TopologyPage() {
         ref={viewportRef}
         className="relative h-[min(70vh,560px)] overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg)] select-none"
         style={{
-          cursor: isPanning ? 'grabbing' : 'default',
+          cursor: isPanning ? 'grabbing' : 'grab',
           touchAction: 'none',
         }}
         onPointerDown={onPointerDown}

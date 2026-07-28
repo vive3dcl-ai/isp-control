@@ -6,6 +6,7 @@ import type {
   UncfgOnu,
 } from '../lib/onu-connected'
 import type { OnuTypesResponse } from '../lib/onu-settings'
+import { ModalPortal } from './ModalPortal'
 
 const inputClass =
   'w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm outline-none ring-[var(--accent)] focus:ring-2'
@@ -115,10 +116,11 @@ export function OnuAuthorizeModal({ orphan, onClose, onAuthorized }: Props) {
   const busy = authorizeMutation.isPending
 
   return (
-    <div className="fixed inset-0 z-[90] flex items-start justify-center overflow-y-auto bg-black/60 p-4 sm:items-center">
+    <ModalPortal>
+    <div className="fixed inset-0 z-[90] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/60 sm:items-center sm:p-4">
       <form
         onSubmit={submit}
-        className="max-h-[min(92vh,100dvh)] overflow-y-auto relative w-full max-w-lg rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl"
+        className="h-[100dvh] max-h-[100dvh] overflow-y-auto overscroll-contain relative w-full max-w-lg rounded-none border-0 sm:h-auto sm:max-h-[min(92dvh,920px)] sm:rounded-xl sm:border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl"
       >
         {busy ? (
           <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 rounded-xl bg-[var(--bg-elevated)]/95 px-6 text-center">
@@ -278,5 +280,6 @@ export function OnuAuthorizeModal({ orphan, onClose, onAuthorized }: Props) {
         </div>
       </form>
     </div>
+    </ModalPortal>
   )
 }

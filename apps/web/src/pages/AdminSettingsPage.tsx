@@ -1,6 +1,11 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { apiFetch } from '../lib/api'
+import {
+  apiFetch,
+  downloadDbBackup,
+  restoreDbBackup,
+} from '../lib/api'
+import { useAuth } from '../auth/AuthContext'
 import { PanelShell } from '../components/PanelShell'
 import { SettingsSubTabs } from '../components/SettingsSubTabs'
 import { SmtpConfigModal } from '../components/SmtpConfigModal'
@@ -17,6 +22,7 @@ const TABS = [
   { id: 'vpn', label: 'VPN' },
   { id: 'smtp', label: 'SMTP' },
   { id: 'system', label: 'Valor del sistema' },
+  { id: 'backup', label: 'Respaldo' },
 ] as const
 
 type Section = (typeof TABS)[number]['id']
@@ -77,6 +83,8 @@ export function AdminSettingsPage() {
       )}
 
       {section === 'system' && <SystemValuePanel />}
+
+      {section === 'backup' && <BackupPanel />}
     </PanelShell>
   )
 }
@@ -284,9 +292,8 @@ function WireguardConcentratorPanel() {
         Concentrador multi-tenant en <code>VPN_PUBLIC_HOST</code>. WireGuard
         usa <code>VPN_PORT_WIREGUARD</code>; OpenVPN{' '}
         <code>VPN_PORT_OPENVPN_TCP</code> / <code>VPN_PORT_OPENVPN_UDP</code>.
-        Los MikroTik (modo concentrador) hacen <code>connect-to</code> a ese
-        host. El modo inverso NO usa este dominio: el ACS apunta al MikroTik
-        del tenant.
+        Los MikroTik hacen <code>connect-to</code> a ese host; el servicio{' '}
+        <code>vpn-concentrator</code> sincroniza peers/usuarios desde la API.
       </p>
 
       <section className="space-y-3">
@@ -372,7 +379,7 @@ function WireguardConcentratorPanel() {
               </div>
             </dl>
             <pre className="max-h-56 overflow-auto rounded-lg border border-[var(--border)] bg-[var(--bg)] p-3 text-xs whitespace-pre-wrap">
-              {ovpnQuery.data.conf || '# Sin túneles OpenVPN outbound'}
+              {ovpnQuery.data.conf || '# Sin túneles OpenVPN'}
             </pre>
             <div className="flex flex-wrap gap-2">
               <button
@@ -878,6 +885,129 @@ function ImageField({
           Quitar
         </button>
       )}
+    </div>
+  )
+}
+
+function BackupPanel() {
+  const { user } = useAuth()
+  const isSuperadmin = user?.role === 'superadmin'
+  const [downloading, setDownloading] = useState(false)
+  const [restoring, setRestoring] = useState(false)
+  const [file, setFile] = useState<File | null>(null)
+  const [confirmText, setConfirmText] = useState('')
+  const [msg, setMsg] = useState<string | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+
+  async function onDownload() {
+    setErr(null)
+    setMsg(null)
+    setDownloading(true)
+    try {
+      await downloadDbBackup()
+      setMsg('Respaldo descargado.')
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Error al descargar')
+    } finally {
+      setDownloading(false)
+    }
+  }
+
+  async function onRestore() {
+    setErr(null)
+    setMsg(null)
+    if (!file) {
+      setErr('Selecciona un archivo .backup')
+      return
+    }
+    if (confirmText.trim() !== 'RESTORE') {
+      setErr('Escribe RESTORE para confirmar la restauración.')
+      return
+    }
+    setRestoring(true)
+    try {
+      const result = await restoreDbBackup(file)
+      setMsg(result.message)
+      setFile(null)
+      setConfirmText('')
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Error al restaurar')
+    } finally {
+      setRestoring(false)
+    }
+  }
+
+  return (
+    <div className="mt-5 max-w-xl space-y-6">
+      <p className="text-sm text-[var(--text-muted)]">
+        Respaldo completo de Postgres: esquema{' '}
+        <code className="text-xs">public</code> y todos los{' '}
+        <code className="text-xs">tenant_*</code>. Al actualizar imágenes Docker
+        los datos no se borran (volúmenes); esto sirve para copias de seguridad y
+        recuperación.
+      </p>
+
+      <section className="rounded-lg border border-[var(--border)] p-4">
+        <h3 className="text-sm font-semibold">Descargar</h3>
+        <p className="mt-1 mb-3 text-xs text-[var(--text-muted)]">
+          Genera un archivo <code>.backup</code> (formato personalizado de
+          PostgreSQL).
+        </p>
+        <button
+          type="button"
+          disabled={downloading}
+          onClick={() => void onDownload()}
+          className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white hover:bg-[var(--accent-hover)] disabled:opacity-60"
+        >
+          {downloading ? 'Generando…' : 'Descargar respaldo'}
+        </button>
+      </section>
+
+      <section className="rounded-lg border border-[var(--border)] p-4">
+        <h3 className="text-sm font-semibold">Restaurar</h3>
+        <p className="mt-1 mb-3 text-xs text-[var(--danger)]">
+          Reemplaza todos los datos actuales. Operación irreversible. Solo
+          superadmin.
+        </p>
+        {!isSuperadmin ? (
+          <p className="text-sm text-[var(--text-muted)]">
+            Tu rol no puede restaurar. Pide a un superadmin.
+          </p>
+        ) : (
+          <div className="space-y-3">
+            <input
+              type="file"
+              accept=".backup,.dump,application/octet-stream"
+              className="block w-full text-sm"
+              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+            />
+            <label className="block text-xs text-[var(--text-muted)]">
+              Escribe <strong>RESTORE</strong> para confirmar
+              <input
+                type="text"
+                value={confirmText}
+                onChange={(e) => setConfirmText(e.target.value)}
+                className={`mt-1 block w-full ${inputClass}`}
+                placeholder="RESTORE"
+                autoComplete="off"
+              />
+            </label>
+            <button
+              type="button"
+              disabled={restoring || !file || confirmText.trim() !== 'RESTORE'}
+              onClick={() => void onRestore()}
+              className="rounded-lg bg-[var(--danger)] px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-60"
+            >
+              {restoring ? 'Restaurando…' : 'Restaurar base de datos'}
+            </button>
+          </div>
+        )}
+      </section>
+
+      {msg && (
+        <p className="text-sm text-[var(--success,var(--accent))]">{msg}</p>
+      )}
+      {err && <p className="text-sm text-[var(--danger)]">{err}</p>}
     </div>
   )
 }

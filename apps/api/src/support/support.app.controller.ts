@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   ParseUUIDPipe,
@@ -15,17 +16,25 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { AuthUser } from '../auth/auth.types';
 import { SupportService } from './support.service';
+import { PushService } from './push.service';
 import {
   CreateSupportMessageDto,
   CreateSupportTicketDto,
   UpdateSupportTicketDto,
 } from './dto/support.dto';
+import {
+  RemovePushSubscriptionDto,
+  UpsertPushSubscriptionDto,
+} from './dto/push.dto';
 
 @Controller('app')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles('tenant_user')
 export class SupportAppController {
-  constructor(private readonly support: SupportService) {}
+  constructor(
+    private readonly support: SupportService,
+    private readonly push: PushService,
+  ) {}
 
   @Get('notifications/summary')
   summary(@CurrentUser() user: AuthUser) {
@@ -54,6 +63,27 @@ export class SupportAppController {
     @Param('id', ParseUUIDPipe) id: string,
   ) {
     return this.support.markRead(user, id);
+  }
+
+  @Get('push/vapid-public-key')
+  vapidPublicKey() {
+    return this.push.getPublicKey();
+  }
+
+  @Post('push/subscribe')
+  subscribe(
+    @CurrentUser() user: AuthUser,
+    @Body() dto: UpsertPushSubscriptionDto,
+  ) {
+    return this.push.upsertSubscription(user, dto);
+  }
+
+  @Delete('push/subscribe')
+  unsubscribe(
+    @CurrentUser() user: AuthUser,
+    @Body() dto: RemovePushSubscriptionDto,
+  ) {
+    return this.push.removeSubscription(user, dto.endpoint);
   }
 
   @Get('support/tickets')

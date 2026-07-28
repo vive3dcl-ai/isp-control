@@ -7,6 +7,8 @@ import {
   type TenantAppUser,
 } from '../lib/users'
 import type { TenantUserRole } from '../lib/api'
+import { ModalPortal } from './ModalPortal'
+
 
 const inputClass =
   'w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2.5 outline-none ring-[var(--accent)] focus:ring-2'
@@ -116,7 +118,7 @@ export function UserFormModal({
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 p-4 sm:items-center">
+    <ModalPortal><div className="fixed inset-0 z-[100] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/50 sm:items-center sm:p-4">
       <button
         type="button"
         aria-label="Cerrar"
@@ -240,6 +242,6 @@ export function UserFormModal({
           </button>
         </div>
       </form>
-    </div>
+    </div></ModalPortal>
   )
 }

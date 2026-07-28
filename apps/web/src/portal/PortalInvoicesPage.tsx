@@ -7,6 +7,7 @@ import {
   portalPayInvoice,
   type PortalInvoice,
 } from '../lib/client-portal'
+import { ModalPortal } from '../components/ModalPortal'
 
 const STATUS_LABEL: Record<string, string> = {
   issued: 'Emitida',
@@ -155,8 +156,8 @@ export function PortalInvoicesPage() {
       </div>
 
       {view && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-[var(--portal-border)] bg-[var(--portal-bg)] p-6 shadow-xl">
+        <ModalPortal><div className="modal-backdrop fixed inset-0 z-[100] flex items-stretch justify-center overflow-hidden bg-black/50 sm:items-center sm:p-4">
+          <div className="h-[100dvh] max-h-[100dvh] w-full max-w-lg overflow-y-auto overscroll-contain rounded-none border-0 border-[var(--portal-border)] bg-[var(--portal-bg)] p-6 shadow-xl sm:h-auto sm:max-h-[min(90dvh,920px)] sm:rounded-2xl sm:border">
             <div className="mb-4 flex items-start justify-between gap-3">
               <div>
                 <h2 className="text-lg font-semibold">{view.number}</h2>
@@ -208,7 +209,7 @@ export function PortalInvoicesPage() {
               </button>
             )}
           </div>
-        </div>
+        </div></ModalPortal>
       )}
     </div>
   )

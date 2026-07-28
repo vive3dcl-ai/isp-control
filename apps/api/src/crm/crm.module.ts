@@ -7,8 +7,10 @@ import { TopologyModule } from '../topology/topology.module';
 import { BillingModule } from '../billing/billing.module';
 import { ClientPortalModule } from '../client-portal/client-portal.module';
 import { Tenant } from '../tenants/entities/tenant.entity';
+import { TenantMapDraft } from './entities/tenant-map-draft.entity';
 import { CrmController } from './crm.controller';
 import { CrmService } from './crm.service';
+import { MapDraftsService } from './map-drafts.service';
 
 @Module({
   imports: [
@@ -17,10 +19,10 @@ import { CrmService } from './crm.service';
     TopologyModule,
     BillingModule,
     forwardRef(() => ClientPortalModule),
-    TypeOrmModule.forFeature([Tenant]),
+    TypeOrmModule.forFeature([Tenant, TenantMapDraft]),
   ],
   controllers: [CrmController],
-  providers: [CrmService, TenantRolesGuard],
-  exports: [CrmService],
+  providers: [CrmService, MapDraftsService, TenantRolesGuard],
+  exports: [CrmService, MapDraftsService],
 })
 export class CrmModule {}

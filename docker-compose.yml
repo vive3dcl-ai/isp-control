@@ -1,8 +1,20 @@
+# Base services (postgres/redis). Overlay with docker-compose.dev.yml or prod.
+#
+# Red compartida isp_net: API ↔ VPN gateway ↔ túneles 10.69/16 / LAN OLT-ONU.
+
+networks:
+  isp_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.10.0/24
+
 services:
   postgres:
     image: postgres:16-alpine
     container_name: isp-control-db
     restart: unless-stopped
+    networks: [isp_net]
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-isp}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-isp}
@@ -21,6 +33,7 @@ services:
     image: redis:7-alpine
     container_name: isp-control-redis
     restart: unless-stopped
+    networks: [isp_net]
     ports:
       - "${REDIS_PORT:-6379}:6379"
     volumes:

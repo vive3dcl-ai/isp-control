@@ -1,4 +1,6 @@
 import type { ReactNode } from 'react'
+import { ModalPortal } from './ModalPortal'
+
 
 export type ProgressStepStatus =
   | 'pending'
@@ -83,12 +85,12 @@ export function OperationProgressModal({
   const doneCount = steps.filter((s) => s.status === 'done').length
 
   return (
-    <div className="fixed inset-0 z-[120] flex items-start justify-center overflow-y-auto bg-black/60 p-3 sm:items-center sm:p-4">
+    <ModalPortal><div className="fixed inset-0 z-[120] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/60 sm:items-center sm:p-4">
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="progress-modal-title"
-        className="max-h-[min(92vh,100dvh)] overflow-y-auto w-full max-w-md rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--text)] shadow-xl"
+        className="h-[100dvh] max-h-[100dvh] overflow-y-auto overscroll-contain w-full max-w-md rounded-none border-0 sm:h-auto sm:max-h-[min(92dvh,920px)] sm:rounded-xl sm:border border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--text)] shadow-xl"
       >
         <div className="border-b border-[var(--border)] px-5 py-4">
           <h3 id="progress-modal-title" className="text-lg font-semibold">
@@ -162,7 +164,7 @@ export function OperationProgressModal({
           </button>
         </div>
       </div>
-    </div>
+    </div></ModalPortal>
   )
 }
 

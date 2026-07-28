@@ -52,7 +52,7 @@ export function PortalLoginPage() {
 
   return (
     <PortalThemeRoot>
-      <div className="relative flex min-h-dvh items-center justify-center overflow-hidden px-4 py-12">
+      <div className="relative flex min-h-dvh items-start justify-center overflow-x-hidden px-4 pb-6 pt-8 sm:items-center sm:py-12">
         <div
           className="pointer-events-none absolute inset-0 opacity-80"
           style={{
@@ -61,18 +61,18 @@ export function PortalLoginPage() {
           }}
         />
         <div className="relative w-full max-w-md">
-          <div className="mb-8 text-center">
+          <div className="mb-5 text-center sm:mb-8">
             {branding.data?.logoUrl ? (
               <img
                 src={branding.data.logoUrl}
                 alt=""
-                className="mx-auto mb-4 h-14 w-14 rounded-xl object-cover"
+                className="mx-auto mb-3 h-12 w-12 rounded-xl object-cover sm:mb-4 sm:h-14 sm:w-14"
               />
             ) : null}
-            <h1 className="portal-brand text-3xl font-semibold tracking-tight sm:text-4xl">
+            <h1 className="portal-brand text-2xl font-semibold tracking-tight sm:text-4xl">
               {company}
             </h1>
-            <p className="mt-2 text-[var(--portal-muted)]">
+            <p className="mt-1.5 text-sm text-[var(--portal-muted)] sm:mt-2 sm:text-base">
               Accede a tus servicios y facturas
             </p>
           </div>

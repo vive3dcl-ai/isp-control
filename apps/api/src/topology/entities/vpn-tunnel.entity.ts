@@ -7,7 +7,6 @@ import {
 } from 'typeorm';
 
 export type VpnTunnelProtocol = 'openvpn_tcp' | 'openvpn_udp' | 'wireguard';
-export type VpnTunnelMode = 'outbound' | 'reverse';
 export type VpnTunnelStatus = 'pending' | 'configured' | 'online' | 'offline';
 
 @Entity({ name: 'vpn_tunnels' })
@@ -22,17 +21,11 @@ export class VpnTunnel {
   @Column({ type: 'varchar', length: 20 })
   protocol: string;
 
-  /**
-   * outbound = MikroTik dials concentrator (default).
-   * reverse = MikroTik is OpenVPN server; ACS local is client (lab TR069).
-   */
+  /** Always concentrator (MikroTik client → VPN_PUBLIC_HOST). Kept for DB compat. */
   @Column({ type: 'varchar', length: 20, default: 'outbound' })
   mode: string;
 
-  /**
-   * Public host/IP of MikroTik (reverse mode endpoint).
-   * Unused for outbound (uses VPN_PUBLIC_HOST).
-   */
+  /** Legacy column; unused (concentrador usa VPN_PUBLIC_HOST). */
   @Column({ name: 'endpoint_host', type: 'varchar', length: 255, nullable: true })
   endpointHost: string | null;
 

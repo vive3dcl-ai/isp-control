@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '../lib/api'
 import {
@@ -6,6 +6,10 @@ import {
   type ModuleCatalogItem,
 } from '../lib/modules'
 import { PanelShell } from '../components/PanelShell'
+import {
+  ListSearchInput,
+  matchesSearch,
+} from '../components/ListSearchInput'
 
 const inputClass =
   'rounded-lg border border-[var(--border)] bg-[var(--bg)] px-2 py-1.5 text-sm outline-none ring-[var(--accent)] focus:ring-2'
@@ -15,6 +19,7 @@ export function AdminModulesPage() {
   const queryClient = useQueryClient()
   const [draft, setDraft] = useState<ModuleCatalogItem[]>([])
   const [msg, setMsg] = useState<string | null>(null)
+  const [search, setSearch] = useState('')
 
   const query = useQuery({
     queryKey: ['admin', 'modules', 'catalog'],
@@ -26,6 +31,14 @@ export function AdminModulesPage() {
     if (!query.data) return
     setDraft(query.data.filter((m) => m.billable))
   }, [query.data])
+
+  const visible = useMemo(
+    () =>
+      draft.filter((m) =>
+        matchesSearch(search, m.name, m.id, m.description),
+      ),
+    [draft, search],
+  )
 
   const mutation = useMutation({
     mutationFn: async () => {
@@ -78,12 +91,6 @@ export function AdminModulesPage() {
       subtitle="Configuración global de add-ons de pago"
       variant="admin"
     >
-      <p className="mb-5 max-w-2xl text-sm text-[var(--text-muted)]">
-        Aquí defines el precio mensual de los módulos de pago de la plataforma.
-        La activación por empresa se hace en Empresas → Acciones → Módulos.
-        SMTP es obligatorio e incluido: no aparece en esta lista.
-      </p>
-
       {query.isLoading && (
         <p className="text-sm text-[var(--text-muted)]">Cargando…</p>
       )}
@@ -91,8 +98,17 @@ export function AdminModulesPage() {
         <p className="mb-4 text-sm text-[var(--danger)]">{query.error.message}</p>
       )}
 
+      <div className="mb-4">
+        <ListSearchInput
+          value={search}
+          onChange={setSearch}
+          placeholder="Buscar módulo…"
+          className="md:max-w-sm"
+        />
+      </div>
+
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {draft.map((m) => (
+        {visible.map((m) => (
           <article
             key={m.id}
             className="flex flex-col rounded-xl border border-[var(--border)] bg-[var(--bg)] p-4"

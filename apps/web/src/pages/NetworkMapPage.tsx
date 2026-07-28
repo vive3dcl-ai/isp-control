@@ -1447,30 +1447,46 @@ export function NetworkMapPage() {
 
       {contracted && (
         <div className="-mx-4 -mb-6 flex min-h-[calc(100dvh-11rem)] flex-col sm:-mx-6">
-          <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-[var(--border)] bg-[var(--bg-elevated)] px-3 py-2 sm:px-4">
-            <span className="mr-1 text-xs font-semibold tracking-wide text-[var(--text-muted)] uppercase">
-              Capas
-            </span>
-            <button
-              type="button"
-              onClick={() => setMapLocked((locked) => !locked)}
-              aria-pressed={mapLocked}
-              title={
-                mapLocked
-                  ? 'Mapa bloqueado: solo visualización'
-                  : 'Mapa desbloqueado: se permite editar'
-              }
-              className={[
-                'flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium transition',
-                mapLocked
-                  ? 'border-amber-500/40 bg-amber-500/10 text-amber-300'
-                  : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300',
-              ].join(' ')}
-            >
-              <span aria-hidden>{mapLocked ? '🔒' : '🔓'}</span>
-              {mapLocked ? 'Bloqueado' : 'Edición'}
-            </button>
-            <div className="-mx-1 flex max-w-full flex-1 basis-full items-center gap-1 overflow-x-auto overscroll-x-contain pb-0.5 sm:mx-0 sm:basis-auto">
+          <div className="flex shrink-0 flex-col gap-2 border-b border-[var(--border)] bg-[var(--bg-elevated)] px-3 py-2 sm:px-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setMapLocked((locked) => !locked)}
+                aria-pressed={mapLocked}
+                title={
+                  mapLocked
+                    ? 'Mapa bloqueado: solo visualización'
+                    : 'Mapa desbloqueado: se permite editar'
+                }
+                className={[
+                  'flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium transition',
+                  mapLocked
+                    ? 'border-amber-500/40 bg-amber-500/10 text-amber-300'
+                    : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300',
+                ].join(' ')}
+              >
+                <span aria-hidden>{mapLocked ? '🔒' : '🔓'}</span>
+                {mapLocked ? 'Bloqueado' : 'Edición'}
+              </button>
+              <button
+                type="button"
+                disabled={!canFitAll}
+                onClick={() => setFitAllRequest((n) => n + 1)}
+                title="Centrar el mapa para ver todos los elementos visibles"
+                className="rounded-md border border-[var(--border)] px-3 py-1.5 text-xs hover:bg-[var(--bg)] disabled:cursor-not-allowed disabled:opacity-40 sm:text-sm"
+              >
+                Centrar
+              </button>
+              <button
+                type="button"
+                onClick={() => setSideOpen((v) => !v)}
+                className="rounded-md border border-[var(--border)] px-3 py-1.5 text-xs hover:bg-[var(--bg)] sm:text-sm"
+              >
+                {sideOpen ? 'Ocultar panel' : 'Mostrar panel'}
+              </button>
+            </div>
+
+            <div className="-mx-1 flex items-center gap-1 overflow-x-auto overscroll-x-contain px-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               {LAYER_ITEMS.map((l, idx) => {
                 const on = !!layers[l.id]
                 const prev = LAYER_ITEMS[idx - 1]
@@ -1486,7 +1502,7 @@ export function NetworkMapPage() {
                     {showSep && (
                       <span
                         aria-hidden
-                        className="mx-1 hidden h-5 w-px bg-[var(--border)] sm:inline-block"
+                        className="mx-1 hidden h-5 w-px shrink-0 bg-[var(--border)] sm:inline-block"
                       />
                     )}
                     <button
@@ -1515,25 +1531,6 @@ export function NetworkMapPage() {
                   </span>
                 )
               })}
-            </div>
-
-            <div className="ml-auto flex items-center gap-2">
-              <button
-                type="button"
-                disabled={!canFitAll}
-                onClick={() => setFitAllRequest((n) => n + 1)}
-                title="Centrar el mapa para ver todos los elementos visibles"
-                className="rounded-md border border-[var(--border)] px-3 py-1.5 text-sm hover:bg-[var(--bg)] disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                Centrar
-              </button>
-              <button
-                type="button"
-                onClick={() => setSideOpen((v) => !v)}
-                className="rounded-md border border-[var(--border)] px-3 py-1.5 text-sm hover:bg-[var(--bg)]"
-              >
-                {sideOpen ? 'Ocultar panel' : 'Mostrar panel'}
-              </button>
             </div>
           </div>
 

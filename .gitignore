@@ -3,8 +3,14 @@ dist/
 build/
 .env
 .env.production
+.env.production.aapanel
 *.log
 .DS_Store
 coverage/
 .turbo/
 apps/landing/public/config.js
+
+# Lab TR069: client OVPN secrets (regenerate with npm run docker:lab:provision)
+deploy/lab-tr069/ovpn/*.ovpn
+deploy/lab-tr069/ovpn/auth.txt
+deploy/lab-tr069/ovpn/lab.env

@@ -6,6 +6,8 @@ import type { TopologyDevice } from '../lib/topology'
 import { Tr069StatusView } from './Tr069StatusView'
 import { useNotify } from './NotifyProvider'
 import { SettingsSubTabs } from './SettingsSubTabs'
+import { ModalPortal } from './ModalPortal'
+
 
 const inputClass =
   'w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 outline-none ring-[var(--accent)] focus:ring-2'
@@ -220,11 +222,10 @@ export function Tr069SettingsTab({ canWrite }: { canWrite: boolean }) {
               recomendada, para que sea lo más sencillo posible.
             </p>
             <p className="text-xs">
-              Crea el túnel en Topología → VPN. En modo concentrador el ACS
-              suele ir en la IP del peer (.1). En modo inverso lab (MikroTik
-              servidor / ACS local cliente) usamos la IP del cliente del túnel
-              (p. ej. http://10.69.x.2:14501). Status sondea CWMP (TCP); NBI/FS
-              e inventario ONU se llenan cuando GenieACS esté integrado.
+              Crea el túnel en Topología → VPN (MikroTik cliente → concentrador).
+              El ACS suele ir en la IP del peer del túnel (.1), p. ej.
+              http://10.69.x.1:14501. Status sondea CWMP (TCP); NBI/FS e
+              inventario ONU se llenan cuando GenieACS esté integrado.
             </p>
           </div>
         )}
@@ -280,10 +281,23 @@ export function Tr069SettingsTab({ canWrite }: { canWrite: boolean }) {
                             <span className="inline-flex items-center gap-1.5 text-xs">
                               CWMP:
                               <span
-                                className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-[var(--danger)] text-[10px] font-bold text-white"
-                                title="ACS offline (pendiente)"
+                                className={[
+                                  'inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold text-white',
+                                  p.cwmpStatus === 'online'
+                                    ? 'bg-emerald-600'
+                                    : p.cwmpStatus === 'unknown'
+                                      ? 'bg-[var(--text-muted)]'
+                                      : 'bg-[var(--danger)]',
+                                ].join(' ')}
+                                title={
+                                  p.cwmpStatus === 'online'
+                                    ? 'ACS CWMP online'
+                                    : p.cwmpStatus === 'unknown'
+                                      ? 'ACS CWMP desconocido'
+                                      : 'ACS CWMP offline'
+                                }
                               >
-                                ✕
+                                {p.cwmpStatus === 'online' ? '✓' : '✕'}
                               </span>
                             </span>
                           </td>
@@ -365,11 +379,11 @@ export function Tr069SettingsTab({ canWrite }: { canWrite: boolean }) {
       )}
 
       {modal && (
-        <div className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto bg-black/60 p-4 sm:items-center">
+        <ModalPortal><div className="fixed inset-0 z-[70] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/60 sm:items-center sm:p-4">
           <div
             role="dialog"
             aria-modal="true"
-            className="max-h-[min(92vh,100dvh)] overflow-y-auto w-full max-w-lg rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl"
+            className="h-[100dvh] max-h-[100dvh] overflow-y-auto overscroll-contain w-full max-w-lg rounded-none border-0 sm:h-auto sm:max-h-[min(92dvh,920px)] sm:rounded-xl sm:border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl"
           >
             <div className="flex items-center justify-between border-b border-[var(--border)] px-5 py-4">
               <h3 className="text-lg font-semibold">
@@ -396,8 +410,8 @@ export function Tr069SettingsTab({ canWrite }: { canWrite: boolean }) {
               {modal === 'create' && (
                 <>
                   <p className="text-sm text-[var(--text-muted)]">
-                    Autocompletamos ACS URL desde el túnel VPN (inverso →
-                    http://10.69.x.2:14501; concentrador → .1) y generamos
+                    Autocompletamos ACS URL desde el túnel VPN (peer del
+                    concentrador, p. ej. http://10.69.x.1:14501) y generamos
                     credenciales recomendadas. Puedes sobrescribir la URL si
                     hace falta.
                   </p>
@@ -583,7 +597,7 @@ export function Tr069SettingsTab({ canWrite }: { canWrite: boolean }) {
               )}
             </div>
           </div>
-        </div>
+        </div></ModalPortal>
       )}
     </div>
   )

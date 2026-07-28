@@ -14,6 +14,7 @@ import {
 import type { NetworkMapClientMarker } from '../lib/network-map'
 import { MapElementTypeIcon } from './MapElementTypeIcon'
 import { MufaViewModal } from './MufaViewModal'
+import { ModalPortal } from './ModalPortal'
 
 type PortPick = {
   splitterId: string
@@ -243,9 +244,9 @@ export function NapViewModal({
 
   return (
     <>
-      <div
+      <ModalPortal><div
         className={[
-          'fixed inset-0 z-[600] flex overflow-y-auto bg-black/60',
+          'modal-backdrop fixed inset-0 z-[600] flex overflow-hidden bg-black/60',
           mobile
             ? 'items-stretch p-0'
             : 'items-start justify-center p-3 sm:items-center sm:p-4',
@@ -488,14 +489,14 @@ export function NapViewModal({
             )}
           </div>
         </div>
-      </div>
+      </div></ModalPortal>
 
       {portPick && pickedSplitter && (
-        <div className="fixed inset-0 z-[700] flex items-start justify-center overflow-y-auto bg-black/50 p-3 sm:items-center sm:p-4">
+        <ModalPortal><div className="fixed inset-0 z-[700] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/50 sm:items-center sm:p-4">
           <div
             role="dialog"
             aria-modal="true"
-            className="max-h-[min(92vh,100dvh)] overflow-y-auto w-full max-w-md rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] p-4 shadow-xl"
+            className="h-[100dvh] max-h-[100dvh] overflow-y-auto overscroll-contain w-full max-w-md rounded-none border-0 sm:h-auto sm:max-h-[min(92dvh,920px)] sm:rounded-xl sm:border border-[var(--border)] bg-[var(--bg-elevated)] p-4 shadow-xl"
           >
             <h3 className="text-base font-semibold">
               Puerto P{portPick.portIndex} · {pickedSplitter.name}
@@ -680,7 +681,7 @@ export function NapViewModal({
               </button>
             </div>
           </div>
-        </div>
+        </div></ModalPortal>
       )}
     </>
   )

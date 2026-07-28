@@ -1,0 +1,168 @@
+import { useEffect, useRef, useState } from 'react'
+import {
+  isAndroidDevice,
+  isIosDevice,
+  isMobilePwaInstalled,
+  registerMobileServiceWorker,
+} from '../lib/mobilePwa'
+
+const DISMISS_KEY = 'isp-pwa-install-dismissed-at'
+const COOLDOWN_MS = 24 * 60 * 60 * 1000
+const SHOW_DELAY_MS = 1600
+
+type BeforeInstallPromptEvent = Event & {
+  prompt: () => Promise<void>
+  userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>
+}
+
+function wasDismissedRecently() {
+  try {
+    const raw = localStorage.getItem(DISMISS_KEY)
+    if (!raw) return false
+    const ts = Number(raw)
+    if (!Number.isFinite(ts)) return false
+    return Date.now() - ts < COOLDOWN_MS
+  } catch {
+    return false
+  }
+}
+
+function markDismissed() {
+  localStorage.setItem(DISMISS_KEY, String(Date.now()))
+}
+
+export function MobileInstallPrompt() {
+  const [visible, setVisible] = useState(false)
+  const [iosHelp, setIosHelp] = useState(false)
+  const [canPrompt, setCanPrompt] = useState(false)
+  const deferredRef = useRef<BeforeInstallPromptEvent | null>(null)
+  const shownThisLoad = useRef(false)
+
+  useEffect(() => {
+    void registerMobileServiceWorker()
+
+    if (isMobilePwaInstalled()) return
+    if (wasDismissedRecently()) return
+
+    function onBip(e: Event) {
+      e.preventDefault()
+      deferredRef.current = e as BeforeInstallPromptEvent
+      setCanPrompt(true)
+    }
+    window.addEventListener('beforeinstallprompt', onBip)
+
+    const timer = window.setTimeout(() => {
+      if (shownThisLoad.current) return
+      if (isMobilePwaInstalled()) return
+      if (wasDismissedRecently()) return
+      shownThisLoad.current = true
+      setVisible(true)
+    }, SHOW_DELAY_MS)
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', onBip)
+      window.clearTimeout(timer)
+    }
+  }, [])
+
+  if (!visible || isMobilePwaInstalled()) return null
+
+  function dismiss() {
+    markDismissed()
+    setVisible(false)
+    setIosHelp(false)
+  }
+
+  async function onInstallAndroid() {
+    const ev = deferredRef.current
+    if (!ev) {
+      // Sin evento: el navegador no ofrece A2HS; cerramos con cooldown.
+      dismiss()
+      return
+    }
+    try {
+      await ev.prompt()
+      await ev.userChoice
+    } catch {
+      // ignore
+    }
+    deferredRef.current = null
+    dismiss()
+  }
+
+  return (
+    <div className="fixed inset-x-0 bottom-0 z-[80] p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+      <div className="mx-auto max-w-lg rounded-2xl border border-[var(--border)] bg-[var(--bg-elevated)] p-4 shadow-2xl shadow-black/40">
+        <div className="mb-3 flex items-start justify-between gap-3">
+          <div>
+            <p className="text-sm font-semibold">Instalá la app móvil</p>
+            <p className="mt-1 text-xs text-[var(--text-muted)]">
+              Acceso rápido, avisos y trabajo en campo sin abrir el navegador.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={dismiss}
+            className="shrink-0 rounded-lg px-2 py-1 text-sm text-[var(--text-muted)] hover:bg-[var(--bg)]"
+            aria-label="Cerrar"
+          >
+            ✕
+          </button>
+        </div>
+
+        {isIosDevice() ? (
+          <div className="space-y-3">
+            {!iosHelp ? (
+              <button
+                type="button"
+                onClick={() => setIosHelp(true)}
+                className="w-full rounded-xl bg-[var(--accent)] py-3 text-sm font-semibold text-white"
+              >
+                Cómo instalar en iPhone
+              </button>
+            ) : (
+              <ol className="space-y-2 rounded-xl border border-[var(--border)] bg-[var(--bg)] p-3 text-xs text-[var(--text-muted)]">
+                <li>
+                  1. Tocá el botón <strong className="text-[var(--text)]">Compartir</strong> (cuadrado con flecha) en Safari.
+                </li>
+                <li>
+                  2. Desplazate y elegí{' '}
+                  <strong className="text-[var(--text)]">Agregar a pantalla de inicio</strong>.
+                </li>
+                <li>
+                  3. Confirmá con <strong className="text-[var(--text)]">Agregar</strong>.
+                </li>
+              </ol>
+            )}
+            {iosHelp && (
+              <button
+                type="button"
+                onClick={dismiss}
+                className="w-full rounded-xl border border-[var(--border)] py-2.5 text-sm"
+              >
+                Listo
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={dismiss}
+              className="flex-1 rounded-xl border border-[var(--border)] py-3 text-sm"
+            >
+              Ahora no
+            </button>
+            <button
+              type="button"
+              onClick={() => void onInstallAndroid()}
+              className="flex-[1.4] rounded-xl bg-[var(--accent)] py-3 text-sm font-semibold text-white"
+            >
+              {isAndroidDevice() || canPrompt ? 'Instalar' : 'Entendido'}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}

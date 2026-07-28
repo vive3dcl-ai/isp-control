@@ -38,6 +38,8 @@ import {
   UpdateClientServiceDto,
 } from './dto/client-service.dto';
 import { CreateZoneDto, UpdateZoneDto } from './dto/zone.dto';
+import { UpsertMapDraftElementDto } from './dto/map-draft.dto';
+import { MapDraftsService } from './map-drafts.service';
 
 @Controller('app')
 @UseGuards(JwtAuthGuard, RolesGuard, TenantRolesGuard)
@@ -46,6 +48,7 @@ export class CrmController {
   constructor(
     private readonly crm: CrmService,
     private readonly billing: BillingService,
+    private readonly mapDrafts: MapDraftsService,
   ) {}
 
   // —— Clients ——
@@ -59,6 +62,24 @@ export class CrmController {
   @Get('network-map/locations')
   listNetworkMapLocations(@CurrentUser() user: AuthUser) {
     return this.crm.listNetworkMapLocations(user);
+  }
+
+  @Get('map-drafts')
+  getMapDrafts(@CurrentUser() user: AuthUser) {
+    return this.mapDrafts.get(user);
+  }
+
+  @Post('map-drafts/elements')
+  @TenantRoles(...CRM_WRITE_ROLES, ...FIELD_INSTALL_ROLES)
+  upsertMapDraftElement(
+    @CurrentUser() user: AuthUser,
+    @Body() dto: UpsertMapDraftElementDto,
+  ) {
+    const { extra, ...rest } = dto;
+    return this.mapDrafts.upsertElement(user, {
+      ...rest,
+      ...(extra ?? {}),
+    });
   }
 
   @Get('clients/:id')

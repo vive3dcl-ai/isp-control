@@ -9,6 +9,7 @@ import {
   runProgressSteps,
   type ProgressStep,
 } from './OperationProgressModal'
+import { ModalPortal } from './ModalPortal'
 
 const inputClass =
   'w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2.5 outline-none ring-[var(--accent)] focus:ring-2'
@@ -316,8 +317,8 @@ function SpeedProfileFormModal({
     })()
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-black/60 p-3 sm:items-center sm:p-4">
-      <div className="relative max-h-[min(92vh,100dvh)] w-full max-w-lg overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--text)] shadow-xl">
+    <ModalPortal><div className="fixed inset-0 z-[100] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/60 sm:items-center sm:p-4">
+      <div className="relative h-[100dvh] max-h-[100dvh] w-full max-w-lg overflow-y-auto overscroll-contain rounded-none border-0 sm:h-auto sm:max-h-[min(92dvh,920px)] sm:rounded-xl sm:border border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--text)] shadow-xl">
         {checkingOlts && (
           <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 rounded-xl bg-black/55 p-6 backdrop-blur-[1px]">
             <span
@@ -540,7 +541,7 @@ function SpeedProfileFormModal({
         }
         onClose={() => setSyncModal(null)}
       />
-    </div>
+    </div></ModalPortal>
   )
 }
 

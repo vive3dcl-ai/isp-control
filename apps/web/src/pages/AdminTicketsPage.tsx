@@ -1,9 +1,13 @@
-import { FormEvent, useState } from 'react'
+import { FormEvent, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
 import { apiFetch } from '../lib/api'
 import { PanelShell } from '../components/PanelShell'
 import { useNotify } from '../components/NotifyProvider'
+import {
+  ListSearchInput,
+  matchesSearch,
+} from '../components/ListSearchInput'
 import {
   CATEGORY_LABEL,
   PRIORITY_LABEL,
@@ -23,8 +27,35 @@ function UnreadPing() {
   )
 }
 
+function FilterChip({
+  active,
+  label,
+  onClick,
+}: {
+  active: boolean
+  label: string
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={[
+        'shrink-0 rounded-full border px-3 py-1.5 text-xs font-medium transition',
+        active
+          ? 'border-[var(--accent)] bg-[var(--accent)] text-white'
+          : 'border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--text-muted)] hover:border-[var(--accent)] hover:text-[var(--accent)]',
+      ].join(' ')}
+    >
+      {label}
+    </button>
+  )
+}
+
 export function AdminTicketsPage() {
   const [status, setStatus] = useState<string>('')
+  const [search, setSearch] = useState('')
 
   const ticketsQuery = useQuery({
     queryKey: ['admin', 'support', 'tickets', status],
@@ -35,7 +66,18 @@ export function AdminTicketsPage() {
     refetchInterval: 15_000,
   })
 
-  const tickets = ticketsQuery.data ?? []
+  const tickets = useMemo(() => {
+    const all = ticketsQuery.data ?? []
+    return all.filter((t) =>
+      matchesSearch(
+        search,
+        t.subject,
+        t.tenantName,
+        STATUS_LABEL[t.status],
+        PRIORITY_LABEL[t.priority],
+      ),
+    )
+  }, [ticketsQuery.data, search])
 
   return (
     <PanelShell
@@ -43,22 +85,28 @@ export function AdminTicketsPage() {
       subtitle="Soporte a empresas"
       variant="admin"
     >
-      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-[var(--text-muted)]">
-          Solicitudes de las empresas ISP hacia la plataforma.
-        </p>
-        <select
-          value={status}
-          onChange={(e) => setStatus(e.target.value)}
-          className="rounded-md border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
-        >
-          <option value="">Todos</option>
+      <div className="mb-4 space-y-3">
+        <ListSearchInput
+          value={search}
+          onChange={setSearch}
+          placeholder="Buscar asunto, empresa…"
+          className="md:max-w-sm"
+        />
+        <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <FilterChip
+            active={status === ''}
+            label="Todos"
+            onClick={() => setStatus('')}
+          />
           {(Object.keys(STATUS_LABEL) as SupportTicketStatus[]).map((k) => (
-            <option key={k} value={k}>
-              {STATUS_LABEL[k]}
-            </option>
+            <FilterChip
+              key={k}
+              active={status === k}
+              label={STATUS_LABEL[k]}
+              onClick={() => setStatus(k)}
+            />
           ))}
-        </select>
+        </div>
       </div>
 
       {ticketsQuery.error && (
@@ -67,9 +115,74 @@ export function AdminTicketsPage() {
         </p>
       )}
 
-      <div className="overflow-hidden overflow-x-auto rounded-xl border border-[var(--border)]">
-        <table className="w-full min-w-[640px] text-left text-sm">
-          <thead className="bg-[var(--bg-elevated)] text-xs text-[var(--text-muted)] uppercase">
+      {/* Mobile: tarjetas */}
+      <div className="space-y-3 pb-6 md:hidden">
+        {ticketsQuery.isLoading && (
+          <p className="text-sm text-[var(--text-muted)]">Cargando…</p>
+        )}
+        {!ticketsQuery.isLoading && tickets.length === 0 && (
+          <p className="rounded-xl border border-dashed border-[var(--border)] px-4 py-10 text-center text-sm text-[var(--text-muted)]">
+            No hay tickets
+          </p>
+        )}
+        {tickets.map((t) => (
+          <article
+            key={t.id}
+            className="rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] p-4"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <Link
+                  to={`/admin/tickets/${t.id}`}
+                  className="flex items-center gap-2 text-base font-semibold text-[var(--accent)] hover:underline"
+                >
+                  {t.adminUnread ? <UnreadPing /> : null}
+                  <span className="truncate">{t.subject}</span>
+                </Link>
+                <p className="mt-0.5 truncate text-sm text-[var(--text-muted)]">
+                  {t.tenantName ?? '—'}
+                </p>
+              </div>
+              <span className="shrink-0 rounded-full bg-[var(--bg)] px-2.5 py-0.5 text-[11px] font-medium text-[var(--text-muted)]">
+                {STATUS_LABEL[t.status]}
+              </span>
+            </div>
+            <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
+              <div>
+                <dt className="text-[var(--text-muted)]">Prioridad</dt>
+                <dd className="mt-0.5">{PRIORITY_LABEL[t.priority]}</dd>
+              </div>
+              <div>
+                <dt className="text-[var(--text-muted)]">Actualizado</dt>
+                <dd className="mt-0.5">
+                  {new Date(t.lastMessageAt).toLocaleString()}
+                </dd>
+              </div>
+            </dl>
+            <div className="mt-3 border-t border-[var(--border)] pt-3">
+              <Link
+                to={`/admin/tickets/${t.id}`}
+                className="inline-flex rounded-md bg-[var(--accent)] px-3 py-1.5 text-xs font-medium text-white hover:bg-[var(--accent-hover)]"
+              >
+                Abrir
+              </Link>
+            </div>
+          </article>
+        ))}
+      </div>
+
+      {/* Desktop: tabla a ancho completo */}
+      <div className="hidden w-full overflow-x-auto overflow-hidden rounded-xl border border-[var(--border)] md:block">
+        <table className="w-full table-fixed text-left text-sm">
+          <colgroup>
+            <col className="w-10" />
+            <col className="w-[18%]" />
+            <col className="w-[34%]" />
+            <col className="w-[14%]" />
+            <col className="w-[14%]" />
+            <col className="w-[16%]" />
+          </colgroup>
+          <thead className="bg-[var(--bg)] text-[var(--text-muted)]">
             <tr>
               <th className="px-4 py-3 font-medium" />
               <th className="px-4 py-3 font-medium">Empresa</th>
@@ -95,11 +208,11 @@ export function AdminTicketsPage() {
                 key={t.id}
                 className="border-t border-[var(--border)] hover:bg-[var(--bg-elevated)]/50"
               >
-                <td className="w-8 px-4 py-3">
+                <td className="px-4 py-3">
                   {t.adminUnread ? <UnreadPing /> : null}
                 </td>
-                <td className="px-4 py-3">{t.tenantName ?? '—'}</td>
-                <td className="px-4 py-3">
+                <td className="truncate px-4 py-3">{t.tenantName ?? '—'}</td>
+                <td className="truncate px-4 py-3">
                   <Link
                     to={`/admin/tickets/${t.id}`}
                     className="font-medium text-[var(--accent)] hover:underline"

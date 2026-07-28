@@ -29,8 +29,10 @@ import { SupportModule } from './support/support.module';
 import { SupportTicket } from './support/entities/support-ticket.entity';
 import { SupportTicketMessage } from './support/entities/support-ticket-message.entity';
 import { AppNotification } from './support/entities/app-notification.entity';
+import { PushSubscriptionEntity } from './support/entities/push-subscription.entity';
 import { ClientPortalUser } from './client-portal/entities/client-portal-user.entity';
 import { ClientPortalInvite } from './client-portal/entities/client-portal-invite.entity';
+import { TenantMapDraft } from './crm/entities/tenant-map-draft.entity';
 
 @Module({
   imports: [
@@ -66,8 +68,10 @@ import { ClientPortalInvite } from './client-portal/entities/client-portal-invit
           SupportTicket,
           SupportTicketMessage,
           AppNotification,
+          PushSubscriptionEntity,
           ClientPortalUser,
           ClientPortalInvite,
+          TenantMapDraft,
         ],
         synchronize: true,
       }),

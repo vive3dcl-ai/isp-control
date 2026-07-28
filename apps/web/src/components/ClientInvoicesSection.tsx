@@ -9,6 +9,8 @@ import {
 import { useMoney } from '../lib/currency'
 import { useNotify } from './NotifyProvider'
 import { CreateInvoiceModal } from './CreateInvoiceModal'
+import { ModalPortal } from './ModalPortal'
+
 
 export type InvoiceView = Invoice & {
   clientEmail: string
@@ -213,14 +215,14 @@ function InvoiceViewModal({
   })
 
   return (
-    <div className="fixed inset-0 z-[1000] flex items-start justify-center overflow-y-auto p-3 sm:items-center sm:p-4">
+    <div className="modal-backdrop fixed inset-0 z-[1000] flex items-stretch justify-center overflow-hidden sm:items-center sm:p-4">
       <button
         type="button"
         className="absolute inset-0 bg-black/60"
         aria-label="Cerrar"
         onClick={onClose}
       />
-      <div className="relative flex max-h-[min(92vh,100dvh)] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl">
+      <div className="relative flex h-[100dvh] max-h-[100dvh] w-full max-w-3xl flex-col overflow-hidden rounded-none border-0 border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl sm:h-auto sm:max-h-[min(92dvh,920px)] sm:rounded-xl sm:border">
         <div className="flex items-center justify-between gap-3 border-b border-[var(--border)] px-4 py-3">
           <div>
             <h3 className="text-base font-semibold">
@@ -302,14 +304,14 @@ function InvoiceResendModal({
   })
 
   return (
-    <div className="fixed inset-0 z-[1000] flex items-start justify-center overflow-y-auto p-3 sm:items-center sm:p-4">
+    <ModalPortal><div className="modal-backdrop fixed inset-0 z-[1000] flex items-stretch justify-center overflow-hidden sm:items-center sm:p-4">
       <button
         type="button"
         className="absolute inset-0 bg-black/60"
         aria-label="Cerrar"
         onClick={onClose}
       />
-      <div className="max-h-[min(92vh,100dvh)] overflow-y-auto relative w-full max-w-md rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] p-5 shadow-xl">
+      <div className="relative h-[100dvh] max-h-[100dvh] w-full max-w-md overflow-y-auto overscroll-contain rounded-none border-0 border-[var(--border)] bg-[var(--bg-elevated)] p-5 shadow-xl sm:h-auto sm:max-h-[min(92dvh,920px)] sm:rounded-xl sm:border">
         <h3 className="text-base font-semibold">Reenviar factura</h3>
         <p className="mt-2 text-sm text-[var(--text-muted)]">
           Se enviará la factura <strong className="text-[var(--text)]">{invoice.number}</strong> por
@@ -346,6 +348,6 @@ function InvoiceResendModal({
           </button>
         </div>
       </div>
-    </div>
+    </div></ModalPortal>
   )
 }

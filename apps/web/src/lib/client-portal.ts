@@ -5,7 +5,21 @@ import {
   type LoginResponse,
 } from './api'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000/api'
+const API_URL = (() => {
+  const configured = (import.meta.env.VITE_API_URL as string | undefined)?.trim()
+  if (import.meta.env.DEV && typeof window !== 'undefined') {
+    const host = window.location.hostname
+    const onLanHost = host !== 'localhost' && host !== '127.0.0.1'
+    if (
+      onLanHost &&
+      (!configured || /localhost|127\.0\.0\.1/.test(configured))
+    ) {
+      return '/api'
+    }
+  }
+  if (configured) return configured
+  return import.meta.env.DEV ? '/api' : 'http://localhost:3000/api'
+})()
 
 export type PortalBranding = {
   slug: string

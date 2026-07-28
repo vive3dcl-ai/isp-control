@@ -8,6 +8,11 @@ services:
       dockerfile: apps/api/Dockerfile.dev
     container_name: isp-control-api
     restart: unless-stopped
+    networks:
+      isp_net:
+        ipv4_address: 172.28.10.10
+    cap_add:
+      - NET_ADMIN
     env_file:
       - .env
     environment:
@@ -20,14 +25,27 @@ services:
       REDIS_PORT: 6379
       PORT: 3000
       CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173,http://localhost
+      NODE_ENV: development
       WHATSAPP_BAILEYS_URL: http://whatsapp-baileys:3101
       WHATSAPP_BAILEYS_SECRET: ${WHATSAPP_BAILEYS_SECRET:-dev-wa-secret-change-me}
+      # Lab GenieACS NBI (lab-vpnacs netns)
+      TR069_NBI_URL: ${TR069_NBI_URL:-http://lab-vpnacs:7557}
+      TR069_ACS_PROBE_HOST: ${TR069_ACS_PROBE_HOST:-lab-vpnacs}
+      # Rutas Docker → lab VPN gateway (OLT/ONU/router vía túnel)
+      VPN_ROUTE_GATEWAY_HOST: ${VPN_ROUTE_GATEWAY_HOST:-lab-vpnacs}
+      VPN_ROUTE_GATEWAY_IP: ${VPN_ROUTE_GATEWAY_IP:-172.28.10.20}
+      VPN_TUNNEL_CIDR: ${VPN_TUNNEL_CIDR:-10.69.0.0/16}
+      VPN_RUNTIME_STATUS_DIR: /vpn-runtime
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "3000:3000"
     volumes:
       - ./apps/api/src:/app/apps/api/src
       - ./apps/api/tsconfig.json:/app/apps/api/tsconfig.json
       - ./apps/api/nest-cli.json:/app/apps/api/nest-cli.json
+      - ./deploy/vpn-routes/install-routes.sh:/vpn-routes/install-routes.sh:ro
+      - ./deploy/lab-tr069/ovpn:/vpn-runtime:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -40,8 +58,11 @@ services:
       dockerfile: apps/web/Dockerfile.dev
     container_name: isp-control-web
     restart: unless-stopped
+    networks: [isp_net]
     environment:
-      VITE_API_URL: http://localhost:3000/api
+      # Relativo: el navegador llama al mismo host:5173/api → proxy Vite (LAN OK)
+      VITE_API_URL: /api
+      VITE_DEV_API_PROXY: http://api:3000
     ports:
       - "5173:5173"
     volumes:
@@ -61,6 +82,7 @@ services:
       dockerfile: apps/landing/Dockerfile
     container_name: isp-control-landing
     restart: unless-stopped
+    networks: [isp_net]
     ports:
       - "${LANDING_PORT:-3040}:80"
     environment:
@@ -74,6 +96,7 @@ services:
       dockerfile: apps/api/Dockerfile.dev
     container_name: isp-control-seed
     profiles: ["seed"]
+    networks: [isp_net]
     env_file:
       - .env
     environment:
@@ -100,6 +123,7 @@ services:
       dockerfile: apps/whatsapp-baileys/Dockerfile.dev
     container_name: isp-control-whatsapp-baileys
     restart: unless-stopped
+    networks: [isp_net]
     env_file:
       - .env
     environment:

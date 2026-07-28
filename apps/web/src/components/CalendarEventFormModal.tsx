@@ -17,6 +17,7 @@ import {
   type CalendarEventType,
   type CreateCalendarEventPayload,
 } from '../lib/calendar'
+import { ModalPortal } from './ModalPortal'
 
 const inputClass =
   'w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2.5 outline-none ring-[var(--accent)] focus:ring-2'
@@ -172,11 +173,11 @@ export function CalendarEventFormModal({
   const pending = saveMutation.isPending || deleteMutation.isPending
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto bg-black/60 p-4 sm:items-center">
+    <ModalPortal><div className="fixed inset-0 z-[60] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/60 sm:items-center sm:p-4">
       <div
         role="dialog"
         aria-modal="true"
-        className="flex max-h-[min(92vh,100dvh)] w-full max-w-lg flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl"
+        className="flex h-[100dvh] max-h-[100dvh] w-full max-w-lg flex-col overflow-hidden rounded-none border-0 sm:h-auto sm:max-h-[min(92dvh,920px)] sm:rounded-xl sm:border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl"
       >
         <div className="flex shrink-0 items-center justify-between border-b border-[var(--border)] px-5 py-4">
           <h2 className="text-lg font-semibold">
@@ -192,7 +193,7 @@ export function CalendarEventFormModal({
         </div>
 
         <form onSubmit={onSubmit} className="flex min-h-0 flex-1 flex-col">
-          <div className="flex-1 space-y-3 overflow-y-auto px-5 py-4">
+          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-5 py-4">
             <label className="block text-sm">
               <span className="mb-1 block text-[var(--text-muted)]">Tipo</span>
               <select
@@ -300,6 +301,10 @@ export function CalendarEventFormModal({
                   </option>
                 ))}
               </select>
+              <span className="mt-1 block text-[11px] text-[var(--text-muted)]">
+                Si eliges un usuario, se le notifica al crear o reasignar la
+                agenda.
+              </span>
             </label>
 
             <label className="block text-sm">
@@ -389,7 +394,7 @@ export function CalendarEventFormModal({
           </div>
         </form>
       </div>
-    </div>
+    </div></ModalPortal>
   )
 }
 

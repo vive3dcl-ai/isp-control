@@ -82,7 +82,7 @@ export function PanelShell({
   }
 
   return (
-    <div className="flex min-h-screen bg-[var(--bg)]">
+    <div className="app-shell flex bg-[var(--bg)]">
       {/* Mobile overlay */}
       {sidebarOpen && (
         <button
@@ -156,16 +156,27 @@ export function PanelShell({
       </aside>
 
       {/* Main column — margen para el sidebar fijo en desktop */}
-      <div className="flex min-w-0 flex-1 flex-col lg:ml-[var(--sidebar-width)]">
-        <header className="sticky top-0 z-20 flex h-14 items-center justify-between gap-3 border-b border-[var(--border)] bg-[var(--bg-header)]/95 px-4 backdrop-blur">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col lg:ml-[var(--sidebar-width)]">
+        <header className="relative z-50 flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[var(--border)] bg-[var(--bg-header)]/95 px-4 backdrop-blur">
           <div className="flex min-w-0 items-center gap-3">
             <button
               type="button"
-              className="rounded-md border border-[var(--border)] px-2.5 py-1.5 text-sm lg:hidden"
+              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-[var(--border)] text-[var(--text)] lg:hidden"
               onClick={() => setSidebarOpen(true)}
               aria-label="Abrir menú"
             >
-              Menú
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                aria-hidden
+              >
+                <path d="M4 7h16M4 12h16M4 17h16" />
+              </svg>
             </button>
             <div className="min-w-0">
               <h1 className="truncate text-base font-semibold">{title}</h1>
@@ -202,12 +213,12 @@ export function PanelShell({
           </div>
         </header>
 
-        <main className="flex-1 px-4 py-6 sm:px-6">
+        <main className="app-shell-main px-4 py-4 sm:px-6 sm:py-6">
           {variant === 'tenant' && <WhatsAppAttentionBanner />}
           {children}
         </main>
 
-        <footer className="border-t border-[var(--border)] bg-[var(--bg-header)] px-4 py-3 sm:px-6">
+        <footer className="shrink-0 border-t border-[var(--border)] bg-[var(--bg-header)] px-4 py-3 sm:px-6">
           <div className="flex flex-col gap-1 text-xs text-[var(--text-muted)] sm:flex-row sm:items-center sm:justify-between">
             <span>{branding.footerText}</span>
             <span>

@@ -73,7 +73,7 @@ export function MobileCalendarDayPage() {
         </Link>
         <div className="min-w-0">
           <h1 className="text-xl font-semibold tracking-tight">Calendario</h1>
-          <p className="truncate text-xs capitalize text-[var(--text-muted)]">
+          <p className="truncate text-xs text-[var(--text-muted)]">
             {formatDayHeading(day)}
           </p>
         </div>

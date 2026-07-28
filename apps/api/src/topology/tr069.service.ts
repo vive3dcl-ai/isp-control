@@ -384,16 +384,6 @@ export class Tr069Service {
     const vpnRepo =
       await this.tenantConnections.getVpnTunnelRepository(schema);
 
-    // Prefer reverse lab tunnels: ACS runs on clientAddress (.2)
-    const reverse = await vpnRepo.find({
-      where: { mode: 'reverse' },
-      order: { createdAt: 'DESC' },
-      take: 1,
-    });
-    if (reverse[0]?.clientAddress) {
-      return `http://${reverse[0].clientAddress}:${port}`;
-    }
-
     const tunnels = await vpnRepo.find({
       order: { createdAt: 'ASC' },
       take: 1,
@@ -401,7 +391,7 @@ export class Tr069Service {
     const tunnel = tunnels[0];
     if (!tunnel?.serverAddress) {
       throw new BadRequestException(
-        'No hay túnel VPN. Crea uno en Topología → VPN (concentrador o inverso lab), o indica acsUrl manualmente.',
+        'No hay túnel VPN. Crea uno en Topología → VPN (concentrador), o indica acsUrl manualmente.',
       );
     }
     return `http://${tunnel.serverAddress}:${port}`;

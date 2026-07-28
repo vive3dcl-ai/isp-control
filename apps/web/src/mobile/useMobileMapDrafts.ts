@@ -5,23 +5,67 @@ import {
   saveMapDrafts,
   type MapDraftElement,
 } from '../lib/map-elements'
+import {
+  flushPendingPoles,
+  loadPendingPoles,
+  pullServerDrafts,
+} from '../lib/mapDraftSync'
 
-/** Borradores del mapa de red (mismo localStorage que la vista web). */
+/** Borradores del mapa de red (local + sync servidor). */
 export function useMobileMapDrafts() {
   const { user } = useAuth()
   const tenantKey = user?.tenantSlug ?? user?.tenantId
   const [drafts, setDrafts] = useState<MapDraftElement[]>([])
   const [ready, setReady] = useState(false)
+  const [pendingCount, setPendingCount] = useState(0)
+  const [syncing, setSyncing] = useState(false)
+
+  const refreshPending = useCallback(() => {
+    setPendingCount(loadPendingPoles(tenantKey).length)
+  }, [tenantKey])
 
   useEffect(() => {
+    let cancelled = false
+    setReady(false)
     setDrafts(loadMapDrafts(tenantKey))
-    setReady(true)
-  }, [tenantKey])
+    refreshPending()
+
+    void pullServerDrafts(tenantKey).then((merged) => {
+      if (!cancelled) {
+        setDrafts(merged)
+        setReady(true)
+      }
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [tenantKey, refreshPending])
 
   useEffect(() => {
     if (!ready) return
     saveMapDrafts(tenantKey, drafts)
   }, [drafts, ready, tenantKey])
+
+  const runFlush = useCallback(async () => {
+    setSyncing(true)
+    try {
+      await flushPendingPoles(tenantKey)
+      refreshPending()
+      setDrafts(loadMapDrafts(tenantKey))
+    } finally {
+      setSyncing(false)
+    }
+  }, [tenantKey, refreshPending])
+
+  useEffect(() => {
+    function onOnline() {
+      void runFlush()
+    }
+    window.addEventListener('online', onOnline)
+    if (navigator.onLine) void runFlush()
+    return () => window.removeEventListener('online', onOnline)
+  }, [runFlush])
 
   const updateEnclosure = useCallback((next: MapDraftElement) => {
     setDrafts((prev) =>
@@ -47,6 +91,10 @@ export function useMobileMapDrafts() {
     drafts,
     setDrafts,
     ready,
+    pendingCount,
+    syncing,
+    flushPending: runFlush,
+    refreshPending,
     updateEnclosure,
     saveElement,
     deleteElement,

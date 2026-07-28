@@ -80,6 +80,7 @@ export function CalendarPage() {
 
   function goToday() {
     setCursor(startOfDay(new Date()))
+    setView('day')
   }
 
   function goPrev() {
@@ -102,7 +103,7 @@ export function CalendarPage() {
       : view === 'year'
         ? String(cursor.getFullYear())
         : view === 'week'
-          ? `Semana del ${startOfWeek(cursor).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`
+          ? `Sem ${startOfWeek(cursor).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`
           : formatMonthHeading(cursor)
 
   return (
@@ -111,42 +112,43 @@ export function CalendarPage() {
       subtitle="Visitas, soporte e instalaciones"
       variant="tenant"
     >
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-2">
+      <div className="mb-4 grid grid-cols-[1fr_auto_1fr] items-center gap-2">
+        <div className="flex items-center gap-1.5 justify-self-start">
           <button
             type="button"
             onClick={goToday}
-            className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm hover:bg-[var(--bg)]"
+            className="rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-xs hover:bg-[var(--bg)] sm:text-sm"
           >
             Hoy
           </button>
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              onClick={goPrev}
-              className="rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-sm hover:bg-[var(--bg)]"
-              aria-label="Anterior"
-            >
-              ‹
-            </button>
-            <button
-              type="button"
-              onClick={goNext}
-              className="rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-sm hover:bg-[var(--bg)]"
-              aria-label="Siguiente"
-            >
-              ›
-            </button>
-          </div>
-          <h2 className="ml-1 text-lg font-semibold capitalize">{heading}</h2>
+          <button
+            type="button"
+            onClick={goPrev}
+            className="rounded-lg border border-[var(--border)] px-2 py-1.5 text-sm hover:bg-[var(--bg)]"
+            aria-label="Anterior"
+          >
+            ‹
+          </button>
+          <button
+            type="button"
+            onClick={goNext}
+            className="rounded-lg border border-[var(--border)] px-2 py-1.5 text-sm hover:bg-[var(--bg)]"
+            aria-label="Siguiente"
+          >
+            ›
+          </button>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <h2 className="min-w-0 justify-self-center truncate px-1 text-center text-base font-semibold sm:text-lg">
+          {heading}
+        </h2>
+
+        <div className="flex items-center justify-end gap-2 justify-self-end">
           <div className="flex overflow-hidden rounded-lg border border-[var(--border)]">
             {(
               [
                 ['month', 'Mes'],
-                ['week', 'Semana'],
+                ['week', 'Sem'],
                 ['day', 'Día'],
                 ['year', 'Año'],
               ] as const
@@ -155,7 +157,7 @@ export function CalendarPage() {
                 key={id}
                 type="button"
                 onClick={() => setView(id)}
-                className={`px-3 py-1.5 text-sm ${
+                className={`px-2 py-1 text-xs sm:px-2.5 sm:py-1.5 ${
                   view === id
                     ? 'bg-[var(--accent)] text-white'
                     : 'hover:bg-[var(--bg)]'
@@ -169,9 +171,22 @@ export function CalendarPage() {
             <button
               type="button"
               onClick={() => openCreate()}
-              className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white hover:bg-[var(--accent-hover)]"
+              aria-label="Nueva agenda"
+              title="Nueva agenda"
+              className="hidden h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[var(--accent)] text-white hover:bg-[var(--accent-hover)] md:inline-flex"
             >
-              Nueva agenda
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                aria-hidden
+              >
+                <path d="M12 5v14M5 12h14" />
+              </svg>
             </button>
           )}
         </div>
@@ -224,7 +239,6 @@ export function CalendarPage() {
             cursor={cursor}
             events={events}
             onOpenEvent={openEdit}
-            onCreate={canWrite ? () => openCreate(cursor) : undefined}
           />
         )}
         {view === 'year' && (
@@ -238,6 +252,28 @@ export function CalendarPage() {
           />
         )}
       </div>
+
+      {canWrite && (
+        <button
+          type="button"
+          onClick={() => openCreate()}
+          aria-label="Nueva agenda"
+          className="fixed bottom-20 right-5 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-[var(--accent)] text-white shadow-lg shadow-black/25 hover:bg-[var(--accent-hover)] md:hidden"
+        >
+          <svg
+            width="28"
+            height="28"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            aria-hidden
+          >
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+        </button>
+      )}
 
       <CalendarEventFormModal
         open={formOpen}
@@ -307,15 +343,15 @@ function MonthView({
           return (
             <div
               key={toLocalDateKey(day)}
-              className={`min-h-[6.5rem] border-b border-r border-[var(--border)] p-1.5 ${
+              className={`aspect-square overflow-hidden border-b border-r border-[var(--border)] p-1 sm:aspect-auto sm:min-h-[5rem] sm:p-1.5 lg:min-h-[5.5rem] ${
                 inMonth ? '' : 'bg-[var(--bg)]/40 opacity-60'
               }`}
             >
-              <div className="mb-1 flex items-center justify-between gap-1">
+              <div className="mb-0.5 flex items-center justify-between gap-0.5 sm:mb-1">
                 <button
                   type="button"
                   onClick={() => onSelectDay(day)}
-                  className={`flex h-7 w-7 items-center justify-center rounded-full text-sm ${
+                  className={`flex h-6 w-6 items-center justify-center rounded-full text-xs sm:h-7 sm:w-7 sm:text-sm ${
                     isToday
                       ? 'bg-[var(--accent)] font-semibold text-white'
                       : 'hover:bg-[var(--bg)]'
@@ -327,7 +363,7 @@ function MonthView({
                   <button
                     type="button"
                     onClick={() => onCreateDay(day)}
-                    className="rounded px-1 text-xs text-[var(--text-muted)] hover:bg-[var(--bg)] hover:text-[var(--text)]"
+                    className="hidden rounded px-1 text-xs text-[var(--text-muted)] hover:bg-[var(--bg)] hover:text-[var(--text)] sm:inline"
                     title="Nueva agenda"
                   >
                     +
@@ -335,27 +371,29 @@ function MonthView({
                 )}
               </div>
               <div className="space-y-0.5">
-                {dayEvents.slice(0, 3).map((ev) => (
+                {dayEvents.slice(0, 2).map((ev) => (
                   <button
                     key={ev.id}
                     type="button"
                     onClick={() => onOpenEvent(ev)}
-                    className={`block w-full truncate rounded px-1 py-0.5 text-left text-[10px] leading-tight ${EVENT_TYPE_COLOR[ev.type]}`}
+                    className={`block w-full truncate rounded px-0.5 py-0.5 text-left text-[9px] leading-tight sm:px-1 sm:text-[10px] ${EVENT_TYPE_COLOR[ev.type]}`}
                     title={ev.title}
                   >
                     {!ev.allDay && (
-                      <span className="opacity-90">{formatTime(ev.startsAt)} </span>
+                      <span className="hidden opacity-90 sm:inline">
+                        {formatTime(ev.startsAt)}{' '}
+                      </span>
                     )}
                     {ev.title}
                   </button>
                 ))}
-                {dayEvents.length > 3 && (
+                {dayEvents.length > 2 && (
                   <button
                     type="button"
                     onClick={() => onSelectDay(day)}
-                    className="px-1 text-[10px] text-[var(--text-muted)] hover:underline"
+                    className="px-0.5 text-[9px] text-[var(--text-muted)] hover:underline sm:px-1 sm:text-[10px]"
                   >
-                    +{dayEvents.length - 3} más
+                    +{dayEvents.length - 2}
                   </button>
                 )}
               </div>
@@ -450,12 +488,10 @@ function DayView({
   cursor,
   events,
   onOpenEvent,
-  onCreate,
 }: {
   cursor: Date
   events: CalendarEvent[]
   onOpenEvent: (e: CalendarEvent) => void
-  onCreate?: () => void
 }) {
   const dayEvents = eventsOnLocalDay(events, cursor).filter(
     (e) => e.status !== 'cancelled',
@@ -463,20 +499,6 @@ function DayView({
 
   return (
     <div className="p-4">
-      <div className="mb-4 flex items-center justify-between gap-3">
-        <p className="text-sm capitalize text-[var(--text-muted)]">
-          {formatDayHeading(cursor)}
-        </p>
-        {onCreate && (
-          <button
-            type="button"
-            onClick={onCreate}
-            className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm hover:bg-[var(--bg)]"
-          >
-            + Agenda
-          </button>
-        )}
-      </div>
       {dayEvents.length === 0 ? (
         <p className="py-10 text-center text-sm text-[var(--text-muted)]">
           No hay agendamientos para este día.

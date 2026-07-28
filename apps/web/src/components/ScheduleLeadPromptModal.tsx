@@ -1,4 +1,6 @@
 import { clientDisplayName, type Client } from '../lib/crm'
+import { ModalPortal } from './ModalPortal'
+
 
 export function ScheduleLeadPromptModal({
   open,
@@ -14,7 +16,7 @@ export function ScheduleLeadPromptModal({
   if (!open || !client) return null
 
   return (
-    <div className="fixed inset-0 z-[55] flex items-center justify-center bg-black/60 p-4">
+    <ModalPortal><div className="fixed inset-0 z-[55] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/60 sm:items-center sm:p-4">
       <div
         role="dialog"
         aria-modal="true"
@@ -45,6 +47,6 @@ export function ScheduleLeadPromptModal({
           </button>
         </div>
       </div>
-    </div>
+    </div></ModalPortal>
   )
 }

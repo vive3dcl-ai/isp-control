@@ -171,7 +171,7 @@ export function MobileCalendarFullPage() {
       </div>
 
       <div className="mt-4 flex items-center justify-between gap-2">
-        <p className="text-sm font-medium capitalize text-[var(--text-muted)]">
+        <p className="text-sm font-medium text-[var(--text-muted)]">
           {formatDayHeading(selectedDay)}
         </p>
         {canWrite && (

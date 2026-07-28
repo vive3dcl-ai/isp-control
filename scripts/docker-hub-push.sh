@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build + push imágenes públicas a Docker Hub (namespace dubidubidu).
+# Build + push imágenes públicas a Docker Hub (namespace vive3d por defecto).
 # Uso:
 #   docker login
 #   ./scripts/docker-hub-push.sh              # tag=latest, lee .env.production
@@ -21,7 +21,7 @@ set -a
 source "$ENV_FILE"
 set +a
 
-USER_NS="${DOCKERHUB_USER:-dubidubidu}"
+USER_NS="${DOCKERHUB_USER:-vive3d}"
 TAG="${1:-${IMAGE_TAG:-latest}}"
 VITE_API_URL="${VITE_API_URL:?Define VITE_API_URL en $ENV_FILE}"
 PANEL_URL="${PANEL_URL:-${PUBLIC_WEB_URL:-http://localhost}}"
@@ -47,6 +47,7 @@ build_push "isp-control-web" "apps/web/Dockerfile" \
   --build-arg "VITE_API_URL=${VITE_API_URL}"
 build_push "isp-control-landing" "apps/landing/Dockerfile"
 build_push "isp-control-whatsapp-baileys" "apps/whatsapp-baileys/Dockerfile"
+build_push "isp-control-vpn" "deploy/vpn-concentrator/Dockerfile"
 
 echo ""
 echo "OK. En el servidor:"

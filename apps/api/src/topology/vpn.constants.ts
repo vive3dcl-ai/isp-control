@@ -12,16 +12,6 @@ export const VPN_PROTOCOL_LABELS: Record<VpnProtocol, string> = {
   wireguard: 'WireGuard',
 };
 
-/** outbound = MikroTik client → concentrator; reverse = MikroTik server ← ACS client */
-export const VPN_MODES = ['outbound', 'reverse'] as const;
-
-export type VpnMode = (typeof VPN_MODES)[number];
-
-export const VPN_MODE_LABELS: Record<VpnMode, string> = {
-  outbound: 'Concentrador (MikroTik cliente)',
-  reverse: 'Inverso lab TR069 (MikroTik servidor)',
-};
-
 /** SmartOLT-style default LAN routes through the tunnel */
 export const DEFAULT_VPN_TUNNEL_ROUTES = [
   '10.0.0.0/8',

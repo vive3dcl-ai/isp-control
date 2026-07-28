@@ -149,6 +149,9 @@ function buildMikrotikTunnelAccessRules(
     `/ip firewall filter add chain=forward in-interface="${iface}" action=accept comment="${tag} vpn-fwd-in" place-before=0`,
     `/ip firewall filter add chain=forward out-interface="${iface}" action=accept comment="${tag} vpn-fwd-out" place-before=0`,
     `/ip firewall filter add chain=input in-interface="${iface}" action=accept comment="${tag} vpn-input" place-before=0`,
+    `# API RouterOS desde el concentrador (gestión ISP Control)`,
+    `:do { /ip service set api disabled=no } on-error={}`,
+    `:do { /ip service set api-ssl disabled=no } on-error={}`,
     `# Evita masquerade hacia el túnel (si hay srcnat genérico, place-before=0 gana)`,
     `/ip firewall nat add chain=srcnat out-interface="${iface}" action=accept comment="${tag} vpn-no-masq" place-before=0`,
     `/ip firewall mangle add chain=forward in-interface="${iface}" protocol=tcp tcp-flags=syn action=change-mss new-mss=1200 comment="${tag} vpn-mss-fwd"`,
@@ -205,7 +208,7 @@ export function buildMikrotikVpnScript(ctx: VpnScriptContext): string {
       `# Concentrador OpenVPN: ${host}:${ctx.vpnPort} (${proto})`,
       `# Usuario=${ctx.name}  IP cliente=${ctx.clientAddress}  IP servidor=${ctx.serverAddress}`,
       `:do { /interface ovpn-client remove [find name="${name}"] } on-error={}`,
-      `/interface ovpn-client add name="${name}" connect-to=${host} port=${ctx.vpnPort} mode=ip user="${ctx.name}" password="${pass}" protocol=${proto} cipher=aes256-cbc auth=sha1 add-default-route=no disabled=no comment="isp-control ${ctx.name}"`,
+      `/interface ovpn-client add name="${name}" connect-to=${host} port=${ctx.vpnPort} mode=ip user="${ctx.name}" password="${pass}" protocol=${proto} cipher=aes256-cbc auth=sha1 verify-server-certificate=no add-default-route=no disabled=no comment="isp-control ${ctx.name}"`,
     );
   }
 
@@ -226,119 +229,6 @@ export function buildMikrotikVpnScript(ctx: VpnScriptContext): string {
 
   lines.push(`:put "isp-control VPN ${ctx.name} configured on ${name}"`);
   return lines.join('\n');
-}
-
-/**
- * Reverse lab: MikroTik = OpenVPN TCP server (su IP/hostname público).
- * El ACS se conecta a endpointHost:port — NO al VPN_PUBLIC_HOST de plataforma.
- */
-export function buildMikrotikOpenVpnServerScript(ctx: VpnScriptContext): string {
-  const n = safeName(ctx.name);
-  const caName = `isp-ca-${n}`.slice(0, 40);
-  const srvCert = `isp-srv-${n}`.slice(0, 40);
-  const poolName = `isp-pool-${n}`.slice(0, 40);
-  const profileName = `isp-ovpn-${n}`.slice(0, 40);
-  const pass = ctx.password || '';
-  const port = ctx.vpnPort || DEFAULT_VPN_PORTS.openvpn_tcp;
-  const publicHost = ctx.vpnHost?.trim() || 'ENDPOINT_HOST';
-
-  const lines: string[] = [
-    `# isp-control VPN REVERSE (OpenVPN TCP server) — ${ctx.name}`,
-    `# Escucha en el MikroTik: 0.0.0.0:${port} (TCP)`,
-    `# Endpoint público para el ACS (.ovpn): ${publicHost}:${port}`,
-    `# Túnel: server=${ctx.serverAddress}  client=${ctx.clientAddress}`,
-    `# Tras aplicar: /certificate export-certificate ${caName} type=pem`,
-    `:do { /ip firewall mangle add chain=output protocol=tcp tcp-flags=syn action=change-mss new-mss=1200 comment="isp-control VPN MSS clamp" } on-error={}`,
-    `:do { /ip firewall filter add chain=input protocol=tcp dst-port=${port} action=accept comment="isp-control ovpn reverse ${ctx.name}" place-before=0 } on-error={}`,
-    `# Forward ACS (cliente OVPN) ↔ LAN (OLT/mgmt) — subnet del túnel`,
-    `:do { /ip firewall filter remove [find comment~"isp-control reverse ${ctx.name} fwd"] } on-error={}`,
-    `/ip firewall filter add chain=forward src-address=${ctx.clientAddress}/32 action=accept comment="isp-control reverse ${ctx.name} fwd-from-acs" place-before=0`,
-    `/ip firewall filter add chain=forward dst-address=${ctx.clientAddress}/32 action=accept comment="isp-control reverse ${ctx.name} fwd-to-acs" place-before=0`,
-    `/ip firewall filter add chain=forward src-address=${ctx.serverAddress}/32 action=accept comment="isp-control reverse ${ctx.name} fwd-from-srv" place-before=0`,
-    `/ip firewall filter add chain=forward dst-address=${ctx.serverAddress}/32 action=accept comment="isp-control reverse ${ctx.name} fwd-to-srv" place-before=0`,
-  ];
-
-  for (const cidr of parseRoutes(ctx.tunnelRoutes)) {
-    lines.push(
-      `/ip firewall filter add chain=forward dst-address=${cidr} action=accept comment="isp-control reverse ${ctx.name} fwd-lan ${cidr}" place-before=0`,
-      `/ip firewall filter add chain=forward src-address=${cidr} action=accept comment="isp-control reverse ${ctx.name} fwd-lan-src ${cidr}" place-before=0`,
-    );
-  }
-
-  lines.push(
-    `# --- certificates (idempotent) ---`,
-    `:do { /certificate add name="${caName}" common-name="${caName}" key-size=2048 days-valid=3650 } on-error={}`,
-    `:do { /certificate sign "${caName}" name="${caName}" } on-error={}`,
-    `:do { /certificate set "${caName}" trusted=yes } on-error={}`,
-    `:do { /certificate add name="${srvCert}" common-name="${srvCert}" key-size=2048 days-valid=3650 } on-error={}`,
-    `:do { /certificate sign "${srvCert}" ca="${caName}" name="${srvCert}" } on-error={}`,
-    `:do { /certificate set "${srvCert}" trusted=yes } on-error={}`,
-    `# --- PPP pool / profile / secret ---`,
-    `:do { /ip pool remove [find name="${poolName}"] } on-error={}`,
-    `/ip pool add name="${poolName}" ranges=${ctx.clientAddress}-${ctx.clientAddress}`,
-    `:do { /ppp profile remove [find name="${profileName}"] } on-error={}`,
-    `/ppp profile add name="${profileName}" local-address=${ctx.serverAddress} remote-address=${poolName} change-tcp-mss=yes use-encryption=yes`,
-    `:do { /ppp secret remove [find name="${ctx.name}" service=ovpn] } on-error={}`,
-    `/ppp secret add name="${ctx.name}" password="${pass}" service=ovpn profile="${profileName}" comment="isp-control reverse ${ctx.name}"`,
-    `# --- OpenVPN server ---`,
-    `/interface ovpn-server server set enabled=yes certificate="${srvCert}" require-client-certificate=no auth=sha1 cipher=aes256-cbc port=${port} protocol=tcp mode=ip default-profile="${profileName}"`,
-    `:put "isp-control reverse OVPN ready — ACS remote ${publicHost} ${port} TCP"`,
-  );
-  return lines.join('\n');
-}
-
-/**
- * Local ACS OpenVPN client config (.ovpn).
- * remote = endpointHost del MikroTik (modo inverso), no el dominio vpn de plataforma.
- */
-export function buildLocalOpenVpnClientConfig(ctx: VpnScriptContext): string {
-  const routes = parseRoutes(ctx.tunnelRoutes);
-  const pass = ctx.password || '';
-  const host = ctx.vpnHost?.trim() || 'ENDPOINT_HOST';
-  const port = ctx.vpnPort || DEFAULT_VPN_PORTS.openvpn_tcp;
-  const routeLines = routes
-    .map((cidr) => {
-      const [ip, bits] = cidr.split('/');
-      const mask = cidrMask(Number(bits));
-      return `route ${ip} ${mask}`;
-    })
-    .join('\n');
-
-  return `# isp-control ACS client — reverse tunnel ${ctx.name}
-# MikroTik es el servidor OpenVPN. Conecta a SU IP/hostname público:
-#   remote ${host} ${port}
-# (No uses VPN_PUBLIC_HOST de plataforma en modo inverso.)
-# 1) Aplica script servidor / Import en el MikroTik
-# 2) /certificate export-certificate isp-ca-${safeName(ctx.name)} type=pem
-# 3) Pega el CA PEM entre <ca>…</ca>
-# 4) Guarda como ${ctx.name}.ovpn y conecta desde el host ACS
-# ACS URL sugerida: http://${ctx.clientAddress}:14501
-
-client
-dev tun
-proto tcp
-remote ${host} ${port}
-resolv-retry infinite
-nobind
-persist-key
-persist-tun
-auth-user-pass
-# credentials: username=${ctx.name}  password=${pass}
-cipher AES-256-CBC
-auth SHA1
-remote-cert-tls server
-verb 3
-${routeLines}
-
-<auth-user-pass>
-${ctx.name}
-${pass}
-</auth-user-pass>
-
-<ca>
-# PASTE MikroTik CA PEM HERE (isp-ca-${safeName(ctx.name)}.crt)
-</ca>
-`;
 }
 
 function cidrMask(bits: number): string {

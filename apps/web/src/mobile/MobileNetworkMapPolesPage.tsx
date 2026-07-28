@@ -4,6 +4,7 @@ import {
   mapElementLabel,
   type MapDraftElement,
 } from '../lib/map-elements'
+import { addPoleWithSync } from '../lib/mapDraftSync'
 import {
   NetworkMapCanvas,
   type NetworkMapMarker,
@@ -41,10 +42,19 @@ function nextPoleName(
 export function MobileNetworkMapPolesPage() {
   const { coords, error: geoError, loading: geoLoading } =
     useGeolocationCoords()
-  const { drafts, ready, saveElement } = useMobileMapDrafts()
+  const {
+    tenantKey,
+    drafts,
+    ready,
+    saveElement,
+    pendingCount,
+    syncing,
+    refreshPending,
+  } = useMobileMapDrafts()
   const [label, setLabel] = useState('Poste')
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
 
   const poles = useMemo(
     () => drafts.filter((d) => d.type === 'pole'),
@@ -67,7 +77,7 @@ export function MobileNetworkMapPolesPage() {
     }))
   }, [poles])
 
-  function addPole() {
+  async function addPole() {
     setMessage(null)
     setError(null)
     if (!coords) {
@@ -83,8 +93,22 @@ export function MobileNetworkMapPolesPage() {
       lat: coords.lat,
       lng: coords.lng,
     }
-    saveElement(pole)
-    setMessage(`Añadido: ${name}`)
+    setBusy(true)
+    try {
+      const result = await addPoleWithSync(tenantKey, pole, saveElement)
+      refreshPending()
+      if (result === 'synced') {
+        setMessage(`Añadido y sincronizado: ${name}`)
+      } else if (result === 'queued') {
+        setMessage(
+          `Añadido en el dispositivo: ${name}. Se subirá al servidor al recuperar conexión.`,
+        )
+      } else {
+        setMessage(`Añadido: ${name}`)
+      }
+    } finally {
+      setBusy(false)
+    }
   }
 
   return (
@@ -96,11 +120,23 @@ export function MobileNetworkMapPolesPage() {
         >
           ←
         </Link>
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <h1 className="text-xl font-semibold tracking-tight">Postes</h1>
           <p className="text-xs text-[var(--text-muted)]">
             Crear postes en tu ubicación GPS
           </p>
+        </div>
+        <div className="shrink-0 text-right text-[10px] text-[var(--text-muted)]">
+          {typeof navigator !== 'undefined' && navigator.onLine ? (
+            <span className="text-emerald-400">En línea</span>
+          ) : (
+            <span className="text-amber-300">Sin conexión</span>
+          )}
+          {pendingCount > 0 && (
+            <p className="mt-0.5 text-amber-300">
+              {syncing ? 'Subiendo…' : `${pendingCount} pendiente${pendingCount === 1 ? '' : 's'}`}
+            </p>
+          )}
         </div>
       </div>
 
@@ -158,11 +194,11 @@ export function MobileNetworkMapPolesPage() {
 
       <button
         type="button"
-        onClick={addPole}
-        disabled={!ready || !coords}
+        onClick={() => void addPole()}
+        disabled={!ready || !coords || busy}
         className="w-full rounded-xl bg-[var(--accent)] py-5 text-base font-semibold text-white disabled:opacity-50"
       >
-        Añadir {next.name}
+        {busy ? 'Guardando…' : `Añadir ${next.name}`}
       </button>
 
       <p className="mt-2 text-center text-xs text-[var(--text-muted)]">

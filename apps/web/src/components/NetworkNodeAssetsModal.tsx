@@ -10,6 +10,8 @@ import { deviceTypeLabel, type NetworkDeviceType } from '../lib/topology'
 import { GoogleMapsCoords } from './GoogleMapsCoords'
 import { LocationPickerMap } from './LocationPickerMap'
 import { NodeHeadersSection } from './NodeHeadersSection'
+import { ModalPortal } from './ModalPortal'
+
 
 export function NetworkNodeAssetsModal({
   open,
@@ -88,11 +90,11 @@ export function NetworkNodeAssetsModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/60 p-4 sm:items-center">
+    <ModalPortal><div className="fixed inset-0 z-[100] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/60 sm:items-center sm:p-4">
       <div
         role="dialog"
         aria-modal="true"
-        className="flex max-h-[min(92vh,100dvh)] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl"
+        className="flex h-[100dvh] max-h-[100dvh] w-full max-w-2xl flex-col overflow-hidden rounded-none border-0 sm:h-auto sm:max-h-[min(92dvh,920px)] sm:rounded-xl sm:border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl"
       >
         <div className="flex shrink-0 items-center justify-between border-b border-[var(--border)] px-5 py-4">
           <div>
@@ -225,7 +227,7 @@ export function NetworkNodeAssetsModal({
           )}
         </div>
       </div>
-    </div>
+    </div></ModalPortal>
   )
 }
 

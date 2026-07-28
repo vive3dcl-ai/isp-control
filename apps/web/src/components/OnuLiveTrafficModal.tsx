@@ -4,6 +4,7 @@ import {
   bpsToMbps,
   type OnuLiveTrafficResponse,
 } from '../lib/onu-connected'
+import { ModalPortal } from './ModalPortal'
 
 type Point = {
   at: number
@@ -120,8 +121,8 @@ export function OnuLiveTrafficModal({ oltId, onuIf, onClose }: Props) {
   const tip = hoverIdx != null ? points[hoverIdx] : latest
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-black/70 p-4 sm:items-center">
-      <div className="max-h-[min(92vh,100dvh)] overflow-y-auto w-full max-w-3xl rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl">
+    <ModalPortal><div className="fixed inset-0 z-[100] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/70 sm:items-center sm:p-4">
+      <div className="h-[100dvh] max-h-[100dvh] overflow-y-auto overscroll-contain w-full max-w-3xl rounded-none border-0 sm:h-auto sm:max-h-[min(92dvh,920px)] sm:rounded-xl sm:border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl">
         <div className="flex items-center justify-between border-b border-[var(--border)] px-5 py-3">
           <div>
             <h3 className="flex items-center gap-2 text-lg font-semibold">
@@ -307,6 +308,6 @@ export function OnuLiveTrafficModal({ oltId, onuIf, onClose }: Props) {
           </button>
         </div>
       </div>
-    </div>
+    </div></ModalPortal>
   )
 }

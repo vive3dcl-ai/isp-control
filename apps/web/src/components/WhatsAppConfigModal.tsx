@@ -2,6 +2,8 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '../lib/api'
 import type { WhatsAppConfig, WhatsAppProvider } from '../lib/modules'
+import { ModalPortal } from './ModalPortal'
+
 
 const inputClass =
   'w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2.5 text-sm outline-none ring-[var(--accent)] focus:ring-2'
@@ -159,7 +161,7 @@ function WhatsAppConfigForm({
   const baileysStatus = live?.baileysStatus ?? 'disconnected'
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+    <ModalPortal><div className="fixed inset-0 z-[100] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/60 sm:items-center sm:p-4">
       <div
         role="dialog"
         aria-modal="true"
@@ -402,6 +404,6 @@ function WhatsAppConfigForm({
           </form>
         )}
       </div>
-    </div>
+    </div></ModalPortal>
   )
 }

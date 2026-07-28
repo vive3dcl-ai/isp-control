@@ -22,6 +22,8 @@ import {
   type ProgressStep,
 } from './OperationProgressModal'
 import type { Zone } from './ZonasSettingsTab'
+import { ModalPortal } from './ModalPortal'
+
 
 const inputClass =
   'w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm outline-none ring-[var(--accent)] focus:ring-2'
@@ -485,11 +487,11 @@ export function NewServiceWizardModal({
 
   return (
     <>
-      <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/60 p-4 sm:items-center">
+      <ModalPortal><div className="fixed inset-0 z-[100] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/60 sm:items-center sm:p-4">
         <div
           role="dialog"
           aria-modal="true"
-          className="flex max-h-[min(92vh,100dvh)] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl"
+          className="flex h-[100dvh] max-h-[100dvh] w-full max-w-2xl flex-col overflow-hidden rounded-none border-0 sm:h-auto sm:max-h-[min(92dvh,920px)] sm:rounded-xl sm:border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl"
         >
           <div className="border-b border-[var(--border)] px-5 py-4">
             <div className="flex items-center justify-between">
@@ -528,7 +530,7 @@ export function NewServiceWizardModal({
             </ol>
           </div>
 
-          <div className="flex-1 overflow-y-auto px-5 py-4">
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4">
             {step === 1 && (
               <div className="space-y-3">
                 <p className="text-sm text-[var(--text-muted)]">
@@ -957,7 +959,7 @@ export function NewServiceWizardModal({
             )}
           </div>
         </div>
-      </div>
+      </div></ModalPortal>
 
       <OperationProgressModal
         open={progressOpen}

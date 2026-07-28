@@ -6,7 +6,7 @@ import {
   MaxLength,
   MinLength,
 } from 'class-validator';
-import { VPN_MODES, VPN_PROTOCOLS } from '../vpn.constants';
+import { VPN_PROTOCOLS } from '../vpn.constants';
 
 export class CreateVpnTunnelDto {
   @IsOptional()
@@ -17,17 +17,6 @@ export class CreateVpnTunnelDto {
 
   @IsIn([...VPN_PROTOCOLS])
   protocol: string;
-
-  /** outbound (default) | reverse */
-  @IsOptional()
-  @IsIn([...VPN_MODES])
-  mode?: string;
-
-  /** Public MikroTik host/IP — required when mode=reverse */
-  @IsOptional()
-  @IsString()
-  @MaxLength(255)
-  endpointHost?: string;
 
   @IsOptional()
   @IsString()
@@ -59,11 +48,6 @@ export class UpdateVpnTunnelDto {
 
   @IsOptional()
   @IsString()
-  @MaxLength(255)
-  endpointHost?: string;
-
-  @IsOptional()
-  @IsString()
   @MaxLength(64)
   tunnelSubnet?: string;
 
@@ -86,4 +70,9 @@ export class UpdateVpnTunnelDto {
 export class ImportVpnToRouterDto {
   @IsUUID()
   deviceId: string;
+
+  /** Fases cortas (evita timeout del proxy). Default: all. */
+  @IsOptional()
+  @IsIn(['connect', 'plan', 'apply', 'verify', 'all'])
+  phase?: 'connect' | 'plan' | 'apply' | 'verify' | 'all';
 }

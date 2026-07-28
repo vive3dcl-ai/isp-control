@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -20,6 +21,7 @@ import type {
   CreateSupportTicketDto,
   UpdateSupportTicketDto,
 } from './dto/support.dto';
+import { PushService } from './push.service';
 
 const STATUS_LABEL: Record<SupportTicketStatus, string> = {
   open: 'Abierto',
@@ -31,6 +33,8 @@ const STATUS_LABEL: Record<SupportTicketStatus, string> = {
 
 @Injectable()
 export class SupportService {
+  private readonly logger = new Logger(SupportService.name);
+
   constructor(
     @InjectRepository(SupportTicket)
     private readonly tickets: Repository<SupportTicket>,
@@ -40,6 +44,7 @@ export class SupportService {
     private readonly notifications: Repository<AppNotification>,
     @InjectRepository(Tenant)
     private readonly tenants: Repository<Tenant>,
+    private readonly push: PushService,
   ) {}
 
   private requireTenantId(user: AuthUser): string {
@@ -107,6 +112,7 @@ export class SupportService {
   private async createNotification(input: {
     audience: 'tenant' | 'platform';
     tenantId: string | null;
+    userId?: string | null;
     type: AppNotification['type'];
     title: string;
     body: string;
@@ -116,7 +122,7 @@ export class SupportService {
     const row = this.notifications.create({
       audience: input.audience,
       tenantId: input.tenantId,
-      userId: null,
+      userId: input.userId ?? null,
       type: input.type,
       title: input.title,
       body: input.body,
@@ -124,7 +130,35 @@ export class SupportService {
       readAt: null,
       meta: input.meta ?? {},
     });
-    return this.notifications.save(row);
+    const saved = await this.notifications.save(row);
+    void this.push.dispatchForNotification(saved).catch((err) => {
+      this.logger.warn(
+        `Push falló: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
+    return saved;
+  }
+
+  /** Notificación dirigida a un usuario del tenant (p. ej. agenda asignada). */
+  async notifyTenantUser(input: {
+    tenantId: string;
+    userId: string;
+    type: AppNotification['type'];
+    title: string;
+    body: string;
+    link: string;
+    meta?: Record<string, unknown>;
+  }) {
+    return this.createNotification({
+      audience: 'tenant',
+      tenantId: input.tenantId,
+      userId: input.userId,
+      type: input.type,
+      title: input.title,
+      body: input.body,
+      link: input.link,
+      meta: input.meta,
+    });
   }
 
   async listTenantTickets(user: AuthUser) {
@@ -391,23 +425,24 @@ export class SupportService {
     });
   }
 
-  private notificationAudienceFilter(user: AuthUser) {
+  private notificationWhere(user: AuthUser) {
     if (isPlatformRole(user.role)) {
       return {
         audience: 'platform' as const,
       };
     }
     const tenantId = this.requireTenantId(user);
-    return {
-      audience: 'tenant' as const,
-      tenantId,
-    };
+    // Broadcast (userId null) + notificaciones dirigidas al usuario.
+    return [
+      { audience: 'tenant' as const, tenantId, userId: IsNull() },
+      { audience: 'tenant' as const, tenantId, userId: user.sub },
+    ];
   }
 
   async listNotifications(user: AuthUser, limit = 30) {
-    const filter = this.notificationAudienceFilter(user);
+    const where = this.notificationWhere(user);
     const rows = await this.notifications.find({
-      where: filter,
+      where,
       order: { createdAt: 'DESC' },
       take: Math.min(Math.max(limit, 1), 100),
     });
@@ -415,9 +450,14 @@ export class SupportService {
   }
 
   async unreadCount(user: AuthUser) {
-    const filter = this.notificationAudienceFilter(user);
+    const where = this.notificationWhere(user);
+    if (Array.isArray(where)) {
+      return this.notifications.count({
+        where: where.map((w) => ({ ...w, readAt: IsNull() })),
+      });
+    }
     return this.notifications.count({
-      where: { ...filter, readAt: IsNull() },
+      where: { ...where, readAt: IsNull() },
     });
   }
 
@@ -444,9 +484,11 @@ export class SupportService {
   }
 
   async markRead(user: AuthUser, id: string) {
-    const filter = this.notificationAudienceFilter(user);
+    const where = this.notificationWhere(user);
     const row = await this.notifications.findOne({
-      where: { id, ...filter },
+      where: Array.isArray(where)
+        ? where.map((w) => ({ ...w, id }))
+        : { id, ...where },
     });
     if (!row) throw new NotFoundException('Notificación no encontrada');
     if (!row.readAt) {
@@ -457,11 +499,18 @@ export class SupportService {
   }
 
   async markAllRead(user: AuthUser) {
-    const filter = this.notificationAudienceFilter(user);
-    await this.notifications.update(
-      { ...filter, readAt: IsNull() },
-      { readAt: new Date() },
-    );
+    const where = this.notificationWhere(user);
+    if (Array.isArray(where)) {
+      await this.notifications.update(
+        where.map((w) => ({ ...w, readAt: IsNull() })),
+        { readAt: new Date() },
+      );
+    } else {
+      await this.notifications.update(
+        { ...where, readAt: IsNull() },
+        { readAt: new Date() },
+      );
+    }
     return { ok: true };
   }
 }

@@ -127,7 +127,7 @@ export function SettingsPage() {
     >
       <nav
         aria-label="Secciones de ajustes"
-        className="-mx-1 mb-5 flex flex-nowrap gap-x-4 overflow-x-auto border-b border-[var(--border)] px-1 sm:gap-x-6"
+        className="-mx-1 mb-5 flex flex-nowrap gap-x-4 overflow-x-auto overflow-y-hidden overscroll-x-contain border-b border-[var(--border)] px-1 touch-pan-x sm:gap-x-6 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       >
         {tabs.map((t) => {
           const active = tab === t.id

@@ -13,6 +13,7 @@ import { OnuMetricsPollService } from './onu-metrics-poll.service';
 import { VpnService } from './vpn.service';
 import { VpnController, VpnPublicController } from './vpn.controller';
 import { VpnAdminController } from './vpn.admin.controller';
+import { VpnInternalController } from './vpn.internal.controller';
 import { Tr069Service } from './tr069.service';
 import { Tr069Controller } from './tr069.controller';
 import { OnuSettingsService } from './onu-settings.service';
@@ -36,12 +37,14 @@ import {
   SuspensionPortalLegacyController,
 } from './suspension-portal.controller';
 import { PlatformModule } from '../platform/platform.module';
+import { SupportModule } from '../support/support.module';
 
 @Module({
   imports: [
     DatabaseModule,
     AuthModule,
     PlatformModule,
+    SupportModule,
     TypeOrmModule.forFeature([Tenant, OnuCatalogItem]),
   ],
   controllers: [
@@ -49,6 +52,7 @@ import { PlatformModule } from '../platform/platform.module';
     VpnController,
     VpnPublicController,
     VpnAdminController,
+    VpnInternalController,
     Tr069Controller,
     OnuSettingsController,
     OnuCatalogAdminController,

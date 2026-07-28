@@ -227,6 +227,7 @@ async function seedTopologyDemo(
       devices.create({
         name: 'Core Router',
         type: 'router',
+        subtype: 'mikrotik',
         note: 'Gateway demo',
         isActive: true,
       }),
@@ -247,7 +248,13 @@ async function seedTopologyDemo(
     ]);
     console.log('Created demo device: Core Router');
   } else {
-    console.log('Demo device already exists: Core Router');
+    if (!router.subtype) {
+      router.subtype = 'mikrotik';
+      await devices.save(router);
+      console.log('Updated Core Router subtype → mikrotik');
+    } else {
+      console.log('Demo device already exists: Core Router');
+    }
   }
 
   let sw = await devices.findOne({ where: { name: 'Agg Switch' } });
@@ -291,7 +298,8 @@ async function seedTopologyDemo(
       devices.create({
         name: 'OLT Central',
         type: 'olt',
-        note: 'Huawei demo',
+        subtype: 'zte_c320',
+        note: 'ZTE C320 demo',
         isActive: true,
       }),
     );
@@ -311,7 +319,13 @@ async function seedTopologyDemo(
     ]);
     console.log('Created demo device: OLT Central');
   } else {
-    console.log('Demo device already exists: OLT Central');
+    if (!olt.subtype) {
+      olt.subtype = 'zte_c320';
+      await devices.save(olt);
+      console.log('Updated OLT Central subtype → zte_c320');
+    } else {
+      console.log('Demo device already exists: OLT Central');
+    }
   }
 
   const routerEth0 = await ports.findOne({

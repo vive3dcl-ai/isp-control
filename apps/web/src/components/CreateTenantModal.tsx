@@ -3,6 +3,12 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { apiFetch } from '../lib/api'
 import type { CreateTenantInput, CreateTenantResponse } from '../lib/tenants'
+import {
+  ModalShell,
+  modalBodyClass,
+  modalFooterClass,
+  modalHeaderClass,
+} from './ModalShell'
 
 function slugify(name: string) {
   return name
@@ -50,15 +56,6 @@ export function CreateTenantModal({
     setOwnerPassword('')
   }, [open])
 
-  useEffect(() => {
-    if (!open) return
-    function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [open, onClose])
-
   const createMutation = useMutation({
     mutationFn: (payload: CreateTenantInput) =>
       apiFetch<CreateTenantResponse>('/admin/tenants', {
@@ -72,8 +69,6 @@ export function CreateTenantModal({
       navigate(`/admin/tenants/${result.tenant.id}`)
     },
   })
-
-  if (!open) return null
 
   function onNameChange(value: string) {
     setName(value)
@@ -95,38 +90,32 @@ export function CreateTenantModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-3 sm:items-center sm:p-4">
-      <button
-        type="button"
-        aria-label="Cerrar"
-        className="absolute inset-0 bg-black/60"
-        onClick={onClose}
-      />
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="create-tenant-title"
-        className="relative z-10 max-h-[min(92vh,100dvh)] w-full max-w-lg overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] shadow-2xl"
-      >
-        <div className="flex items-start justify-between gap-3 border-b border-[var(--border)] px-5 py-4">
-          <div>
-            <h2 id="create-tenant-title" className="text-lg font-semibold">
-              Nueva empresa
-            </h2>
-            <p className="mt-0.5 text-sm text-[var(--text-muted)]">
-              Datos comerciales + schema + owner
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-md px-2 py-1 text-sm text-[var(--text-muted)] hover:text-[var(--text)]"
-          >
-            ✕
-          </button>
+    <ModalShell
+      open={open}
+      onClose={onClose}
+      panelClassName="max-w-lg"
+      labelledBy="create-tenant-title"
+    >
+      <div className={modalHeaderClass}>
+        <div>
+          <h2 id="create-tenant-title" className="text-lg font-semibold">
+            Nueva empresa
+          </h2>
+          <p className="mt-0.5 text-sm text-[var(--text-muted)]">
+            Datos comerciales + schema + owner
+          </p>
         </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded-md px-2 py-1 text-sm text-[var(--text-muted)] hover:text-[var(--text)]"
+        >
+          ✕
+        </button>
+      </div>
 
-        <form onSubmit={onSubmit} className="space-y-4 px-5 py-4">
+      <form onSubmit={onSubmit} className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div className={`${modalBodyClass} space-y-4`}>
           <label className="block">
             <span className="mb-1.5 block text-sm text-[var(--text-muted)]">
               Nombre de la empresa
@@ -248,25 +237,25 @@ export function CreateTenantModal({
               {createMutation.error.message}
             </p>
           )}
+        </div>
 
-          <div className="flex justify-end gap-2 border-t border-[var(--border)] pt-4">
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded-lg border border-[var(--border)] px-4 py-2 text-sm text-[var(--text-muted)] hover:text-[var(--text)]"
-            >
-              Cancelar
-            </button>
-            <button
-              type="submit"
-              disabled={createMutation.isPending}
-              className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white hover:bg-[var(--accent-hover)] disabled:opacity-60"
-            >
-              {createMutation.isPending ? 'Creando…' : 'Crear empresa'}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
+        <div className={modalFooterClass}>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg border border-[var(--border)] px-4 py-2 text-sm text-[var(--text-muted)] hover:text-[var(--text)]"
+          >
+            Cancelar
+          </button>
+          <button
+            type="submit"
+            disabled={createMutation.isPending}
+            className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white hover:bg-[var(--accent-hover)] disabled:opacity-60"
+          >
+            {createMutation.isPending ? 'Creando…' : 'Crear empresa'}
+          </button>
+        </div>
+      </form>
+    </ModalShell>
   )
 }

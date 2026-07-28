@@ -1,11 +1,15 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { In, Not } from 'typeorm';
+import { InjectRepository } from '@nestjs/typeorm';
+import { In, Not, Repository } from 'typeorm';
 import type { AuthUser } from '../auth/auth.types';
 import { TenantConnectionService } from '../database/tenant-connection.service';
+import { Tenant } from '../tenants/entities/tenant.entity';
+import { SupportService } from '../support/support.service';
 import type {
   NetworkDeviceType,
 } from './entities/network-device.entity';
@@ -42,13 +46,29 @@ function formatUplinkVlans(vlans: number[]): string {
 
 const INTERNET_PORT_COUNT = 8;
 
+const DEVICE_TYPE_LABEL: Record<string, string> = {
+  internet: 'Internet',
+  router: 'Router',
+  switch: 'Switch',
+  olt: 'OLT',
+  server: 'Servidor',
+  onu: 'ONU',
+  ont: 'ONT',
+  cpe_router: 'CPE',
+};
+
 @Injectable()
 export class TopologyService {
+  private readonly logger = new Logger(TopologyService.name);
+
   constructor(
     private readonly tenantConnections: TenantConnectionService,
     private readonly mikrotik: MikrotikClient,
     private readonly zteOlt: ZteOltClient,
     private readonly onuTypeSync: OnuTypeOltSyncService,
+    private readonly support: SupportService,
+    @InjectRepository(Tenant)
+    private readonly tenants: Repository<Tenant>,
   ) {}
 
   /** Consecutive probe failures per device — avoid flapping on blips. */
@@ -420,6 +440,14 @@ export class TopologyService {
       throw new BadRequestException(
         'Management connection is only available for routers and OLTs',
       );
+    }
+
+    // Seed / datos viejos: router sin subtype → MikroTik; OLT → ZTE genérico
+    if (device.type === 'router' && !device.subtype) {
+      device.subtype = 'mikrotik';
+    }
+    if (device.type === 'olt' && !device.subtype) {
+      device.subtype = 'zte_c3xx';
     }
 
     if (dto.mgmtHost !== undefined) {
@@ -1222,8 +1250,20 @@ export class TopologyService {
       return device;
     }
 
+    if (device.type === 'olt' && !device.subtype) {
+      // Seed / datos viejos: OLT sin modelo → bucket genérico (se afina al probe)
+      device.subtype = 'zte_c3xx';
+      await devices.save(device);
+    }
+
     if (isZteOltDevice(device.type, device.subtype)) {
       return this.probeAndPersistZteOlt(schema, device);
+    }
+
+    // Routers sin subtype (p.ej. seed antiguo): asumir MikroTik
+    if (device.type === 'router' && !device.subtype) {
+      device.subtype = 'mikrotik';
+      await devices.save(device);
     }
 
     if (device.subtype !== 'mikrotik') {
@@ -1297,6 +1337,7 @@ export class TopologyService {
       const errMsg = result.error ?? 'Connection failed';
       // Need 3 consecutive failures before marking disconnected if we were live
       const failThreshold = 3;
+      let becameDown = false;
       if (
         device.connectionStatus === 'connected' &&
         streak < failThreshold
@@ -1304,10 +1345,14 @@ export class TopologyService {
         device.lastError = `Inestable (${streak}/${failThreshold}): ${errMsg}`;
         // Keep connected + last metrics so the dashboard doesn't flap
       } else {
+        becameDown = device.connectionStatus === 'connected';
         device.connectionStatus = 'disconnected';
         device.lastError = errMsg;
       }
       await devices.save(device);
+      if (becameDown) {
+        void this.notifyTenantAdminsDeviceDown(schema, device);
+      }
     }
 
     return device;
@@ -1426,18 +1471,89 @@ export class TopologyService {
       this.probeFailStreak.set(device.id, streak);
       const errMsg = result.error ?? 'Connection failed';
       const failThreshold = 3;
+      let becameDown = false;
       if (
         device.connectionStatus === 'connected' &&
         streak < failThreshold
       ) {
         device.lastError = `Inestable (${streak}/${failThreshold}): ${errMsg}`;
       } else {
+        becameDown = device.connectionStatus === 'connected';
         device.connectionStatus = 'disconnected';
         device.lastError = errMsg;
       }
       await devices.save(device);
+      if (becameDown) {
+        void this.notifyTenantAdminsDeviceDown(schema, device);
+      }
     }
     return device;
+  }
+
+  /** Avisa a owner/admin del tenant cuando un equipo pasa de conectado → caído. */
+  private async notifyTenantAdminsDeviceDown(
+    schema: string,
+    device: NetworkDevice,
+  ) {
+    try {
+      const tenant = await this.tenants.findOne({
+        where: { schemaName: schema },
+      });
+      if (!tenant) return;
+
+      const usersRepo =
+        await this.tenantConnections.getUserRepository(schema);
+      const admins = await usersRepo.find({
+        where: [
+          { role: 'owner', isActive: true },
+          { role: 'admin', isActive: true },
+        ],
+      });
+      if (admins.length === 0) return;
+
+      let nodeLabel = '';
+      if (device.nodeId) {
+        try {
+          const nodes =
+            await this.tenantConnections.getNetworkNodeRepository(schema);
+          const node = await nodes.findOne({ where: { id: device.nodeId } });
+          if (node?.name) nodeLabel = ` · Nodo ${node.name}`;
+        } catch {
+          // ignore
+        }
+      }
+
+      const typeLabel =
+        DEVICE_TYPE_LABEL[device.type] ?? device.type ?? 'Equipo';
+      const host = device.mgmtHost ? ` (${device.mgmtHost})` : '';
+      const title = `Caída: ${device.name}`;
+      const body = `${typeLabel} sin conexión${host}${nodeLabel}`;
+
+      await Promise.all(
+        admins.map((admin) =>
+          this.support.notifyTenantUser({
+            tenantId: tenant.id,
+            userId: admin.id,
+            type: 'device_down',
+            title,
+            body,
+            link: '/app/topology',
+            meta: {
+              deviceId: device.id,
+              deviceType: device.type,
+              nodeId: device.nodeId,
+              schema,
+            },
+          }),
+        ),
+      );
+    } catch (err) {
+      this.logger.warn(
+        `No se pudo notificar caída de ${device.name}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
   }
 
   private async withTimeout<T>(
