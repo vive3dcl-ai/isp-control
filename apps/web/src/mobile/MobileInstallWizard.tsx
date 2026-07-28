@@ -706,14 +706,11 @@ export function MobileInstallWizard() {
             </ul>
             {clientId && (
               <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-elevated)] p-4 text-sm">
-                <p className="font-medium">{clientName}</p>
                 {clientDetailQuery.isLoading ? (
-                  <p className="mt-2 text-[var(--text-muted)]">
-                    Cargando servicios…
-                  </p>
+                  <p className="text-[var(--text-muted)]">Cargando servicios…</p>
                 ) : existingServices.length > 0 ? (
                   <>
-                    <p className="mt-2 text-xs text-[var(--text-muted)]">
+                    <p className="text-xs text-[var(--text-muted)]">
                       Servicios activos ({existingServices.length})
                     </p>
                     <ul className="mt-1.5 space-y-1 text-[var(--text-muted)]">
@@ -727,7 +724,7 @@ export function MobileInstallWizard() {
                     </ul>
                   </>
                 ) : (
-                  <p className="mt-2 text-xs text-[var(--text-muted)]">
+                  <p className="text-xs text-[var(--text-muted)]">
                     Sin servicios activos aún: se aprovisionará el primero.
                   </p>
                 )}
