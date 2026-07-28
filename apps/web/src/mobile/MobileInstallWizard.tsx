@@ -13,10 +13,20 @@ import {
 } from '../lib/onu-connected'
 import type { IpPoolsResponse } from '../lib/ip-pools'
 import type { Tr069ProfilesResponse } from '../lib/tr069'
-import type { Client, ClientService, ServicePlan } from '../lib/crm'
+import type {
+  Client,
+  ClientDetail,
+  ClientService,
+  ServicePlan,
+} from '../lib/crm'
 import { clientDisplayName } from '../lib/crm'
 import { useMoney } from '../lib/currency'
 import type { CompanyProfile } from '../lib/company'
+import {
+  companyDocumentType,
+  formatDocument,
+  personalDocumentTypes,
+} from '../lib/documents'
 import type { Zone } from '../components/ZonasSettingsTab'
 import {
   OperationProgressModal,
@@ -27,7 +37,10 @@ import {
 const field =
   'w-full rounded-xl border border-[var(--border)] bg-[var(--bg)] px-3 py-3 text-base outline-none ring-[var(--accent)] focus:ring-2'
 
+type ClientMode = 'new' | 'existing'
+
 const STEPS = [
+  { n: 0, label: 'Inicio' },
   { n: 1, label: 'Cliente' },
   { n: 2, label: 'Servicio' },
   { n: 3, label: 'ONU' },
@@ -38,12 +51,19 @@ export function MobileInstallWizard() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const money = useMoney()
-  const [step, setStep] = useState(1)
+  const [step, setStep] = useState(0)
   const [error, setError] = useState<string | null>(null)
+  const [clientMode, setClientMode] = useState<ClientMode | null>(null)
+  const [clientSearch, setClientSearch] = useState('')
 
   // Cliente
   const [firstName, setFirstName] = useState('')
   const [lastName, setLastName] = useState('')
+  const [documentType, setDocumentType] = useState('')
+  const [documentNumber, setDocumentNumber] = useState('')
+  const [isCompany, setIsCompany] = useState(false)
+  const [companyName, setCompanyName] = useState('')
+  const [companyTaxId, setCompanyTaxId] = useState('')
   const [phone, setPhone] = useState('')
   const [email, setEmail] = useState('')
   const [street, setStreet] = useState('')
@@ -93,6 +113,18 @@ export function MobileInstallWizard() {
     queryFn: () => apiFetch<ServicePlan[]>('/app/service-plans'),
     staleTime: 60_000,
   })
+  const clientsQuery = useQuery({
+    queryKey: ['app', 'clients'],
+    queryFn: () => apiFetch<Client[]>('/app/clients'),
+    enabled: step === 1 && clientMode === 'existing',
+    staleTime: 30_000,
+  })
+  const clientDetailQuery = useQuery({
+    queryKey: ['app', 'clients', clientId],
+    queryFn: () => apiFetch<ClientDetail>(`/app/clients/${clientId}`),
+    enabled: !!clientId && clientMode === 'existing' && step >= 1,
+    staleTime: 30_000,
+  })
   const uncfgQuery = useQuery({
     queryKey: ['app', 'onus', 'uncfg', oltFilter, 'mobile'],
     queryFn: () =>
@@ -126,6 +158,12 @@ export function MobileInstallWizard() {
     enabled: step === 4,
     staleTime: 60_000,
   })
+
+  const country = companyQuery.data?.country ?? ''
+  const docTypes = personalDocumentTypes(country)
+  const companyDoc = companyDocumentType(country)
+  const selectedDocType =
+    docTypes.find((t) => t.id === documentType) ?? docTypes[0]
 
   const plans = (plansQuery.data ?? []).filter((p) => p.isActive)
   const mgmtPools = mgmtPoolsQuery.data?.pools ?? []
@@ -161,15 +199,79 @@ export function MobileInstallWizard() {
     )
   }, [uncfgQuery.data?.onus, search])
 
+  const filteredClients = useMemo(() => {
+    const all = (clientsQuery.data ?? []).filter((c) => c.isActive)
+    const q = clientSearch.trim().toLowerCase()
+    if (!q) return all
+    return all.filter((c) =>
+      [
+        clientDisplayName(c),
+        c.email,
+        c.phone,
+        c.city,
+        c.companyName,
+        c.documentNumber,
+        c.companyTaxId,
+      ]
+        .join(' ')
+        .toLowerCase()
+        .includes(q),
+    )
+  }, [clientsQuery.data, clientSearch])
+
+  const existingServices = (clientDetailQuery.data?.services ?? []).filter(
+    (s) => s.status === 'active',
+  )
+
   function pickOrphan(o: UncfgOnu) {
     setOrphan(o)
     setOnuNumber(o.suggestedOnuId != null ? String(o.suggestedOnuId) : '1')
   }
 
+  function chooseMode(mode: ClientMode) {
+    setError(null)
+    setClientMode(mode)
+    setClientId(null)
+    setClientName('')
+    setClientSearch('')
+    if (mode === 'existing') {
+      setFirstName('')
+      setLastName('')
+      setDocumentNumber('')
+      setIsCompany(false)
+      setCompanyName('')
+      setCompanyTaxId('')
+      setPhone('')
+      setEmail('')
+      setStreet('')
+      setCity('')
+      setZoneId('')
+      setServiceName('Casa')
+    }
+    setStep(1)
+  }
+
+  function pickExistingClient(c: Client) {
+    setClientId(c.id)
+    setClientName(clientDisplayName(c))
+    setZoneId(c.zoneId ?? '')
+    setStreet(c.street ?? '')
+    setCity(c.city ?? '')
+    setPhone(c.phone ?? '')
+    setEmail(c.email ?? '')
+    setError(null)
+  }
+
   function validate(current: number): string | null {
     if (current === 1) {
+      if (clientMode === 'existing') {
+        if (!clientId) return 'Selecciona un cliente existente.'
+        return null
+      }
       if (firstName.trim().length < 2 && lastName.trim().length < 2)
         return 'Indica al menos nombre o apellido.'
+      if (isCompany && companyName.trim().length < 2)
+        return 'Indica el nombre de la empresa.'
       if (!phone.trim() && !email.trim())
         return 'Indica teléfono o correo de contacto.'
     }
@@ -199,11 +301,27 @@ export function MobileInstallWizard() {
       return
     }
     setError(null)
+    if (
+      step === 1 &&
+      clientMode === 'existing' &&
+      existingServices.length > 0 &&
+      serviceName === 'Casa'
+    ) {
+      setServiceName(`Servicio ${existingServices.length + 1}`)
+    }
     setStep((s) => Math.min(4, s + 1))
   }
 
   function back() {
     setError(null)
+    if (step <= 1) {
+      setClientMode(null)
+      setClientId(null)
+      setClientName('')
+      setClientSearch('')
+      setStep(0)
+      return
+    }
     setStep((s) => Math.max(1, s - 1))
   }
 
@@ -222,6 +340,11 @@ export function MobileInstallWizard() {
       void queryClient.invalidateQueries({ queryKey: ['app', 'clients'] })
       void queryClient.invalidateQueries({ queryKey: ['app', 'onus'] })
       void queryClient.invalidateQueries({ queryKey: ['app', 'dashboard'] })
+      if (ctxRef.current.clientId) {
+        void queryClient.invalidateQueries({
+          queryKey: ['app', 'clients', ctxRef.current.clientId],
+        })
+      }
     } else {
       setProgressFailed(true)
     }
@@ -252,11 +375,20 @@ export function MobileInstallWizard() {
 
     ctxRef.current = { clientId: clientId ?? undefined }
 
+    const isExisting = clientMode === 'existing' || !!clientId
     const steps: ProgressStep[] = [
-      { id: 'client', label: 'Creando cliente', status: 'pending' },
+      {
+        id: 'client',
+        label: isExisting ? 'Usando cliente existente' : 'Creando cliente',
+        status: 'pending',
+      },
       { id: 'authorize', label: 'Autorizando ONU en la OLT', status: 'pending' },
       { id: 'zone', label: 'Asignando zona', status: 'pending' },
-      { id: 'service', label: 'Creando servicio', status: 'pending' },
+      {
+        id: 'service',
+        label: isExisting ? 'Agregando servicio' : 'Creando servicio',
+        status: 'pending',
+      },
       ...(hasNetwork
         ? ([
             {
@@ -294,19 +426,30 @@ export function MobileInstallWizard() {
       return id
     }
 
-    const displayName = [firstName, lastName].filter(Boolean).join(' ').trim()
+    const displayName =
+      clientName ||
+      (isCompany && companyName.trim()
+        ? companyName.trim()
+        : [firstName, lastName].filter(Boolean).join(' ').trim())
     const svcName = serviceName.trim()
 
     const runners: Record<string, () => Promise<string | void>> = {
       client: async () => {
         if (ctxRef.current.clientId) {
-          return 'Cliente ya creado'
+          return `Cliente «${clientName || displayName || 'existente'}»`
         }
         const c = await apiFetch<Client>('/app/clients', {
           method: 'POST',
           body: JSON.stringify({
             firstName: firstName.trim(),
             lastName: lastName.trim(),
+            documentType: documentNumber.trim()
+              ? (selectedDocType?.id ?? documentType)
+              : '',
+            documentNumber: documentNumber.trim(),
+            isCompany,
+            companyName: isCompany ? companyName.trim() : '',
+            companyTaxId: isCompany ? companyTaxId.trim() : '',
             email: email.trim().toLowerCase(),
             phone: phone.trim(),
             street: street.trim(),
@@ -344,10 +487,13 @@ export function MobileInstallWizard() {
       zone: async () => {
         const cid = requireClientId()
         const nextZoneId = zoneId.trim() ? zoneId.trim() : null
-        await apiFetch(`/app/clients/${cid}`, {
-          method: 'PATCH',
-          body: JSON.stringify({ zoneId: nextZoneId }),
-        })
+        // En cliente existente no pisamos zona vacía si ya tenía una.
+        if (clientMode !== 'existing' || nextZoneId) {
+          await apiFetch(`/app/clients/${cid}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ zoneId: nextZoneId }),
+          })
+        }
         const onuId = requireOnuDbId()
         await apiFetch(`/app/onus/${onuId}/zone`, {
           method: 'PATCH',
@@ -480,7 +626,117 @@ export function MobileInstallWizard() {
       )}
 
       <div className="flex-1 space-y-4">
-        {step === 1 && (
+        {step === 0 && (
+          <>
+            <p className="text-sm text-[var(--text-muted)]">
+              ¿Para quién es la instalación?
+            </p>
+            <button
+              type="button"
+              onClick={() => chooseMode('new')}
+              className="w-full rounded-2xl border border-[var(--border)] bg-[var(--bg-elevated)] px-4 py-5 text-left transition hover:border-[var(--accent)]"
+            >
+              <p className="text-base font-semibold">Cliente nuevo</p>
+              <p className="mt-1 text-sm text-[var(--text-muted)]">
+                Alta completa: datos, servicio, ONU y red.
+              </p>
+            </button>
+            <button
+              type="button"
+              onClick={() => chooseMode('existing')}
+              className="w-full rounded-2xl border border-[var(--border)] bg-[var(--bg-elevated)] px-4 py-5 text-left transition hover:border-[var(--accent)]"
+            >
+              <p className="text-base font-semibold">Cliente existente</p>
+              <p className="mt-1 text-sm text-[var(--text-muted)]">
+                Buscar cliente y agregar otro servicio o aprovisionar ONU.
+              </p>
+            </button>
+          </>
+        )}
+
+        {step === 1 && clientMode === 'existing' && (
+          <>
+            <p className="text-sm text-[var(--text-muted)]">
+              Busca y selecciona el cliente
+            </p>
+            <input
+              className={field}
+              placeholder="Nombre, teléfono, documento…"
+              value={clientSearch}
+              onChange={(e) => setClientSearch(e.target.value)}
+              autoFocus
+            />
+            {clientsQuery.isLoading && (
+              <p className="text-sm text-[var(--text-muted)]">Cargando…</p>
+            )}
+            {clientsQuery.error && (
+              <p className="text-sm text-[var(--danger)]">
+                {clientsQuery.error.message}
+              </p>
+            )}
+            <ul className="max-h-[42vh] space-y-2 overflow-y-auto">
+              {filteredClients.map((c) => {
+                const selected = clientId === c.id
+                return (
+                  <li key={c.id}>
+                    <button
+                      type="button"
+                      onClick={() => pickExistingClient(c)}
+                      className={[
+                        'w-full rounded-2xl border px-4 py-3 text-left transition',
+                        selected
+                          ? 'border-[var(--accent)] bg-[var(--accent)]/10'
+                          : 'border-[var(--border)] bg-[var(--bg-elevated)]',
+                      ].join(' ')}
+                    >
+                      <p className="font-semibold">{clientDisplayName(c)}</p>
+                      <p className="text-xs text-[var(--text-muted)]">
+                        {[c.phone, c.email, c.city].filter(Boolean).join(' · ') ||
+                          'Sin contacto'}
+                      </p>
+                    </button>
+                  </li>
+                )
+              })}
+              {!clientsQuery.isLoading && !filteredClients.length && (
+                <li className="py-8 text-center text-sm text-[var(--text-muted)]">
+                  No hay clientes que coincidan
+                </li>
+              )}
+            </ul>
+            {clientId && (
+              <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-elevated)] p-4 text-sm">
+                <p className="font-medium">{clientName}</p>
+                {clientDetailQuery.isLoading ? (
+                  <p className="mt-2 text-[var(--text-muted)]">
+                    Cargando servicios…
+                  </p>
+                ) : existingServices.length > 0 ? (
+                  <>
+                    <p className="mt-2 text-xs text-[var(--text-muted)]">
+                      Servicios activos ({existingServices.length})
+                    </p>
+                    <ul className="mt-1.5 space-y-1 text-[var(--text-muted)]">
+                      {existingServices.map((s) => (
+                        <li key={s.id}>
+                          {s.name}
+                          {s.servicePlan?.name ? ` · ${s.servicePlan.name}` : ''}
+                          {s.onuId ? ' · con ONU' : ' · sin ONU'}
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                ) : (
+                  <p className="mt-2 text-xs text-[var(--text-muted)]">
+                    Sin servicios activos aún: se aprovisionará el primero.
+                  </p>
+                )}
+              </div>
+            )}
+          </>
+        )}
+
+        {step === 1 && clientMode === 'new' && (
           <>
             <p className="text-sm text-[var(--text-muted)]">
               Datos del cliente nuevo
@@ -505,6 +761,83 @@ export function MobileInstallWizard() {
                 autoComplete="family-name"
               />
             </label>
+            <div className="grid grid-cols-2 gap-3">
+              <label className="block text-sm">
+                <span className="mb-1 block text-[var(--text-muted)]">
+                  Tipo doc.
+                </span>
+                <select
+                  className={field}
+                  value={selectedDocType?.id ?? ''}
+                  onChange={(e) => setDocumentType(e.target.value)}
+                >
+                  {docTypes.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="block text-sm">
+                <span className="mb-1 block text-[var(--text-muted)]">
+                  {selectedDocType?.label ?? 'Documento'}
+                </span>
+                <input
+                  className={field}
+                  placeholder={selectedDocType?.placeholder}
+                  value={documentNumber}
+                  onChange={(e) => setDocumentNumber(e.target.value)}
+                  onBlur={(e) =>
+                    setDocumentNumber(
+                      formatDocument(
+                        country,
+                        selectedDocType?.id ?? '',
+                        e.target.value,
+                      ),
+                    )
+                  }
+                />
+              </label>
+            </div>
+            <label className="inline-flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                className="size-4 rounded border-[var(--border)]"
+                checked={isCompany}
+                onChange={(e) => setIsCompany(e.target.checked)}
+              />
+              Empresa
+            </label>
+            {isCompany && (
+              <div className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] p-3">
+                <label className="block text-sm">
+                  <span className="mb-1 block text-[var(--text-muted)]">
+                    Nombre empresa
+                  </span>
+                  <input
+                    className={field}
+                    value={companyName}
+                    onChange={(e) => setCompanyName(e.target.value)}
+                  />
+                </label>
+                <label className="block text-sm">
+                  <span className="mb-1 block text-[var(--text-muted)]">
+                    {companyDoc.label}
+                  </span>
+                  <input
+                    className={field}
+                    placeholder={companyDoc.placeholder}
+                    value={companyTaxId}
+                    onChange={(e) => setCompanyTaxId(e.target.value)}
+                    onBlur={(e) =>
+                      setCompanyTaxId(
+                        formatDocument(country, companyDoc.id, e.target.value),
+                      )
+                    }
+                  />
+                </label>
+              </div>
+            )}
             <label className="block text-sm">
               <span className="mb-1 block text-[var(--text-muted)]">
                 Teléfono
@@ -548,8 +881,16 @@ export function MobileInstallWizard() {
         {step === 2 && (
           <>
             <p className="text-sm text-[var(--text-muted)]">
-              Servicio e instalación
+              {clientMode === 'existing'
+                ? `Nuevo servicio para ${clientName || 'cliente'}`
+                : 'Servicio e instalación'}
             </p>
+            {clientMode === 'existing' && existingServices.length > 0 && (
+              <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] px-3 py-2 text-xs text-[var(--text-muted)]">
+                Servicios activos ({existingServices.length}):{' '}
+                {existingServices.map((s) => s.name).join(', ')}
+              </div>
+            )}
             <label className="block text-sm">
               <span className="mb-1 block text-[var(--text-muted)]">
                 Nombre del servicio
@@ -751,7 +1092,13 @@ export function MobileInstallWizard() {
               <p className="font-medium">Resumen</p>
               <ul className="mt-2 space-y-1 text-[var(--text-muted)]">
                 <li>
-                  Cliente: {[firstName, lastName].filter(Boolean).join(' ')}
+                  Cliente:{' '}
+                  {clientMode === 'existing'
+                    ? clientName || '—'
+                    : isCompany && companyName.trim()
+                      ? companyName.trim()
+                      : [firstName, lastName].filter(Boolean).join(' ')}
+                  {clientMode === 'existing' ? ' (existente)' : ''}
                 </li>
                 <li>
                   Servicio: {serviceName}
@@ -775,7 +1122,14 @@ export function MobileInstallWizard() {
 
       <div className="sticky bottom-0 -mx-4 mt-6 border-t border-[var(--border)] bg-[var(--bg)]/95 px-4 py-3 backdrop-blur">
         <div className="mx-auto flex max-w-lg gap-2">
-          {step > 1 ? (
+          {step === 0 ? (
+            <Link
+              to="/movil"
+              className="flex flex-1 items-center justify-center rounded-xl border border-[var(--border)] py-3.5 text-sm font-semibold"
+            >
+              Cancelar
+            </Link>
+          ) : step > 0 ? (
             <button
               type="button"
               onClick={back}
@@ -783,15 +1137,8 @@ export function MobileInstallWizard() {
             >
               Atrás
             </button>
-          ) : (
-            <Link
-              to="/movil"
-              className="flex flex-1 items-center justify-center rounded-xl border border-[var(--border)] py-3.5 text-sm font-semibold"
-            >
-              Cancelar
-            </Link>
-          )}
-          {step < 4 ? (
+          ) : null}
+          {step > 0 && step < 4 ? (
             <button
               type="button"
               onClick={next}
@@ -799,7 +1146,8 @@ export function MobileInstallWizard() {
             >
               Siguiente
             </button>
-          ) : (
+          ) : null}
+          {step === 4 ? (
             <button
               type="button"
               onClick={finish}
@@ -807,7 +1155,7 @@ export function MobileInstallWizard() {
             >
               Instalar
             </button>
-          )}
+          ) : null}
         </div>
       </div>
 
@@ -822,8 +1170,7 @@ export function MobileInstallWizard() {
         onClose={() => {
           setProgressOpen(false)
           if (progressDone) {
-            const cid = ctxRef.current.clientId
-            navigate(cid ? `/app/clients/${cid}` : '/movil', { replace: true })
+            navigate('/movil', { replace: true })
           }
         }}
       />

@@ -280,7 +280,6 @@ export function TopologyPage() {
     viewX: number
     viewY: number
   } | null>(null)
-  const skipClickRef = useRef(false)
   /** Tras pan/zoom del usuario no auto-centramos hasta recargar. */
   const userMovedRef = useRef(false)
   /** Auto-fit solo una vez por carga de página. */
@@ -459,7 +458,9 @@ export function TopologyPage() {
 
   function onPointerDown(e: React.PointerEvent<HTMLDivElement>) {
     if (e.button !== 0 && e.button !== 1) return
-    e.preventDefault()
+    // No preventDefault en mouse: si capturamos el pointer, el click SVG se pierde.
+    // En touch evitamos scroll del navegador.
+    if (e.pointerType !== 'mouse') e.preventDefault()
     try {
       e.currentTarget.setPointerCapture(e.pointerId)
     } catch {
@@ -510,6 +511,11 @@ export function TopologyPage() {
   }
 
   function onPointerUp(e: React.PointerEvent<HTMLDivElement>) {
+    const wasMoved = Boolean(panRef.current?.moved || pinchRef.current)
+    const clientX = e.clientX
+    const clientY = e.clientY
+    const button = e.button
+
     pointersRef.current.delete(e.pointerId)
     try {
       e.currentTarget.releasePointerCapture(e.pointerId)
@@ -537,20 +543,25 @@ export function TopologyPage() {
       return
     }
 
-    if (panRef.current?.moved || pinchRef.current) {
-      skipClickRef.current = true
-    }
     panRef.current = null
     pinchRef.current = null
     setIsPanning(false)
-  }
 
-  function onDeviceClick(id: string) {
-    if (skipClickRef.current) {
-      skipClickRef.current = false
+    // Pointer capture en el viewport cancela el click de los nodos SVG.
+    // Abrimos la modal en pointerup si no hubo pan/pinch.
+    if (wasMoved || button !== 0) return
+    const hit = document.elementFromPoint(clientX, clientY)
+    if (!(hit instanceof Element)) return
+    const onuEl = hit.closest('[data-topology-onu]')
+    if (onuEl) {
+      const oltId = onuEl.getAttribute('data-olt-id')
+      const onuIf = onuEl.getAttribute('data-onu-if')
+      if (oltId && onuIf) setOnuSel({ oltId, onuIf })
       return
     }
-    setDetailId(id)
+    const deviceEl = hit.closest('[data-topology-device]')
+    const id = deviceEl?.getAttribute('data-topology-device')
+    if (id) setDetailId(id)
   }
   return (
     <PanelShell
@@ -702,16 +713,9 @@ export function TopologyPage() {
                       fill={dot.color}
                       opacity={dot.onu.online ? 1 : 0.55}
                       className="cursor-pointer"
-                      onClick={() => {
-                        if (skipClickRef.current) {
-                          skipClickRef.current = false
-                          return
-                        }
-                        setOnuSel({
-                          oltId: dot.onu.oltId,
-                          onuIf: dot.onu.onuIf,
-                        })
-                      }}
+                      data-topology-onu=""
+                      data-olt-id={dot.onu.oltId}
+                      data-onu-if={dot.onu.onuIf}
                     >
                       <title>
                         {`${dot.onu.name || dot.onu.sn || dot.onu.onuIf}\n${dot.onu.onuIf}\n${
@@ -740,7 +744,7 @@ export function TopologyPage() {
                     key={d.id}
                     transform={`translate(${pos.x}, ${pos.y})`}
                     className="cursor-pointer"
-                    onClick={() => onDeviceClick(d.id)}
+                    data-topology-device={d.id}
                   >
                     <title>
                       {d.name} ({deviceTypeLabel[d.type]}

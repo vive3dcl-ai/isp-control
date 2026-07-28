@@ -29,12 +29,14 @@ import { CalendarPage } from './pages/CalendarPage'
 import { AdminTenantUsersPage } from './pages/AdminTenantUsersPage'
 import { PortalRoutes } from './portal/PortalRoutes'
 import { MobileRoutes } from './mobile/MobileRoutes'
+import { StandaloneMobileGuard } from './mobile/StandaloneMobileGuard'
 import { PLATFORM_ROLES } from './lib/api'
 
 export default function App() {
   return (
     <AuthProvider>
       <NotifyProvider>
+        <StandaloneMobileGuard>
         <Routes>
           <Route path="/:slug/portal/*" element={<PortalRoutes />} />
 
@@ -92,6 +94,7 @@ export default function App() {
           <Route path="/" element={<Navigate to="/login" replace />} />
           <Route path="*" element={<Navigate to="/login" replace />} />
         </Routes>
+        </StandaloneMobileGuard>
       </NotifyProvider>
     </AuthProvider>
   )

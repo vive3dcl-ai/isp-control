@@ -2,13 +2,16 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { NotificationBell } from '../components/NotificationBell'
 import { UserAccountMenu } from '../components/UserAccountMenu'
+import { BrandMark } from '../components/BrandMark'
 import { useBranding } from '../branding/BrandingContext'
+import { isMobilePwaInstalled } from '../lib/mobilePwa'
 
 export function MobileShell() {
   const { user, logout } = useAuth()
   const branding = useBranding()
   const navigate = useNavigate()
   const location = useLocation()
+  const asApp = isMobilePwaInstalled()
   const wide =
     location.pathname.startsWith('/movil/mapa-red/mapa') ||
     location.pathname.startsWith('/movil/mapa-red/tecnico') ||
@@ -20,13 +23,20 @@ export function MobileShell() {
         <div
           className={`mx-auto flex items-center justify-between gap-3 ${wide ? 'max-w-3xl' : 'max-w-lg'}`}
         >
-          <NavLink to="/movil" className="min-w-0" end>
-            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--accent)]">
-              {branding.productName}
-            </p>
-            <p className="truncate text-base font-semibold leading-tight">
-              Móvil
-            </p>
+          <NavLink
+            to="/movil"
+            className="flex min-w-0 items-center gap-2.5"
+            end
+          >
+            <BrandMark size={36} className="shrink-0 rounded-lg" />
+            <span className="min-w-0">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--accent)]">
+                {branding.productName}
+              </p>
+              <p className="truncate text-base font-semibold leading-tight">
+                Móvil
+              </p>
+            </span>
           </NavLink>
           <div className="flex items-center gap-2">
             <NotificationBell variant="tenant" />
@@ -34,7 +44,7 @@ export function MobileShell() {
               displayName={user?.name || user?.email || 'Usuario'}
               subtitle={user?.email}
               canEditAccount
-              onGoDesktop={() => navigate('/app')}
+              onGoDesktop={asApp ? undefined : () => navigate('/app')}
               onLogout={() => {
                 void logout().then(() =>
                   navigate('/movil/login', { replace: true }),

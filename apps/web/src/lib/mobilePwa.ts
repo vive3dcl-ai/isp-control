@@ -36,16 +36,23 @@ export function applyMobilePwaManifest(branding: PlatformBranding) {
   if (typeof window === 'undefined' || typeof document === 'undefined') return
 
   const origin = window.location.origin
-  const name = `${branding.productName || 'ISP Control'} Móvil`
-  const shortName = (branding.shortName || 'ISP').slice(0, 12)
   const iconSrc =
     absoluteUrl(branding.logoUrl || branding.faviconUrl || '/favicon.svg', origin) ||
     `${origin}/favicon.svg`
 
+  // Preferir PNG/JPEG del logo de admin; SVG también vale para PWA modernas.
+  const iconType = iconSrc.includes('data:image/svg') || iconSrc.includes('.svg')
+    ? 'image/svg+xml'
+    : iconSrc.includes('.webp')
+      ? 'image/webp'
+      : iconSrc.includes('.jpg') || iconSrc.includes('.jpeg')
+        ? 'image/jpeg'
+        : 'image/png'
+
   const manifest = {
     id: `${origin}/movil`,
-    name,
-    short_name: shortName,
+    name: `${branding.productName || 'ISP Control'} Móvil`,
+    short_name: (branding.shortName || branding.productName || 'ISP').slice(0, 12),
     description:
       branding.metaDescription ||
       'App de campo: instalar, calendario, mapa y postes.',
@@ -61,13 +68,13 @@ export function applyMobilePwaManifest(branding: PlatformBranding) {
       {
         src: iconSrc,
         sizes: '192x192',
-        type: iconSrc.includes('svg') ? 'image/svg+xml' : 'image/png',
+        type: iconType,
         purpose: 'any',
       },
       {
         src: iconSrc,
         sizes: '512x512',
-        type: iconSrc.includes('svg') ? 'image/svg+xml' : 'image/png',
+        type: iconType,
         purpose: 'any maskable',
       },
     ],
@@ -100,7 +107,10 @@ export function applyMobilePwaManifest(branding: PlatformBranding) {
 
   upsertMeta('apple-mobile-web-app-capable', 'yes')
   upsertMeta('apple-mobile-web-app-status-bar-style', 'black-translucent')
-  upsertMeta('apple-mobile-web-app-title', shortName)
+  upsertMeta(
+    'apple-mobile-web-app-title',
+    (branding.shortName || branding.productName || 'ISP').slice(0, 12),
+  )
   upsertMeta('mobile-web-app-capable', 'yes')
 
   let appleIcon = document.querySelector<HTMLLinkElement>(

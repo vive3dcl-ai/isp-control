@@ -52,7 +52,7 @@ async function loadStoredCredentials(): Promise<PasswordCred | null> {
 }
 
 export function MobileLoginPage() {
-  const { user, loading, login } = useAuth()
+  const { user, loading, login, logout } = useAuth()
   const branding = useBranding()
   const navigate = useNavigate()
   const [email, setEmail] = useState(() => getRememberedEmail())
@@ -61,6 +61,8 @@ export function MobileLoginPage() {
   const [remember, setRemember] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  // App instalada: no ofrecer panel escritorio
+  const asApp = isMobilePwaInstalled()
 
   useEffect(() => {
     let cancelled = false
@@ -78,7 +80,7 @@ export function MobileLoginPage() {
   if (!loading && user?.role === 'tenant_user') {
     return <Navigate to="/movil" replace />
   }
-  if (!loading && user && user.role !== 'tenant_user') {
+  if (!loading && user && user.role !== 'tenant_user' && !asApp) {
     return <Navigate to={user.redirectTo} replace />
   }
 
@@ -89,7 +91,15 @@ export function MobileLoginPage() {
     try {
       // Forzar persistencia en app móvil / PWA instalada.
       const persist = remember || isMobilePwaInstalled()
-      await login(email, password, { remember: persist, channel: 'mobile' })
+      const logged = await login(email, password, {
+        remember: persist,
+        channel: 'mobile',
+      })
+      if (asApp && logged.role !== 'tenant_user') {
+        await logout()
+        setError('Esta app es solo para usuarios del panel móvil.')
+        return
+      }
       if (persist) {
         await storeMobileCredentials(email, password)
       }
@@ -187,12 +197,14 @@ export function MobileLoginPage() {
           </form>
         )}
 
-        <p className="mt-4 text-center text-xs text-[var(--text-muted)] sm:mt-6">
-          Panel escritorio:{' '}
-          <Link to="/login" className="text-[var(--accent)] underline">
-            /login
-          </Link>
-        </p>
+        {!asApp && (
+          <p className="mt-4 text-center text-xs text-[var(--text-muted)] sm:mt-6">
+            Panel escritorio:{' '}
+            <Link to="/login" className="text-[var(--accent)] underline">
+              /login
+            </Link>
+          </p>
+        )}
       </div>
     </div>
   )

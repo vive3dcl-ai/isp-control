@@ -117,7 +117,7 @@ export function OnuAuthorizeModal({ orphan, onClose, onAuthorized }: Props) {
 
   return (
     <ModalPortal>
-    <div className="fixed inset-0 z-[90] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/60 sm:items-center sm:p-4">
+    <div className="fixed inset-0 z-[110] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/60 sm:items-center sm:p-4">
       <form
         onSubmit={submit}
         className="h-[100dvh] max-h-[100dvh] overflow-y-auto overscroll-contain relative w-full max-w-lg rounded-none border-0 sm:h-auto sm:max-h-[min(92dvh,920px)] sm:rounded-xl sm:border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl"

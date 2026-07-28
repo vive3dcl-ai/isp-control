@@ -111,7 +111,7 @@ export function OnuImportModal({
 
   return (
     <ModalPortal>
-    <div className="fixed inset-0 z-[95] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/60 sm:items-center sm:p-4">
+    <div className="fixed inset-0 z-[110] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/60 sm:items-center sm:p-4">
       <div className="h-[100dvh] max-h-[100dvh] overflow-y-auto overscroll-contain w-full max-w-lg rounded-none border-0 sm:h-auto sm:max-h-[min(92dvh,920px)] sm:rounded-xl sm:border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl">
         <div className="border-b border-[var(--border)] px-5 py-3">
           <h3 className="text-lg font-semibold">ONUs conectadas detectadas</h3>

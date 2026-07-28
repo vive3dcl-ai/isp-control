@@ -16,7 +16,7 @@ export function ScheduleLeadPromptModal({
   if (!open || !client) return null
 
   return (
-    <ModalPortal><div className="fixed inset-0 z-[55] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/60 sm:items-center sm:p-4">
+    <ModalPortal><div className="fixed inset-0 z-[110] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/60 sm:items-center sm:p-4">
       <div
         role="dialog"
         aria-modal="true"

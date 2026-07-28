@@ -56,6 +56,18 @@ html:has(.modal-backdrop) .mobile-app > header {
   isolation: isolate;
 }
 
+/* Cada ModalPortal crea una capa fija; el z-index del hijo queda local a esa capa */
+.isp-modal-layer {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+}
+.isp-modal-layer > .modal-backdrop {
+  pointer-events: auto;
+  /* El z-* del className ya no compite entre modales; gana el orden de apertura */
+  z-index: 0 !important;
+}
+
 /*
  * Móvil: anclar la modal al visualViewport para que al abrir el teclado
  * el alto se reduzca y los inputs sigan siendo alcanzables con scroll.
