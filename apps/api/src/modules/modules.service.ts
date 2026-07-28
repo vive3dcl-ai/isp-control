@@ -45,6 +45,7 @@ import {
 import { PlatformModulePricing } from './entities/platform-module-pricing.entity';
 import { FxService } from './fx.service';
 import { PlatformSubscriptionService } from '../platform/platform-subscription.service';
+import { PlatformBrandingService } from '../platform/platform-branding.service';
 import { WhatsAppBaileysClient } from './whatsapp-baileys.client';
 import { TenantMailerService } from './tenant-mailer.service';
 
@@ -63,6 +64,7 @@ export class ModulesService {
     private readonly subscriptions: PlatformSubscriptionService,
     private readonly baileys: WhatsAppBaileysClient,
     private readonly tenantMailer: TenantMailerService,
+    private readonly branding: PlatformBrandingService,
   ) {}
 
   async listCatalog() {
@@ -319,6 +321,17 @@ export class ModulesService {
     }
     await repo.save(row);
     return this.getSmtpConfig(user);
+  }
+
+  async testSmtpConfig(user: AuthUser, to: string) {
+    await this.assertModuleEnabled(user, 'smtp');
+    const tenant = await this.requireTenantFromUser(user);
+    const branding = await this.branding.getPublic();
+    return this.tenantMailer.sendTest(
+      tenant.schemaName,
+      to,
+      branding.productName || 'ISP Control',
+    );
   }
 
   async getMercadoPagoConfig(user: AuthUser) {

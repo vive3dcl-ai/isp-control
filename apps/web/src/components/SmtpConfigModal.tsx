@@ -4,7 +4,6 @@ import { apiFetch } from '../lib/api'
 import type { SmtpConfig } from '../lib/modules'
 import { ModalPortal } from './ModalPortal'
 
-
 const inputClass =
   'w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2.5 text-sm outline-none ring-[var(--accent)] focus:ring-2'
 
@@ -29,6 +28,9 @@ export function SmtpConfigModal({
   const [fromEmail, setFromEmail] = useState('')
   const [fromName, setFromName] = useState('')
   const [hasPassword, setHasPassword] = useState(false)
+  const [testTo, setTestTo] = useState('')
+  const [testMsg, setTestMsg] = useState<string | null>(null)
+  const [testErr, setTestErr] = useState<string | null>(null)
 
   const isPlatform = scope === 'platform'
   const endpoint = isPlatform
@@ -58,6 +60,8 @@ export function SmtpConfigModal({
 
   useEffect(() => {
     if (!open) return
+    setTestMsg(null)
+    setTestErr(null)
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') onClose()
     }
@@ -92,7 +96,25 @@ export function SmtpConfigModal({
     },
   })
 
+  const testMutation = useMutation({
+    mutationFn: () =>
+      apiFetch<{ ok: boolean }>(`${endpoint}/test`, {
+        method: 'POST',
+        body: JSON.stringify({ to: testTo.trim() }),
+      }),
+    onSuccess: () => {
+      setTestErr(null)
+      setTestMsg(`Correo de prueba enviado a ${testTo.trim()}`)
+    },
+    onError: (err: Error) => {
+      setTestMsg(null)
+      setTestErr(err.message)
+    },
+  })
+
   if (!open) return null
+
+  const savedReady = !!(query.data?.host?.trim() && query.data?.fromEmail?.trim())
 
   function onSubmit(e: FormEvent) {
     e.preventDefault()
@@ -123,7 +145,7 @@ export function SmtpConfigModal({
         <form onSubmit={onSubmit} className="space-y-3 px-5 py-4">
           <p className="text-sm text-[var(--text-muted)]">
             {isPlatform
-              ? 'Correo de la plataforma para avisos a administradores (p. ej. vencimiento de módulos).'
+              ? 'Correo de la plataforma para avisos a administradores y recuperación de contraseña.'
               : 'Credenciales del servidor de correo propio de la empresa. Se usarán para envío de facturas y avisos.'}
           </p>
 
@@ -245,6 +267,56 @@ export function SmtpConfigModal({
             )}
           </div>
         </form>
+
+        <div className="space-y-3 border-t border-[var(--border)] px-5 py-4">
+          <p className="text-sm font-medium">Probar envío</p>
+          <p className="text-xs text-[var(--text-muted)]">
+            Usa la configuración ya guardada. Guarda los cambios antes de
+            probar.
+          </p>
+          <label className="block text-sm">
+            <span className="mb-1 block text-[var(--text-muted)]">
+              Email de prueba
+            </span>
+            <input
+              type="email"
+              disabled={!canWrite}
+              className={inputClass}
+              placeholder="destino@ejemplo.com"
+              value={testTo}
+              onChange={(e) => setTestTo(e.target.value)}
+            />
+          </label>
+          {!savedReady && (
+            <p className="text-xs text-[var(--text-muted)]">
+              Guarda la configuración (host y remitente) antes de probar.
+            </p>
+          )}
+          {testMsg && (
+            <p className="text-sm text-[var(--success,var(--accent))]">{testMsg}</p>
+          )}
+          {testErr && (
+            <p className="text-sm text-[var(--danger)]">{testErr}</p>
+          )}
+          {canWrite && (
+            <button
+              type="button"
+              disabled={
+                !savedReady ||
+                !testTo.trim() ||
+                testMutation.isPending
+              }
+              onClick={() => {
+                setTestMsg(null)
+                setTestErr(null)
+                testMutation.mutate()
+              }}
+              className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-4 py-2 text-sm font-medium hover:bg-[var(--bg-elevated)] disabled:opacity-60"
+            >
+              {testMutation.isPending ? 'Enviando…' : 'Enviar prueba'}
+            </button>
+          )}
+        </div>
       </div>
     </div></ModalPortal>
   )

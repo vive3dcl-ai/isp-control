@@ -7,13 +7,16 @@ import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { PlatformAdmin } from './entities/platform-admin.entity';
+import { PasswordResetToken } from './entities/password-reset-token.entity';
 import { UserDirectory } from '../tenants/entities/user-directory.entity';
 import { Tenant } from '../tenants/entities/tenant.entity';
 import { DatabaseModule } from '../database/database.module';
+import { PlatformModule } from '../platform/platform.module';
 
 @Module({
   imports: [
     DatabaseModule,
+    PlatformModule,
     PassportModule.register({ defaultStrategy: 'jwt' }),
     JwtModule.registerAsync({
       imports: [ConfigModule],
@@ -39,7 +42,12 @@ import { DatabaseModule } from '../database/database.module';
         };
       },
     }),
-    TypeOrmModule.forFeature([PlatformAdmin, UserDirectory, Tenant]),
+    TypeOrmModule.forFeature([
+      PlatformAdmin,
+      UserDirectory,
+      Tenant,
+      PasswordResetToken,
+    ]),
   ],
   controllers: [AuthController],
   providers: [AuthService, JwtStrategy],

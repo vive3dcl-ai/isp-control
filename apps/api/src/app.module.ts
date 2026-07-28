@@ -14,6 +14,7 @@ import { CalendarModule } from './calendar/calendar.module';
 import { Tenant } from './tenants/entities/tenant.entity';
 import { UserDirectory } from './tenants/entities/user-directory.entity';
 import { PlatformAdmin } from './auth/entities/platform-admin.entity';
+import { PasswordResetToken } from './auth/entities/password-reset-token.entity';
 import { OnuCatalogItem } from './topology/entities/onu-catalog.entity';
 import { PlatformPaymentMethod } from './modules/entities/platform-payment-method.entity';
 import { PlatformModulePricing } from './modules/entities/platform-module-pricing.entity';
@@ -55,6 +56,7 @@ import { TenantMapDraft } from './crm/entities/tenant-map-draft.entity';
           Tenant,
           UserDirectory,
           PlatformAdmin,
+          PasswordResetToken,
           OnuCatalogItem,
           PlatformPaymentMethod,
           PlatformModulePricing,

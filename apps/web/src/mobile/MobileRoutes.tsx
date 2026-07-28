@@ -14,6 +14,8 @@ import { MobileNetworkMapPolesPage } from './MobileNetworkMapPolesPage'
 import { MobileLoginPage } from './MobileLoginPage'
 import { MobileRequireAuth } from './MobileRequireAuth'
 import { MobileInstallPrompt } from './MobileInstallPrompt'
+import { ForgotPasswordPage } from '../pages/ForgotPasswordPage'
+import { ResetPasswordPage } from '../pages/ResetPasswordPage'
 
 function MobilePwaEffects() {
   const branding = useBranding()
@@ -29,6 +31,18 @@ export function MobileRoutes() {
       <MobilePwaEffects />
       <Routes>
         <Route path="login" element={<MobileLoginPage />} />
+        <Route
+          path="recuperar"
+          element={
+            <ForgotPasswordPage channel="mobile" loginPath="/movil/login" />
+          }
+        />
+        <Route
+          path="reset-password"
+          element={
+            <ResetPasswordPage channel="mobile" loginPath="/movil/login" />
+          }
+        />
         <Route element={<MobileRequireAuth />}>
           <Route element={<MobileShell />}>
             <Route index element={<MobileHomePage />} />

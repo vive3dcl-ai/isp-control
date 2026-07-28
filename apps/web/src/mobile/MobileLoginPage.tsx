@@ -171,6 +171,15 @@ export function MobileLoginPage() {
               />
             </label>
 
+            <p className="text-right text-sm">
+              <Link
+                to="/movil/recuperar"
+                className="text-[var(--accent)] underline-offset-2 hover:underline"
+              >
+                ¿Olvidaste tu contraseña?
+              </Link>
+            </p>
+
             <label className="flex items-center gap-3 text-sm">
               <input
                 type="checkbox"

@@ -58,6 +58,11 @@ export class UpdateSmtpConfigDto {
   fromName?: string;
 }
 
+export class SmtpTestDto {
+  @IsEmail()
+  to!: string;
+}
+
 export class UpdateMercadoPagoConfigDto {
   @IsIn(['sandbox', 'production'])
   environment!: 'sandbox' | 'production';

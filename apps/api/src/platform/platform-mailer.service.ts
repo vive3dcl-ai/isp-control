@@ -1,4 +1,8 @@
-import { Injectable, Logger } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import * as nodemailer from 'nodemailer';
 import { Repository } from 'typeorm';
@@ -26,17 +30,72 @@ export class PlatformMailerService {
     return { sent: to.length };
   }
 
+  /**
+   * Envía correo con SMTP de plataforma.
+   * Si SMTP no está configurado, solo registra warning (no lanza).
+   * @returns true si se intentó enviar.
+   */
   async sendMail(
     to: string | string[],
     subject: string,
     text: string,
     html?: string,
-  ) {
+  ): Promise<boolean> {
     const row = await this.smtp.getOrCreate();
     if (!row.host?.trim() || !row.fromEmail?.trim()) {
-      this.logger.warn(`SMTP plataforma no configurado; no se envió: ${subject}`);
-      return;
+      this.logger.warn(
+        `SMTP plataforma no configurado; no se envió: ${subject}`,
+      );
+      return false;
     }
+    await this.dispatch(row, to, subject, text, html);
+    return true;
+  }
+
+  /** Prueba SMTP: exige config y propaga errores de transporte. */
+  async sendTest(toRaw: string, productName = 'ISP Control') {
+    const to = toRaw.trim().toLowerCase();
+    if (!to || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
+      throw new BadRequestException('Correo de destino inválido');
+    }
+    const row = await this.smtp.getOrCreate();
+    if (!row.host?.trim() || !row.fromEmail?.trim()) {
+      throw new BadRequestException(
+        'SMTP de plataforma no configurado. Guarda host y remitente primero.',
+      );
+    }
+    const subject = `Prueba SMTP — ${productName}`;
+    const text =
+      `Este es un correo de prueba de ${productName}.\n` +
+      `Si lo recibiste, la configuración SMTP de la plataforma funciona correctamente.`;
+    try {
+      await this.dispatch(row, to, subject, text);
+    } catch (err) {
+      this.logger.error(
+        `Error prueba SMTP plataforma: ${(err as Error).message}`,
+      );
+      throw new BadRequestException(
+        `No se pudo enviar el correo: ${(err as Error).message}`,
+      );
+    }
+    return { ok: true as const };
+  }
+
+  private async dispatch(
+    row: {
+      host: string;
+      port: number;
+      secure: boolean;
+      username: string;
+      password: string;
+      fromEmail: string;
+      fromName: string;
+    },
+    to: string | string[],
+    subject: string,
+    text: string,
+    html?: string,
+  ) {
     const transporter = nodemailer.createTransport({
       host: row.host,
       port: row.port,

@@ -190,6 +190,26 @@ export async function loginRequest(
   })
 }
 
+export async function forgotPasswordRequest(
+  email: string,
+  channel: 'web' | 'mobile' = 'web',
+): Promise<{ ok: boolean }> {
+  return apiFetch<{ ok: boolean }>('/auth/forgot-password', {
+    method: 'POST',
+    body: JSON.stringify({ email, channel }),
+  })
+}
+
+export async function resetPasswordRequest(
+  token: string,
+  newPassword: string,
+): Promise<{ ok: boolean }> {
+  return apiFetch<{ ok: boolean }>('/auth/reset-password', {
+    method: 'POST',
+    body: JSON.stringify({ token, newPassword }),
+  })
+}
+
 export async function meRequest(): Promise<AuthUser> {
   return apiFetch<AuthUser>('/auth/me')
 }

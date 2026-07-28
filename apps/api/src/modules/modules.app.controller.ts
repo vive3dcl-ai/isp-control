@@ -14,6 +14,7 @@ import {
   UpdateMercadoPagoConfigDto,
   UpdateSmtpConfigDto,
   UpdateWhatsAppConfigDto,
+  SmtpTestDto,
 } from './dto/modules.dto';
 
 @Controller('app/settings/modules')
@@ -36,6 +37,12 @@ export class ModulesAppController {
   @TenantRoles(...CRM_WRITE_ROLES)
   updateSmtp(@CurrentUser() user: AuthUser, @Body() dto: UpdateSmtpConfigDto) {
     return this.modules.updateSmtpConfig(user, dto);
+  }
+
+  @Post('smtp/test')
+  @TenantRoles(...CRM_WRITE_ROLES)
+  testSmtp(@CurrentUser() user: AuthUser, @Body() dto: SmtpTestDto) {
+    return this.modules.testSmtpConfig(user, dto.to);
   }
 
   @Get('mercadopago')

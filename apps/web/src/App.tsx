@@ -3,6 +3,8 @@ import { AuthProvider } from './auth/AuthContext'
 import { GuestRoute, ProtectedRoute } from './auth/ProtectedRoute'
 import { NotifyProvider } from './components/NotifyProvider'
 import { LoginPage } from './pages/LoginPage'
+import { ForgotPasswordPage } from './pages/ForgotPasswordPage'
+import { ResetPasswordPage } from './pages/ResetPasswordPage'
 import { AdminDashboardPage } from './pages/AdminDashboardPage'
 import { AdminTenantsPage } from './pages/AdminTenantsPage'
 import { AdminTenantDetailPage } from './pages/AdminTenantDetailPage'
@@ -42,6 +44,8 @@ export default function App() {
 
           <Route element={<GuestRoute />}>
             <Route path="/login" element={<LoginPage />} />
+            <Route path="/recuperar" element={<ForgotPasswordPage />} />
+            <Route path="/reset-password" element={<ResetPasswordPage />} />
           </Route>
 
           <Route element={<ProtectedRoute roles={[...PLATFORM_ROLES]} />}>

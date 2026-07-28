@@ -80,6 +80,33 @@ export class TenantMailerService {
       );
     }
   }
+
+  async sendTest(
+    schemaName: string,
+    toRaw: string,
+    productName = 'ISP Control',
+  ) {
+    const to = toRaw.trim().toLowerCase();
+    await this.sendMail(schemaName, {
+      to,
+      subject: `Prueba SMTP — ${productName}`,
+      html:
+        `<p>Este es un correo de prueba de <strong>${escapeHtml(productName)}</strong>.</p>` +
+        `<p>Si lo recibiste, la configuración SMTP de la empresa funciona correctamente.</p>`,
+      text:
+        `Este es un correo de prueba de ${productName}.\n` +
+        `Si lo recibiste, la configuración SMTP de la empresa funciona correctamente.`,
+    });
+    return { ok: true as const };
+  }
+}
+
+function escapeHtml(s: string) {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
 function stripHtml(html: string): string {

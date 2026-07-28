@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { useBranding } from '../branding/BrandingContext'
 import { BrandMark } from '../components/BrandMark'
@@ -86,6 +86,15 @@ export function LoginPage() {
               placeholder="••••••••"
             />
           </label>
+
+          <p className="mb-4 text-right text-sm">
+            <Link
+              to="/recuperar"
+              className="text-[var(--accent)] underline-offset-2 hover:underline"
+            >
+              ¿Olvidaste tu contraseña?
+            </Link>
+          </p>
 
           <label className="mb-4 flex items-center gap-2.5 text-sm">
             <input
