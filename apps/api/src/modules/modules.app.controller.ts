@@ -14,8 +14,8 @@ import {
   UpdateMercadoPagoConfigDto,
   UpdateSmtpConfigDto,
   UpdateWhatsAppConfigDto,
-  SmtpTestDto,
 } from './dto/modules.dto';
+import { SmtpTestDto } from '../platform/dto/smtp-test.dto';
 
 @Controller('app/settings/modules')
 @UseGuards(JwtAuthGuard, RolesGuard, TenantRolesGuard)

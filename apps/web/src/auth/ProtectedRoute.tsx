@@ -41,7 +41,14 @@ export function GuestRoute() {
     )
   }
 
-  if (user) {
+  // Recuperar/reset deben funcionar aunque haya sesión (enlace del correo).
+  const isPasswordRecovery =
+    location.pathname === '/recuperar' ||
+    location.pathname.startsWith('/recuperar/') ||
+    location.pathname === '/reset-password' ||
+    location.pathname.startsWith('/reset-password/')
+
+  if (user && !isPasswordRecovery) {
     const dest =
       user.role === 'tenant_user' && location.pathname.startsWith('/movil')
         ? '/movil'

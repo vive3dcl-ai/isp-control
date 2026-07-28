@@ -13,6 +13,7 @@ import {
 import { PlatformBrandingService } from '../platform/platform-branding.service';
 import {
   buildPlatformEmailHtml,
+  escapeHtml,
   textToEmailHtml,
 } from '../platform/platform-email-layout';
 
@@ -43,8 +44,6 @@ export class TenantMailerService {
       html: string;
       text?: string;
       title?: string;
-      /** Si true, no envuelve con el layout de plataforma (p. ej. documento ya completo). */
-      rawHtml?: boolean;
       attachments?: Array<{
         filename: string;
         content: Buffer;
@@ -67,19 +66,17 @@ export class TenantMailerService {
     const bodyHtml = opts.html?.trim()
       ? opts.html
       : textToEmailHtml(opts.text || '');
-    const html = opts.rawHtml
-      ? bodyHtml
-      : buildPlatformEmailHtml({
-          brand: {
-            productName: brand.productName,
-            logoUrl: brand.logoUrl,
-            footerText: brand.footerText,
-            footerCopyright: brand.footerCopyright,
-          },
-          bodyHtml,
-          title: opts.title,
-          preheader: opts.subject,
-        });
+    const html = buildPlatformEmailHtml({
+      brand: {
+        productName: brand.productName,
+        logoUrl: brand.logoUrl,
+        footerText: brand.footerText,
+        footerCopyright: brand.footerCopyright,
+      },
+      bodyHtml,
+      title: opts.title,
+      preheader: opts.subject,
+    });
     const text = opts.text?.trim() || stripHtml(bodyHtml);
 
     const transporter = nodemailer.createTransport({
@@ -122,7 +119,7 @@ export class TenantMailerService {
       to,
       subject: `Prueba SMTP — ${productName}`,
       title: 'Prueba de correo',
-      html: `<p style="margin:0 0 14px">Este es un correo de prueba de <strong>${escapeLocal(productName)}</strong>.</p>
+      html: `<p style="margin:0 0 14px">Este es un correo de prueba de <strong>${escapeHtml(productName)}</strong>.</p>
 <p style="margin:0">Si lo recibiste, la configuración SMTP de la empresa funciona correctamente.</p>`,
       text:
         `Este es un correo de prueba de ${productName}.\n` +
@@ -130,14 +127,6 @@ export class TenantMailerService {
     });
     return { ok: true as const };
   }
-}
-
-function escapeLocal(s: string) {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
 }
 
 function stripHtml(html: string): string {

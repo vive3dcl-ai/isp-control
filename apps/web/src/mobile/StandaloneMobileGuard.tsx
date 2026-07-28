@@ -5,6 +5,7 @@ import { isMobilePwaInstalled } from '../lib/mobilePwa'
 /**
  * Si la app está instalada (standalone), fuerza vivir solo en /movil.
  * Evita ir a /app, /login o /admin desde el icono PWA.
+ * Conserva query (p. ej. token de reset) al redirigir rutas de recuperación.
  */
 export function StandaloneMobileGuard({
   children,
@@ -24,8 +25,16 @@ export function StandaloneMobileGuard({
       navigate('/movil/login', { replace: true })
       return
     }
+    if (path === '/recuperar' || path.startsWith('/recuperar/')) {
+      navigate(`/movil/recuperar${location.search}`, { replace: true })
+      return
+    }
+    if (path === '/reset-password' || path.startsWith('/reset-password/')) {
+      navigate(`/movil/reset-password${location.search}`, { replace: true })
+      return
+    }
     navigate('/movil', { replace: true })
-  }, [location.pathname, navigate])
+  }, [location.pathname, location.search, navigate])
 
   return <>{children}</>
 }
