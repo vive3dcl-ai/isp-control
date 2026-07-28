@@ -46,6 +46,7 @@ import { PlatformModulePricing } from './entities/platform-module-pricing.entity
 import { FxService } from './fx.service';
 import { PlatformSubscriptionService } from '../platform/platform-subscription.service';
 import { PlatformBrandingService } from '../platform/platform-branding.service';
+import { escapeHtml } from '../platform/platform-email-layout';
 import { WhatsAppBaileysClient } from './whatsapp-baileys.client';
 import { TenantMailerService } from './tenant-mailer.service';
 
@@ -672,12 +673,13 @@ export class ModulesService {
     await this.tenantMailer.sendMail(tenant.schemaName, {
       to,
       subject: `[${tenant.name}] WhatsApp Baileys requiere atención`,
-      html: `<p>Hola,</p>
-<p>La sesión de <strong>WhatsApp Baileys</strong> de <strong>${tenant.name}</strong> necesita atención.</p>
-<p><strong>Estado:</strong> ${cfg.baileysStatus}<br/>
-<strong>Motivo:</strong> ${reason}</p>
-<p>Entra a <em>Ajustes → Empresa → Integraciones → WhatsApp</em> para reconectar (escanea el QR si hace falta).</p>
-<p>Baileys no es oficial y puede desconectarse; Cloud API es la opción estable.</p>`,
+      title: 'WhatsApp requiere atención',
+      html: `<p style="margin:0 0 14px">Hola,</p>
+<p style="margin:0 0 14px">La sesión de <strong>WhatsApp Baileys</strong> de <strong>${escapeHtml(tenant.name)}</strong> necesita atención.</p>
+<p style="margin:0 0 14px"><strong>Estado:</strong> ${escapeHtml(String(cfg.baileysStatus))}<br/>
+<strong>Motivo:</strong> ${escapeHtml(reason)}</p>
+<p style="margin:0 0 14px">Entra a <em>Ajustes → Empresa → Integraciones → WhatsApp</em> para reconectar (escanea el QR si hace falta).</p>
+<p style="margin:0;color:#64748b;font-size:13px">Baileys no es oficial y puede desconectarse; Cloud API es la opción estable.</p>`,
     });
   }
 

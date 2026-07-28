@@ -10,12 +10,20 @@ import {
   isSmtpConfigured,
   type SmtpModuleConfig,
 } from './module-catalog';
+import { PlatformBrandingService } from '../platform/platform-branding.service';
+import {
+  buildPlatformEmailHtml,
+  textToEmailHtml,
+} from '../platform/platform-email-layout';
 
 @Injectable()
 export class TenantMailerService {
   private readonly logger = new Logger(TenantMailerService.name);
 
-  constructor(private readonly tenantConnections: TenantConnectionService) {}
+  constructor(
+    private readonly tenantConnections: TenantConnectionService,
+    private readonly branding: PlatformBrandingService,
+  ) {}
 
   async getSmtpConfig(schemaName: string): Promise<SmtpModuleConfig> {
     const repo =
@@ -34,6 +42,9 @@ export class TenantMailerService {
       subject: string;
       html: string;
       text?: string;
+      title?: string;
+      /** Si true, no envuelve con el layout de plataforma (p. ej. documento ya completo). */
+      rawHtml?: boolean;
       attachments?: Array<{
         filename: string;
         content: Buffer;
@@ -51,6 +62,26 @@ export class TenantMailerService {
         'SMTP no configurado. Configúralo en Ajustes → Integraciones.',
       );
     }
+
+    const brand = await this.branding.getPublic();
+    const bodyHtml = opts.html?.trim()
+      ? opts.html
+      : textToEmailHtml(opts.text || '');
+    const html = opts.rawHtml
+      ? bodyHtml
+      : buildPlatformEmailHtml({
+          brand: {
+            productName: brand.productName,
+            logoUrl: brand.logoUrl,
+            footerText: brand.footerText,
+            footerCopyright: brand.footerCopyright,
+          },
+          bodyHtml,
+          title: opts.title,
+          preheader: opts.subject,
+        });
+    const text = opts.text?.trim() || stripHtml(bodyHtml);
+
     const transporter = nodemailer.createTransport({
       host: cfg.host,
       port: cfg.port,
@@ -67,8 +98,8 @@ export class TenantMailerService {
         from,
         to,
         subject: opts.subject,
-        text: opts.text ?? stripHtml(opts.html),
-        html: opts.html,
+        text,
+        html,
         attachments: opts.attachments,
       });
     } catch (err) {
@@ -90,9 +121,9 @@ export class TenantMailerService {
     await this.sendMail(schemaName, {
       to,
       subject: `Prueba SMTP — ${productName}`,
-      html:
-        `<p>Este es un correo de prueba de <strong>${escapeHtml(productName)}</strong>.</p>` +
-        `<p>Si lo recibiste, la configuración SMTP de la empresa funciona correctamente.</p>`,
+      title: 'Prueba de correo',
+      html: `<p style="margin:0 0 14px">Este es un correo de prueba de <strong>${escapeLocal(productName)}</strong>.</p>
+<p style="margin:0">Si lo recibiste, la configuración SMTP de la empresa funciona correctamente.</p>`,
       text:
         `Este es un correo de prueba de ${productName}.\n` +
         `Si lo recibiste, la configuración SMTP de la empresa funciona correctamente.`,
@@ -101,7 +132,7 @@ export class TenantMailerService {
   }
 }
 
-function escapeHtml(s: string) {
+function escapeLocal(s: string) {
   return s
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')

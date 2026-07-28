@@ -23,6 +23,10 @@ import {
   type ModuleId,
 } from '../modules/module-catalog';
 import { PlatformPublicUrlsService } from '../platform/platform-public-urls.service';
+import {
+  emailCtaButton,
+  escapeHtml,
+} from '../platform/platform-email-layout';
 import { InvoicePdfService } from '../billing/invoice-pdf.service';
 import { Invoice } from '../billing/entities/invoice.entity';
 import {
@@ -904,6 +908,7 @@ export class ClientPortalService {
       await this.mailer.sendMail(opts.schemaName, {
         to: email,
         subject: `Bienvenido a ${tenant.name} — crea tu cuenta`,
+        title: 'Activa tu portal',
         html: this.welcomeHtml({
           companyName: tenant.name,
           clientName: opts.name || email,
@@ -924,17 +929,10 @@ export class ClientPortalService {
     activateUrl: string;
   }) {
     return `
-      <div style="font-family:system-ui,sans-serif;max-width:560px;margin:0 auto;color:#111">
-        <h1 style="font-size:22px">Bienvenido a ${escapeHtml(opts.companyName)}</h1>
-        <p>Hola ${escapeHtml(opts.clientName)},</p>
-        <p>Tu servicio ya está activo. Crea tu cuenta en el portal de clientes para ver tus servicios, consumo, señal y facturas.</p>
-        <p style="margin:28px 0">
-          <a href="${opts.activateUrl}" style="background:#0ea5e9;color:#fff;padding:12px 20px;border-radius:8px;text-decoration:none;font-weight:600">
-            Crear mi cuenta
-          </a>
-        </p>
-        <p style="color:#666;font-size:13px">El enlace caduca en 7 días. Si no solicitaste esto, ignora este correo.</p>
-      </div>
+      <p style="margin:0 0 14px">Hola ${escapeHtml(opts.clientName)},</p>
+      <p style="margin:0 0 14px">Tu servicio en <strong>${escapeHtml(opts.companyName)}</strong> ya está activo. Crea tu cuenta en el portal de clientes para ver servicios, consumo, señal y facturas.</p>
+      ${emailCtaButton(opts.activateUrl, 'Crear mi cuenta')}
+      <p style="margin:0;color:#64748b;font-size:13px">El enlace caduca en 7 días. Si no solicitaste esto, ignora este correo.</p>
     `;
   }
 
@@ -1042,12 +1040,4 @@ export class ClientPortalService {
       archivedAt: user.archivedAt,
     };
   }
-}
-
-function escapeHtml(s: string) {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
 }

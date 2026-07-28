@@ -94,7 +94,9 @@ export class ModuleExpiryScheduler
         `Si no se paga a tiempo, el acceso puede quedar en mora.`,
       ].join('\n');
       try {
-        await this.mailer.sendMail(tenant.email.trim(), subject, text);
+        await this.mailer.sendMail(tenant.email.trim(), subject, text, undefined, {
+          title: `Renovación en ${days} días`,
+        });
         await this.subscriptions.markChargeNotified(c.id, days);
       } catch (err) {
         this.logger.warn(
@@ -128,7 +130,13 @@ export class ModuleExpiryScheduler
       try {
         // Aviso al admin del tenant si hay email; si no, a platform admins.
         if (tenant?.email?.trim()) {
-          await this.mailer.sendMail(tenant.email.trim(), subject, text);
+          await this.mailer.sendMail(
+            tenant.email.trim(),
+            subject,
+            text,
+            undefined,
+            { title: `Módulo ${modName}` },
+          );
         } else {
           await this.mailer.sendToPlatformAdmins(subject, text);
         }

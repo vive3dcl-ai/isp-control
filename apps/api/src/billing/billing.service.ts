@@ -324,6 +324,7 @@ export class BillingService {
     await this.mailer.sendMail(schema, {
       to,
       subject: built.subject,
+      title: built.subject,
       html: built.bodyHtml,
       attachments: [
         {
@@ -845,6 +846,7 @@ export class BillingService {
       await this.mailer.sendMail(schema, {
         to: built.clientEmail,
         subject: built.subject,
+        title: built.subject,
         html: built.bodyHtml,
         attachments: [
           {

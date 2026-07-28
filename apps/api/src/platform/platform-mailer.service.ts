@@ -8,6 +8,12 @@ import * as nodemailer from 'nodemailer';
 import { Repository } from 'typeorm';
 import { PlatformAdmin } from '../auth/entities/platform-admin.entity';
 import { PlatformSmtpService } from './platform-smtp.service';
+import { PlatformBrandingService } from './platform-branding.service';
+import {
+  buildPlatformEmailHtml,
+  textToEmailHtml,
+  type PlatformEmailBrand,
+} from './platform-email-layout';
 
 @Injectable()
 export class PlatformMailerService {
@@ -15,6 +21,7 @@ export class PlatformMailerService {
 
   constructor(
     private readonly smtp: PlatformSmtpService,
+    private readonly branding: PlatformBrandingService,
     @InjectRepository(PlatformAdmin)
     private readonly admins: Repository<PlatformAdmin>,
   ) {}
@@ -31,15 +38,15 @@ export class PlatformMailerService {
   }
 
   /**
-   * Envía correo con SMTP de plataforma.
+   * Envía correo HTML con tema de plataforma.
    * Si SMTP no está configurado, solo registra warning (no lanza).
-   * @returns true si se intentó enviar.
    */
   async sendMail(
     to: string | string[],
     subject: string,
     text: string,
     html?: string,
+    opts?: { title?: string },
   ): Promise<boolean> {
     const row = await this.smtp.getOrCreate();
     if (!row.host?.trim() || !row.fromEmail?.trim()) {
@@ -48,11 +55,19 @@ export class PlatformMailerService {
       );
       return false;
     }
-    await this.dispatch(row, to, subject, text, html);
+    const brand = await this.resolveBrand();
+    const bodyHtml = html?.trim() ? html : textToEmailHtml(text);
+    const fullHtml = buildPlatformEmailHtml({
+      brand,
+      bodyHtml,
+      title: opts?.title,
+      preheader: subject,
+    });
+    const plain = text?.trim() || stripTags(bodyHtml);
+    await this.dispatch(row, to, subject, plain, fullHtml);
     return true;
   }
 
-  /** Prueba SMTP: exige config y propaga errores de transporte. */
   async sendTest(toRaw: string, productName = 'ISP Control') {
     const to = toRaw.trim().toLowerCase();
     if (!to || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
@@ -66,11 +81,19 @@ export class PlatformMailerService {
     }
     const subject = `Prueba SMTP — ${productName}`;
     const text =
-      `Este es un correo de prueba de ${productName}.\n` +
+      `Este es un correo de prueba de ${productName}.\n\n` +
       `Si lo recibiste, la configuración SMTP de la plataforma funciona correctamente.`;
     try {
-      await this.dispatch(row, to, subject, text);
+      const ok = await this.sendMail(to, subject, text, undefined, {
+        title: 'Prueba de correo',
+      });
+      if (!ok) {
+        throw new BadRequestException(
+          'SMTP de plataforma no configurado. Guarda host y remitente primero.',
+        );
+      }
     } catch (err) {
+      if (err instanceof BadRequestException) throw err;
       this.logger.error(
         `Error prueba SMTP plataforma: ${(err as Error).message}`,
       );
@@ -79,6 +102,16 @@ export class PlatformMailerService {
       );
     }
     return { ok: true as const };
+  }
+
+  private async resolveBrand(): Promise<PlatformEmailBrand> {
+    const b = await this.branding.getPublic();
+    return {
+      productName: b.productName,
+      logoUrl: b.logoUrl,
+      footerText: b.footerText,
+      footerCopyright: b.footerCopyright,
+    };
   }
 
   private async dispatch(
@@ -94,7 +127,7 @@ export class PlatformMailerService {
     to: string | string[],
     subject: string,
     text: string,
-    html?: string,
+    html: string,
   ) {
     const transporter = nodemailer.createTransport({
       host: row.host,
@@ -112,7 +145,15 @@ export class PlatformMailerService {
       to: Array.isArray(to) ? to.join(', ') : to,
       subject,
       text,
-      html: html ?? text.replace(/\n/g, '<br/>'),
+      html,
     });
   }
+}
+
+function stripTags(html: string): string {
+  return html
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }

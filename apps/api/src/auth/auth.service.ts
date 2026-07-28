@@ -20,6 +20,10 @@ import { TenantConnectionService } from '../database/tenant-connection.service';
 import { PlatformMailerService } from '../platform/platform-mailer.service';
 import { PlatformPublicUrlsService } from '../platform/platform-public-urls.service';
 import { PlatformBrandingService } from '../platform/platform-branding.service';
+import {
+  emailCtaButton,
+  escapeHtml,
+} from '../platform/platform-email-layout';
 import { LoginDto } from './dto/login.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
@@ -416,12 +420,14 @@ export class AuthService {
         `Abre este enlace (válido 1 hora):\n${resetUrl}\n\n` +
         `Si no solicitaste este cambio, ignora este correo.`;
       const html =
-        `<p>Hola${target.name ? ` ${escapeHtml(target.name)}` : ''},</p>` +
-        `<p>Recibimos una solicitud para restablecer tu contraseña en <strong>${escapeHtml(productName)}</strong>.</p>` +
-        `<p><a href="${resetUrl}">Restablecer contraseña</a></p>` +
-        `<p style="color:#666;font-size:13px">El enlace caduca en 1 hora. Si no solicitaste este cambio, ignora este correo.</p>`;
+        `<p style="margin:0 0 14px">Hola${target.name ? ` ${escapeHtml(target.name)}` : ''},</p>` +
+        `<p style="margin:0 0 14px">Recibimos una solicitud para restablecer tu contraseña en <strong>${escapeHtml(productName)}</strong>.</p>` +
+        emailCtaButton(resetUrl, 'Restablecer contraseña') +
+        `<p style="margin:0;color:#64748b;font-size:13px">El enlace caduca en 1 hora. Si no solicitaste este cambio, ignora este correo.</p>`;
 
-      await this.platformMailer.sendMail(email, subject, text, html);
+      await this.platformMailer.sendMail(email, subject, text, html, {
+        title: 'Recuperar contraseña',
+      });
     } catch (err) {
       this.logger.error(
         `forgotPassword error for ${email}: ${(err as Error).message}`,
@@ -655,12 +661,4 @@ export class AuthService {
 
 function hashResetToken(raw: string) {
   return createHash('sha256').update(raw).digest('hex');
-}
-
-function escapeHtml(s: string) {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
 }
