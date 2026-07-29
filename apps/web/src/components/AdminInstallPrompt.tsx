@@ -104,7 +104,7 @@ export function AdminInstallPrompt() {
       <div className="mx-auto max-w-lg rounded-2xl border border-[var(--border)] bg-[var(--bg-elevated)] p-4 shadow-2xl shadow-black/40">
         <div className="mb-3 flex items-start justify-between gap-3">
           <div>
-            <p className="text-sm font-semibold">Instalá Administración ISP</p>
+            <p className="text-sm font-semibold">Instala Administración ISP</p>
             <p className="mt-1 text-xs text-[var(--text-muted)]">
               Acceso al panel completo desde el escritorio o el móvil, como una app.
             </p>

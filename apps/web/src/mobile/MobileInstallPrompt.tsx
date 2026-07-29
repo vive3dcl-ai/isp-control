@@ -103,7 +103,7 @@ export function MobileInstallPrompt() {
       <div className="mx-auto max-w-lg rounded-2xl border border-[var(--border)] bg-[var(--bg-elevated)] p-4 shadow-2xl shadow-black/40">
         <div className="mb-3 flex items-start justify-between gap-3">
           <div>
-            <p className="text-sm font-semibold">Instalá Técnico ISP</p>
+            <p className="text-sm font-semibold">Instala Técnico ISP</p>
             <p className="mt-1 text-xs text-[var(--text-muted)]">
               App de campo: instalar, calendario y mapa, sin salir de la sección
               móvil.
