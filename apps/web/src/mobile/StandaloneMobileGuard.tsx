@@ -1,11 +1,10 @@
 import { useEffect } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { isMobilePwaInstalled } from '../lib/mobilePwa'
+import { isTechPwaSession, syncPwaKindFromLocation } from '../lib/pwa'
 
 /**
- * Si la app está instalada (standalone), fuerza vivir solo en /movil.
- * Evita ir a /app, /login o /admin desde el icono PWA.
- * Conserva query (p. ej. token de reset) al redirigir rutas de recuperación.
+ * Solo la PWA “Técnico ISP” (scope /movil) debe quedarse en /movil.
+ * La PWA “Administración ISP” puede navegar el panel completo.
  */
 export function StandaloneMobileGuard({
   children,
@@ -16,7 +15,8 @@ export function StandaloneMobileGuard({
   const navigate = useNavigate()
 
   useEffect(() => {
-    if (!isMobilePwaInstalled()) return
+    syncPwaKindFromLocation()
+    if (!isTechPwaSession()) return
     const path = location.pathname
     if (path.startsWith('/movil')) return
     // Portal de clientes puede quedar fuera del scope móvil.

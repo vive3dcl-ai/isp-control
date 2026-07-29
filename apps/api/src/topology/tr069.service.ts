@@ -79,17 +79,30 @@ export class Tr069Service {
   private async probeAcsServices(acsUrl: string, acsPort: number) {
     const ep = this.parseAcsEndpoint(acsUrl, acsPort);
     const cwmpPort = ep?.port || acsPort || DEFAULT_TR069_ACS_PORT;
+    const nbiFromEnv = this.hostFromUrl(process.env.TR069_NBI_URL);
     const candidates = [
-      ep?.host,
+      // Prefer Docker service name (shared netns with GenieACS in prod).
       process.env.TR069_ACS_PROBE_HOST,
+      nbiFromEnv,
+      'vpn-concentrator',
+      ep?.host,
       'host.docker.internal',
       '172.17.0.1',
       '127.0.0.1',
     ].filter((h): h is string => Boolean(h?.trim()));
 
+    // Unique preserve order
+    const seen = new Set<string>();
+    const hosts = candidates.filter((h) => {
+      const key = h.trim().toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
     let probeHost: string | null = null;
     let cwmp: AcsServiceStatus = 'offline';
-    for (const host of candidates) {
+    for (const host of hosts) {
       const st = await this.probeTcp(host, cwmpPort);
       if (st === 'online') {
         probeHost = host;
@@ -110,6 +123,16 @@ export class Tr069Service {
     }
 
     return { cwmp, nbi, fs, nbiEndpoint, probedVia: probeHost };
+  }
+
+  private hostFromUrl(raw: string | undefined): string | null {
+    const v = raw?.trim();
+    if (!v) return null;
+    try {
+      return new URL(v).hostname || null;
+    } catch {
+      return null;
+    }
   }
 
   private parseAcsEndpoint(acsUrl: string, fallbackPort: number) {

@@ -1,6 +1,13 @@
-/* Service worker — PWA móvil + Web Push */
-const CACHE = 'isp-movil-shell-v1'
-const SHELL = ['/movil', '/movil/', '/favicon.svg', '/index.html']
+/* Service worker — PWA Técnico + Administración + Web Push */
+const CACHE = 'isp-pwa-shell-v2'
+const SHELL = [
+  '/',
+  '/login',
+  '/movil',
+  '/movil/',
+  '/favicon.svg',
+  '/index.html',
+]
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -30,8 +37,16 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(req.url)
   if (url.origin !== self.location.origin) return
 
-  // App shell /movil: network-first, fallback cache
-  if (url.pathname.startsWith('/movil') || url.pathname === '/') {
+  // App shell: network-first, fallback cache (SPA)
+  if (
+    url.pathname === '/' ||
+    url.pathname.startsWith('/movil') ||
+    url.pathname.startsWith('/login') ||
+    url.pathname.startsWith('/app') ||
+    url.pathname.startsWith('/admin') ||
+    url.pathname.startsWith('/recuperar') ||
+    url.pathname.startsWith('/reset-password')
+  ) {
     event.respondWith(
       fetch(req)
         .then((res) => {
@@ -73,7 +88,7 @@ self.addEventListener('push', (event) => {
   let data = {
     title: 'ISP Control',
     body: '',
-    link: '/movil',
+    link: '/app',
     tag: 'isp-control',
   }
   try {
@@ -93,7 +108,7 @@ self.addEventListener('push', (event) => {
       body: data.body || '',
       tag: data.tag || 'isp-control',
       renotify: true,
-      data: { link: data.link || '/movil', notificationId: data.notificationId },
+      data: { link: data.link || '/app', notificationId: data.notificationId },
       icon: '/favicon.svg',
       badge: '/favicon.svg',
     }),
@@ -103,7 +118,7 @@ self.addEventListener('push', (event) => {
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()
   const link =
-    (event.notification.data && event.notification.data.link) || '/movil'
+    (event.notification.data && event.notification.data.link) || '/app'
   const url = new URL(link, self.location.origin).href
 
   event.waitUntil(

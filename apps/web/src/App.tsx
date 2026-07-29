@@ -1,4 +1,5 @@
-import { Navigate, Route, Routes } from 'react-router-dom'
+import { useEffect } from 'react'
+import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { AuthProvider } from './auth/AuthContext'
 import { GuestRoute, ProtectedRoute } from './auth/ProtectedRoute'
 import { NotifyProvider } from './components/NotifyProvider'
@@ -32,13 +33,43 @@ import { AdminTenantUsersPage } from './pages/AdminTenantUsersPage'
 import { PortalRoutes } from './portal/PortalRoutes'
 import { MobileRoutes } from './mobile/MobileRoutes'
 import { StandaloneMobileGuard } from './mobile/StandaloneMobileGuard'
+import { MobileInstallPrompt } from './mobile/MobileInstallPrompt'
+import { AdminInstallPrompt } from './components/AdminInstallPrompt'
+import { useBranding } from './branding/BrandingContext'
+import {
+  applyAdminPwaManifest,
+  applyTechPwaManifest,
+  syncPwaKindFromLocation,
+} from './lib/pwa'
 import { PLATFORM_ROLES } from './lib/api'
+
+/** Un solo punto: manifest Técnico en /movil, Administración en el resto. */
+function DualPwaHost() {
+  const location = useLocation()
+  const branding = useBranding()
+  const isTech = location.pathname.startsWith('/movil')
+  const isPortal =
+    location.pathname.includes('/portal') ||
+    /^\/[^/]+\/portal/.test(location.pathname)
+
+  useEffect(() => {
+    syncPwaKindFromLocation()
+    if (isPortal) return
+    if (isTech) applyTechPwaManifest(branding)
+    else applyAdminPwaManifest(branding)
+  }, [branding, isTech, isPortal])
+
+  if (isPortal) return null
+  if (isTech) return <MobileInstallPrompt />
+  return <AdminInstallPrompt />
+}
 
 export default function App() {
   return (
     <AuthProvider>
       <NotifyProvider>
         <StandaloneMobileGuard>
+        <DualPwaHost />
         <Routes>
           <Route path="/:slug/portal/*" element={<PortalRoutes />} />
 

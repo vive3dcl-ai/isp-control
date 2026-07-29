@@ -6,7 +6,7 @@ import {
 } from '../lib/api'
 import { useBranding } from '../branding/BrandingContext'
 import { BrandMark } from '../components/BrandMark'
-import { isMobilePwaInstalled } from '../lib/mobilePwa'
+import { isTechPwaSession } from '../lib/pwa'
 
 type PasswordCred = {
   id: string
@@ -62,7 +62,7 @@ export function MobileLoginPage() {
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   // App instalada: no ofrecer panel escritorio
-  const asApp = isMobilePwaInstalled()
+  const asApp = isTechPwaSession()
 
   useEffect(() => {
     let cancelled = false
@@ -90,14 +90,14 @@ export function MobileLoginPage() {
     setSubmitting(true)
     try {
       // Forzar persistencia en app móvil / PWA instalada.
-      const persist = remember || isMobilePwaInstalled()
+      const persist = remember || isTechPwaSession()
       const logged = await login(email, password, {
         remember: persist,
         channel: 'mobile',
       })
       if (asApp && logged.role !== 'tenant_user') {
         await logout()
-        setError('Esta app es solo para usuarios del panel móvil.')
+        setError('Esta app es solo para usuarios del panel técnico.')
         return
       }
       if (persist) {
@@ -129,7 +129,7 @@ export function MobileLoginPage() {
             {branding.productName}
           </p>
           <h1 className="mt-1.5 text-2xl font-semibold tracking-tight">
-            Acceso móvil
+            Acceso técnico
           </h1>
         </div>
 

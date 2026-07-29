@@ -1,16 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 import {
+  isAdminPwaSession,
   isAndroidDevice,
   isIosDevice,
   isPwaStandalone,
-  isTechPwaSession,
   markPwaInstalled,
   registerAppServiceWorker,
 } from '../lib/pwa'
 
-const DISMISS_KEY = 'isp-pwa-tech-install-dismissed-at'
+const DISMISS_KEY = 'isp-pwa-admin-install-dismissed-at'
 const COOLDOWN_MS = 24 * 60 * 60 * 1000
-const SHOW_DELAY_MS = 1600
+const SHOW_DELAY_MS = 2200
 
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>
@@ -33,7 +33,8 @@ function markDismissed() {
   localStorage.setItem(DISMISS_KEY, String(Date.now()))
 }
 
-export function MobileInstallPrompt() {
+/** Prompt de instalación para la PWA “Administración ISP” (fuera de /movil). */
+export function AdminInstallPrompt() {
   const [visible, setVisible] = useState(false)
   const [iosHelp, setIosHelp] = useState(false)
   const [canPrompt, setCanPrompt] = useState(false)
@@ -52,7 +53,7 @@ export function MobileInstallPrompt() {
       setCanPrompt(true)
     }
     function onInstalled() {
-      markPwaInstalled('tech')
+      markPwaInstalled('admin')
       setVisible(false)
     }
     window.addEventListener('beforeinstallprompt', onBip)
@@ -73,7 +74,7 @@ export function MobileInstallPrompt() {
     }
   }, [])
 
-  if (!visible || isPwaStandalone() || isTechPwaSession()) return null
+  if (!visible || isPwaStandalone() || isAdminPwaSession()) return null
 
   function dismiss() {
     markDismissed()
@@ -90,7 +91,7 @@ export function MobileInstallPrompt() {
     try {
       await ev.prompt()
       const choice = await ev.userChoice
-      if (choice.outcome === 'accepted') markPwaInstalled('tech')
+      if (choice.outcome === 'accepted') markPwaInstalled('admin')
     } catch {
       // ignore
     }
@@ -103,10 +104,9 @@ export function MobileInstallPrompt() {
       <div className="mx-auto max-w-lg rounded-2xl border border-[var(--border)] bg-[var(--bg-elevated)] p-4 shadow-2xl shadow-black/40">
         <div className="mb-3 flex items-start justify-between gap-3">
           <div>
-            <p className="text-sm font-semibold">Instalá Técnico ISP</p>
+            <p className="text-sm font-semibold">Instalá Administración ISP</p>
             <p className="mt-1 text-xs text-[var(--text-muted)]">
-              App de campo: instalar, calendario y mapa, sin salir de la sección
-              móvil.
+              Acceso al panel completo desde el escritorio o el móvil, como una app.
             </p>
           </div>
           <button
@@ -132,12 +132,12 @@ export function MobileInstallPrompt() {
             ) : (
               <ol className="space-y-2 rounded-xl border border-[var(--border)] bg-[var(--bg)] p-3 text-xs text-[var(--text-muted)]">
                 <li>
-                  1. Tocá el botón{' '}
-                  <strong className="text-[var(--text)]">Compartir</strong>{' '}
-                  (cuadrado con flecha) en Safari.
+                  1. Tocá{' '}
+                  <strong className="text-[var(--text)]">Compartir</strong> en
+                  Safari.
                 </li>
                 <li>
-                  2. Desplazate y elegí{' '}
+                  2. Elegí{' '}
                   <strong className="text-[var(--text)]">
                     Agregar a pantalla de inicio
                   </strong>
@@ -153,7 +153,7 @@ export function MobileInstallPrompt() {
               <button
                 type="button"
                 onClick={() => {
-                  markPwaInstalled('tech')
+                  markPwaInstalled('admin')
                   dismiss()
                 }}
                 className="w-full rounded-xl border border-[var(--border)] py-2.5 text-sm"

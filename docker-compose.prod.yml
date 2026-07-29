@@ -109,6 +109,8 @@ services:
       WHATSAPP_BAILEYS_SECRET: ${WHATSAPP_BAILEYS_SECRET}
       WHATSAPP_GRAPH_API_VERSION: ${WHATSAPP_GRAPH_API_VERSION:-v23.0}
       TR069_NBI_URL: ${TR069_NBI_URL:-http://vpn-concentrator:7557}
+      # Sondeo CWMP/NBI desde la API (misma netns que GenieACS).
+      TR069_ACS_PROBE_HOST: ${TR069_ACS_PROBE_HOST:-vpn-concentrator}
       WEB_PUSH_VAPID_PUBLIC_KEY: ${WEB_PUSH_VAPID_PUBLIC_KEY:-}
       WEB_PUSH_VAPID_PRIVATE_KEY: ${WEB_PUSH_VAPID_PRIVATE_KEY:-}
       WEB_PUSH_SUBJECT: ${WEB_PUSH_SUBJECT:-mailto:soporte@tudominio.com}
@@ -160,8 +162,10 @@ services:
     depends_on:
       - api
 
-  # GenieACS comparte netns con el concentrador: CWMP en 10.69.x.1:14501 (túnel).
-  # Connection Request y Inform usan el mismo plano VPN que OLT/ONU/routers.
+  # GenieACS comparte netns con el concentrador (network_mode: service).
+  # Por eso en aaPanel NO muestra puertos en isp-control-acs: los puertos
+  # (UI ACS, VPN, y listeners CWMP/NBI/FS) viven en isp-control-vpn.
+  # CWMP ONUs: 10.69.x.1:14501 vía túnel. NBI API: vpn-concentrator:7557.
   acs:
     image: drumsergio/genieacs:1.2.13
     container_name: isp-control-acs
@@ -185,7 +189,8 @@ services:
       GENIEACS_UI_JWT_SECRET: ${GENIEACS_UI_JWT_SECRET}
 
   # Concentrador OpenVPN (TCP/UDP) + WireGuard. Sync peers desde la API.
-  # También publica UI GenieACS (ACS comparte este netns).
+  # Publica UI GenieACS (ACS_UI_PORT) porque ACS comparte este netns.
+  # Listeners internos compartidos: CWMP 14501, NBI 7557, FS 7567.
   vpn-concentrator:
     image: vive3d/isp-control-vpn:latest
     container_name: isp-control-vpn

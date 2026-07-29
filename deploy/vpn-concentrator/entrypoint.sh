@@ -29,7 +29,8 @@ sysctl -w net.ipv4.conf.all.rp_filter=0 >/dev/null 2>&1 || true
 sysctl -w net.ipv4.conf.default.rp_filter=0 >/dev/null 2>&1 || true
 
 SERVER_IPS_FILE="$RUNTIME/server-ips.txt"
-ACS_HOST="${VPN_ACS_HOST:-acs}"
+# Con network_mode:service, GenieACS escucha en este netns (no hay DNS "acs").
+ACS_HOST="${VPN_ACS_HOST:-127.0.0.1}"
 ACS_CWMP_PORT="${GENIEACS_CWMP_PORT:-14501}"
 
 setup_docker_forwarding() {
@@ -59,8 +60,15 @@ sync_tunnel_gateway_ips() {
     ip addr add "${ip}/24" dev tun0 2>/dev/null || true
   done <"$SERVER_IPS_FILE"
 
-  # CWMP hacia GenieACS (ACS URL = http://10.69.x.1:14501)
-  acs_ip="$(getent hosts "$ACS_HOST" 2>/dev/null | awk '{print $1; exit}')"
+  # CWMP hacia GenieACS (ACS URL = http://10.69.x.1:14501).
+  # Con network_mode service, ACS escucha en este netns → 127.0.0.1.
+  case "$ACS_HOST" in
+    '' ) acs_ip="" ;;
+    *.*.*.* | *:* ) acs_ip="$ACS_HOST" ;;
+    *)
+      acs_ip="$(getent hosts "$ACS_HOST" 2>/dev/null | awk '{print $1; exit}')"
+      ;;
+  esac
   if [ -n "$acs_ip" ] && [ -f "$SERVER_IPS_FILE" ]; then
     while IFS= read -r ip || [ -n "$ip" ]; do
       ip=$(echo "$ip" | tr -d '[:space:]')

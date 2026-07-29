@@ -4,14 +4,14 @@ import { NotificationBell } from '../components/NotificationBell'
 import { UserAccountMenu } from '../components/UserAccountMenu'
 import { BrandMark } from '../components/BrandMark'
 import { useBranding } from '../branding/BrandingContext'
-import { isMobilePwaInstalled } from '../lib/mobilePwa'
+import { isTechPwaSession } from '../lib/pwa'
 
 export function MobileShell() {
   const { user, logout } = useAuth()
   const branding = useBranding()
   const navigate = useNavigate()
   const location = useLocation()
-  const asApp = isMobilePwaInstalled()
+  const asApp = isTechPwaSession()
   const wide =
     location.pathname.startsWith('/movil/mapa-red/mapa') ||
     location.pathname.startsWith('/movil/mapa-red/tecnico') ||
@@ -34,7 +34,7 @@ export function MobileShell() {
                 {branding.productName}
               </p>
               <p className="truncate text-base font-semibold leading-tight">
-                Móvil
+                Técnico
               </p>
             </span>
           </NavLink>

@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { WhatsAppAttentionBanner } from './WhatsAppAttentionBanner'
@@ -9,6 +9,7 @@ import {
 import { UserAccountMenu } from './UserAccountMenu'
 import { BrandMark } from './BrandMark'
 import { useBranding } from '../branding/BrandingContext'
+import { isAdminPwaInstalled, isAdminPwaSession } from '../lib/pwa'
 
 export type AppShellVariant = 'admin' | 'tenant'
 
@@ -30,7 +31,7 @@ const adminNav: NavItem[] = [
   { to: '/admin/settings', label: 'Ajustes' },
 ]
 
-const tenantNav: NavItem[] = [
+const tenantNavBase: NavItem[] = [
   { to: '/app', label: 'Dashboard', end: true },
   { to: '/app/clients', label: 'Clientes' },
   { to: '/app/calendar', label: 'Calendario' },
@@ -38,7 +39,7 @@ const tenantNav: NavItem[] = [
   { to: '/app/topology', label: 'Topología' },
   { to: '/app/network-map', label: 'Mapa de red' },
   { to: '/app/support', label: 'Soporte', showTicketBadge: true },
-  { to: '/movil', label: 'Móvil' },
+  { to: '/movil', label: 'Técnico' },
   { to: '/app/settings', label: 'Ajustes' },
 ]
 
@@ -60,7 +61,12 @@ export function PanelShell({
   const [exiting, setExiting] = useState(false)
   const summaryQuery = useNotificationSummary(variant)
 
-  const links = variant === 'admin' ? adminNav : tenantNav
+  const hideTechNav = isAdminPwaSession() || isAdminPwaInstalled()
+  const links = useMemo(() => {
+    if (variant === 'admin') return adminNav
+    if (!hideTechNav) return tenantNavBase
+    return tenantNavBase.filter((l) => l.to !== '/movil')
+  }, [variant, hideTechNav])
   const panelLabel = variant === 'admin' ? 'Plataforma' : 'Empresa'
   const ticketBadge = summaryQuery.data?.ticketBadge ?? false
 
