@@ -154,7 +154,7 @@ export function PushEnablePrompt() {
                 ? inApp
                   ? 'Actívalas en Ajustes del sistema → Notificaciones para esta app.'
                   : 'Actívalas en el candado / información del sitio del navegador y vuelve a entrar.'
-                : 'Recibe avisos de tickets, agenda y eventos. Se solicita al iniciar sesión.'}
+                : 'Recibe avisos de tickets, agenda y eventos importantes.'}
             </p>
           </div>
           <button
