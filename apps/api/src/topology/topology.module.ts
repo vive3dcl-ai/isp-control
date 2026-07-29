@@ -23,6 +23,8 @@ import { OnuCatalogAdminController } from './onu-catalog-admin.controller';
 import { OnuCatalogItem } from './entities/onu-catalog.entity';
 import { OnuConnectedService } from './onu-connected.service';
 import { OnuConnectedController } from './onu-connected.controller';
+import { OnuMigrationService } from './onu-migration.service';
+import { OnuMigrationController } from './onu-migration.controller';
 import { OnuTypeOltSyncService } from './onu-type-olt-sync.service';
 import { IpPoolService } from './ip-pool.service';
 import { IpPoolController } from './ip-pool.controller';
@@ -57,6 +59,7 @@ import { SupportModule } from '../support/support.module';
     OnuSettingsController,
     OnuCatalogAdminController,
     OnuConnectedController,
+    OnuMigrationController,
     IpPoolController,
     ServiceVlanController,
     NetworkNodeController,
@@ -74,6 +77,7 @@ import { SupportModule } from '../support/support.module';
     OnuCatalogAdminService,
     OnuSettingsService,
     OnuConnectedService,
+    OnuMigrationService,
     OnuTypeOltSyncService,
     IpPoolService,
     OnuTr069ConfigService,

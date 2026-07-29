@@ -15,6 +15,7 @@ import { SuspensionPortalSettingsTab } from '../components/SuspensionPortalSetti
 import { ClientesSettingsTab } from '../components/ClientesSettingsTab'
 import { NodosSettingsTab } from '../components/NodosSettingsTab'
 import { ZonasSettingsTab } from '../components/ZonasSettingsTab'
+import { MigracionSettingsTab } from '../components/MigracionSettingsTab'
 import { canWriteTopology } from '../lib/topology'
 import { canWriteCrm } from '../lib/crm'
 import { apiFetch } from '../lib/api'
@@ -32,6 +33,7 @@ type SettingsTab =
   | 'zonas'
   | 'facturacion'
   | 'productos'
+  | 'migracion'
   | 'suspension_portal'
 
 const BASE_TABS: { id: SettingsTab; label: string }[] = [
@@ -40,6 +42,7 @@ const BASE_TABS: { id: SettingsTab; label: string }[] = [
   { id: 'vlans', label: 'VLANs' },
   { id: 'ip_pools', label: 'IP Pools' },
   { id: 'onus', label: 'ONUs' },
+  { id: 'migracion', label: 'Migración' },
   { id: 'nodos', label: 'Nodos' },
   { id: 'plans', label: 'Planes' },
   { id: 'clientes', label: 'Clientes' },
@@ -63,6 +66,7 @@ function parseTab(
     raw === 'vlans' ||
     raw === 'ip_pools' ||
     raw === 'onus' ||
+    raw === 'migracion' ||
     raw === 'nodos'
   ) {
     return raw
@@ -106,6 +110,10 @@ export function SettingsPage() {
   if (tab === 'vlans') body = <VlansSettingsTab canWrite={canWriteNet} />
   if (tab === 'ip_pools') body = <IpPoolsSettingsTab canWrite={canWriteNet} />
   if (tab === 'onus') body = <OnuSettingsTab canWrite={canWriteNet} />
+  if (tab === 'migracion')
+    body = (
+      <MigracionSettingsTab canWrite={canWriteNet && canWriteCrmFields} />
+    )
   if (tab === 'nodos') body = <NodosSettingsTab canWrite={canWriteNet} />
   if (tab === 'plans')
     body = <ServicePlansSettingsTab canWrite={canWriteCrmFields} />

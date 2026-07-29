@@ -205,6 +205,23 @@ export class IpPoolService {
     }
   }
 
+  /** Same as poolStats but never throws (for list rendering). */
+  private poolStatsSafe(
+    gateway: string,
+    prefix: number,
+  ): { totalUsable: number; network: string; gateway: string; prefix: number } {
+    try {
+      return computeIpNetwork(gateway, prefix);
+    } catch {
+      return {
+        totalUsable: 0,
+        network: gateway || '',
+        gateway: gateway || '',
+        prefix: prefix || 0,
+      };
+    }
+  }
+
   private async deviceNames(
     schema: string,
     oltId: string,
@@ -226,7 +243,11 @@ export class IpPoolService {
     filters?: { purpose?: string; oltId?: string },
   ) {
     const schema = this.requireSchema(user);
-    await this.reclaimOrphanAllocations(schema);
+    try {
+      await this.reclaimOrphanAllocations(schema);
+    } catch {
+      // Listing must still work if orphan cleanup fails.
+    }
 
     const repo = await this.tenantConnections.getIpPoolRepository(schema);
     const where: {
@@ -273,7 +294,7 @@ export class IpPoolService {
 
     return {
       pools: pools.map((p) => {
-        const net = this.poolStats(p.gateway, p.prefix);
+        const net = this.poolStatsSafe(p.gateway, p.prefix);
         return this.serialize(p, {
           oltName: nameById.get(p.oltId) ?? null,
           routerName: p.routerId
@@ -324,17 +345,90 @@ export class IpPoolService {
     const net = this.poolStats(dto.gateway.trim(), dto.prefix);
     const repo = await this.tenantConnections.getIpPoolRepository(schema);
 
-    const clash = await repo.findOne({
+    if (dto.purpose === 'internet') {
+      if (!dto.dns1?.trim()) {
+        throw new BadRequestException(
+          'DNS primario es obligatorio en pools de Internet (WAN)',
+        );
+      }
+    }
+
+    const existing = await repo.findOne({
       where: {
         oltId: dto.oltId,
         vlanId: dto.vlanId,
         purpose: dto.purpose,
       },
     });
-    if (clash) {
-      throw new BadRequestException(
-        `Ya existe un pool ${dto.purpose} para OLT + VLAN ${dto.vlanId}`,
-      );
+
+    // Upsert: si ya existe el pool OLT+VLAN+purpose, actualizar en lugar de fallar.
+    if (existing) {
+      const allocRepo =
+        await this.tenantConnections.getIpPoolAllocationRepository(schema);
+      const allocs = await allocRepo.find({ where: { poolId: existing.id } });
+      for (const a of allocs) {
+        if (!isIpInUsable(a.ipAddress, net.usableHosts)) {
+          throw new BadRequestException(
+            `Ya existe el pool ${dto.purpose} VLAN ${dto.vlanId}, pero no se puede actualizar la red: la IP asignada ${a.ipAddress} quedaría fuera de ${net.gateway}/${net.prefix}`,
+          );
+        }
+      }
+
+      const sameGateway = await repo.findOne({
+        where: {
+          routerId: router.id,
+          vlanId: dto.vlanId,
+          gateway: net.gateway,
+          prefix: net.prefix,
+        },
+      });
+      if (sameGateway && sameGateway.id !== existing.id) {
+        throw new BadRequestException(
+          `El gateway ${net.gateway}/${net.prefix} ya está en otro pool de VLAN ${dto.vlanId} en este Router`,
+        );
+      }
+
+      const prevRouter = existing.routerId
+        ? await deviceRepo.findOne({ where: { id: existing.routerId } })
+        : null;
+
+      const mikrotikMessage = await this.syncGatewayToMikrotik({
+        schema,
+        router,
+        vlanId: dto.vlanId,
+        gateway: net.gateway,
+        prefix: net.prefix,
+        previous:
+          prevRouter && existing.routerId
+            ? {
+                router: prevRouter,
+                vlanId: existing.vlanId,
+                gateway: existing.gateway,
+                prefix: existing.prefix,
+              }
+            : undefined,
+      });
+
+      existing.routerId = router.id;
+      existing.name = dto.name?.trim() || existing.name;
+      existing.gateway = net.gateway;
+      existing.prefix = net.prefix;
+      existing.network = net.network;
+      if (dto.purpose === 'internet') {
+        existing.dns1 = dto.dns1!.trim();
+        existing.dns2 = dto.dns2?.trim() || null;
+      }
+      const saved = await repo.save(existing);
+      const assigned = await allocRepo.count({ where: { poolId: saved.id } });
+      return this.serialize(saved, {
+        oltName: olt.name,
+        routerName: router.name,
+        assigned,
+        total: net.totalUsable,
+        mikrotikMessage:
+          (mikrotikMessage ? `${mikrotikMessage}. ` : '') +
+          `Pool existente actualizado (VLAN ${dto.vlanId} ${dto.purpose}).`,
+      });
     }
 
     const sameGateway = await repo.findOne({
@@ -349,14 +443,6 @@ export class IpPoolService {
       throw new BadRequestException(
         `El gateway ${net.gateway}/${net.prefix} ya está en un pool de VLAN ${dto.vlanId} en este Router`,
       );
-    }
-
-    if (dto.purpose === 'internet') {
-      if (!dto.dns1?.trim()) {
-        throw new BadRequestException(
-          'DNS primario es obligatorio en pools de Internet (WAN)',
-        );
-      }
     }
 
     // Publishes gateway on vlan_N if missing; keeps it if already present.
@@ -684,9 +770,12 @@ export class IpPoolService {
     } else {
       await allocRepo.delete({ onuId: IsNull() });
     }
+    // Must use .from(...) — bare createQueryBuilder().delete() throws and
+    // used to break GET /ip-pools (UI showed an empty list).
     const qb = allocRepo
       .createQueryBuilder()
       .delete()
+      .from(allocRepo.metadata.target)
       .where('onu_id IS NOT NULL')
       .andWhere(
         `NOT EXISTS (SELECT 1 FROM "${schema}"."onus" o WHERE o.id = onu_id)`,

@@ -28,6 +28,7 @@ export function IpPoolsSettingsTab({ canWrite }: { canWrite: boolean }) {
   const [viewPool, setViewPool] = useState<IpPool | null>(null)
   const [editing, setEditing] = useState<IpPool | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
 
   const [oltId, setOltId] = useState('')
   const [routerId, setRouterId] = useState('')
@@ -238,10 +239,18 @@ export function IpPoolsSettingsTab({ canWrite }: { canWrite: boolean }) {
         }),
       })
     },
-    onSuccess: () => {
+    onSuccess: (res) => {
       invalidate()
       setFormModal(null)
       resetForm()
+      setError(null)
+      if (res.mikrotikMessage?.includes('actualizado')) {
+        setNotice(
+          `Pool VLAN ${res.vlanId} (${res.purpose}) actualizado: ya existía en el sistema.`,
+        )
+      } else {
+        setNotice(null)
+      }
     },
     onError: (e: Error) => setError(e.message),
   })
@@ -356,9 +365,21 @@ export function IpPoolsSettingsTab({ canWrite }: { canWrite: boolean }) {
           {error}
         </p>
       )}
+      {notice && (
+        <p className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">
+          {notice}
+        </p>
+      )}
 
       {poolsQuery.isLoading ? (
         <p className="text-sm text-[var(--text-muted)]">Cargando…</p>
+      ) : poolsQuery.isError ? (
+        <p className="rounded-lg border border-[var(--danger)]/40 bg-[var(--danger)]/10 px-3 py-2 text-sm text-[var(--danger)]">
+          No se pudieron cargar los pools:{' '}
+          {poolsQuery.error instanceof Error
+            ? poolsQuery.error.message
+            : 'error desconocido'}
+        </p>
       ) : pools.length === 0 ? (
         <div className="rounded-xl border border-dashed border-[var(--border)] px-4 py-10 text-center text-sm text-[var(--text-muted)]">
           No hay pools de {purposeLabel.toLowerCase()}.
