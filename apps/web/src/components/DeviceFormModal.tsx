@@ -7,6 +7,7 @@ import {
   INTERNET_DEVICE_TYPE,
   OLT_SELECTABLE_SUBTYPES,
   oltSubtypeLabel,
+  ZTE_C6XX_SUBTYPES,
   ROUTER_SUBTYPES,
   routerSubtypeLabel,
   type NetworkDeviceType,
@@ -216,15 +217,42 @@ export function DeviceFormModal({
                       setOltSubtype(e.target.value as OltSubtype)
                     }
                   >
-                    {OLT_SELECTABLE_SUBTYPES.map((s) => (
-                      <option key={s} value={s}>
-                        {oltSubtypeLabel[s]}
-                      </option>
-                    ))}
+                    <optgroup label="ZTE C3xx">
+                      {OLT_SELECTABLE_SUBTYPES.filter(
+                        (s) =>
+                          s.startsWith('zte_') &&
+                          !(ZTE_C6XX_SUBTYPES as readonly string[]).includes(s),
+                      ).map((s) => (
+                        <option key={s} value={s}>
+                          {oltSubtypeLabel[s]}
+                        </option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="ZTE C6xx (Titan)">
+                      {OLT_SELECTABLE_SUBTYPES.filter((s) =>
+                        (ZTE_C6XX_SUBTYPES as readonly string[]).includes(s),
+                      ).map((s) => (
+                        <option key={s} value={s}>
+                          {oltSubtypeLabel[s]}
+                        </option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="Huawei">
+                      {OLT_SELECTABLE_SUBTYPES.filter((s) =>
+                        s.startsWith('huawei_'),
+                      ).map((s) => (
+                        <option key={s} value={s}>
+                          {oltSubtypeLabel[s]}
+                        </option>
+                      ))}
+                    </optgroup>
                   </select>
                   <span className="mt-1 block text-xs text-[var(--text-muted)]">
-                    El firmware se detecta al probar la conexión (v1.2 / v2.0 /
-                    v2.1).
+                    {oltSubtype.startsWith('huawei_')
+                      ? 'CLI SmartAX (Telnet/SSH) + SNMP v2c. El modelo se confirma al probar la conexión.'
+                      : oltSubtype.startsWith('zte_c6')
+                        ? 'Serie Titan: dialecto CLI gpon_olt-… El modelo/firmware se confirma al probar.'
+                        : 'El firmware se detecta al probar la conexión (v1.2 / v2.0 / v2.1).'}
                   </span>
                 </label>
               )}

@@ -8,7 +8,6 @@ import {
   onuDescriptionForService,
 } from '../lib/onu-connected'
 import {
-  filterBySourceVlan,
   splitSuggestedName,
   type MigrationCandidate,
   type MigrationSegmentConfig,
@@ -176,6 +175,8 @@ export function MigrationWizardModal({
   }
 
   async function startMigration() {
+    if (!candidate) return
+    const migrationCandidate = candidate
     setError(null)
     const err = validateClient() || validateService()
     if (err) {
@@ -217,23 +218,23 @@ export function MigrationWizardModal({
           return 'ONU ya estaba en Conectadas'
         }
         const snap = {
-          onuIf: candidate.onuIf,
-          ponType: candidate.ponType,
-          board: candidate.board,
-          port: candidate.port,
-          onuId: candidate.onuId,
-          sn: candidate.sn,
-          onuType: candidate.onuType,
-          name: candidate.name,
-          description: candidate.description,
-          status: candidate.status,
-          phaseState: candidate.phaseState,
-          adminState: candidate.adminState,
-          online: candidate.online,
-          signalDbm: candidate.signalDbm,
-          mode: candidate.mode,
-          vlan: candidate.vlan,
-          vlans: candidate.vlans,
+          onuIf: migrationCandidate.onuIf,
+          ponType: migrationCandidate.ponType,
+          board: migrationCandidate.board,
+          port: migrationCandidate.port,
+          onuId: migrationCandidate.onuId,
+          sn: migrationCandidate.sn,
+          onuType: migrationCandidate.onuType,
+          name: migrationCandidate.name,
+          description: migrationCandidate.description,
+          status: migrationCandidate.status,
+          phaseState: migrationCandidate.phaseState,
+          adminState: migrationCandidate.adminState,
+          online: migrationCandidate.online,
+          signalDbm: migrationCandidate.signalDbm,
+          mode: migrationCandidate.mode,
+          vlan: migrationCandidate.vlan,
+          vlans: migrationCandidate.vlans,
         }
         const r = await apiFetch<{ onu?: { id: string } }>(
           '/app/onus/import-one',
@@ -246,7 +247,7 @@ export function MigrationWizardModal({
         if (!ctxRef.current.onuDbId) {
           throw new Error('No se obtuvo ID de ONU tras importar')
         }
-        return `Importada ${candidate.onuIf}`
+        return `Importada ${migrationCandidate.onuIf}`
       },
       client: async () => {
         if (clientMode === 'existing' && clientId) {

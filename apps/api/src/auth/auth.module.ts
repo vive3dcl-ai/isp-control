@@ -10,6 +10,7 @@ import { PlatformAdmin } from './entities/platform-admin.entity';
 import { PasswordResetToken } from './entities/password-reset-token.entity';
 import { UserDirectory } from '../tenants/entities/user-directory.entity';
 import { Tenant } from '../tenants/entities/tenant.entity';
+import { ClientPortalUser } from '../client-portal/entities/client-portal-user.entity';
 import { DatabaseModule } from '../database/database.module';
 import { PlatformModule } from '../platform/platform.module';
 
@@ -34,10 +35,9 @@ import { PlatformModule } from '../platform/platform.module';
           }
         }
         return {
-          secret:
-            secret || 'change-me-in-production-use-a-long-random-string',
+          secret: secret || 'change-me-in-production-use-a-long-random-string',
           signOptions: {
-            expiresIn: config.get('JWT_EXPIRES_IN', '8h') as `${number}h`,
+            expiresIn: config.get('JWT_EXPIRES_IN', '8h'),
           },
         };
       },
@@ -47,6 +47,7 @@ import { PlatformModule } from '../platform/platform.module';
       UserDirectory,
       Tenant,
       PasswordResetToken,
+      ClientPortalUser,
     ]),
   ],
   controllers: [AuthController],

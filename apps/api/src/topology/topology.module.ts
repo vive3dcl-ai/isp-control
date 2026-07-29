@@ -8,8 +8,12 @@ import { TopologyController } from './topology.controller';
 import { TopologyService } from './topology.service';
 import { MikrotikClient } from './mikrotik.client';
 import { ZteOltClient } from './zte-olt.client';
+import { ZteOltSnmpClient } from './zte-olt-snmp.client';
+import { HuaweiOltClient } from './huawei-olt.client';
+import { HuaweiOltSnmpClient } from './huawei-olt-snmp.client';
 import { MikrotikPollService } from './mikrotik-poll.service';
 import { OnuMetricsPollService } from './onu-metrics-poll.service';
+import { OltInventoryPollService } from './olt-inventory-poll.service';
 import { VpnService } from './vpn.service';
 import { VpnController, VpnPublicController } from './vpn.controller';
 import { VpnAdminController } from './vpn.admin.controller';
@@ -70,8 +74,12 @@ import { SupportModule } from '../support/support.module';
     TopologyService,
     MikrotikClient,
     ZteOltClient,
+    ZteOltSnmpClient,
+    HuaweiOltClient,
+    HuaweiOltSnmpClient,
     MikrotikPollService,
     OnuMetricsPollService,
+    OltInventoryPollService,
     VpnService,
     Tr069Service,
     OnuCatalogAdminService,

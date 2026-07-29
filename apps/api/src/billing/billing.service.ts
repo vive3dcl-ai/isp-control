@@ -481,7 +481,11 @@ export class BillingService {
       clientServiceId?: string | null;
       type: Invoice['type'];
       status?: Invoice['status'];
-      items: Array<{ description: string; quantity?: number; unitPrice: number }>;
+      items: Array<{
+        description: string;
+        quantity?: number;
+        unitPrice: number;
+      }>;
       periodStart?: string | null;
       periodEnd?: string | null;
       notes?: string;
@@ -553,8 +557,7 @@ export class BillingService {
    * (immediate) or flag fee for first recurring invoice.
    */
   async onClientServiceCreated(schema: string, service: ClientService) {
-    const plans =
-      await this.tenantConnections.getServicePlanRepository(schema);
+    const plans = await this.tenantConnections.getServicePlanRepository(schema);
     const plan = await plans.findOne({ where: { id: service.servicePlanId } });
     if (!plan) return;
 
@@ -639,8 +642,7 @@ export class BillingService {
     await this.ensureSettings(schema);
     const services =
       await this.tenantConnections.getClientServiceRepository(schema);
-    const plans =
-      await this.tenantConnections.getServicePlanRepository(schema);
+    const plans = await this.tenantConnections.getServicePlanRepository(schema);
     const planById = new Map(
       (await plans.find()).map((p) => [p.id, p] as const),
     );
@@ -682,8 +684,7 @@ export class BillingService {
     const settings = await this.ensureSettings(schema);
     const services =
       await this.tenantConnections.getClientServiceRepository(schema);
-    const plans =
-      await this.tenantConnections.getServicePlanRepository(schema);
+    const plans = await this.tenantConnections.getServicePlanRepository(schema);
     const planById = new Map(
       (await plans.find()).map((p) => [p.id, p] as const),
     );
@@ -891,7 +892,8 @@ export class BillingService {
 
     const clients = await this.tenantConnections.getClientRepository(schema);
     const client = await clients.findOne({ where: { id: invoice.clientId } });
-    if (!client) throw new NotFoundException('Cliente de la factura no encontrado');
+    if (!client)
+      throw new NotFoundException('Cliente de la factura no encontrado');
 
     let serviceName = '';
     if (invoice.clientServiceId) {
@@ -1113,7 +1115,9 @@ function addDays(d: Date, n: number): Date {
 }
 
 function addMonthsClamp(d: Date, months: number): Date {
-  const x = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  const x = new Date(
+    Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()),
+  );
   const day = x.getUTCDate();
   x.setUTCDate(1);
   x.setUTCMonth(x.getUTCMonth() + months);
@@ -1127,7 +1131,9 @@ function endOfMonth(d: Date): Date {
 }
 
 function daysInMonth(d: Date): number {
-  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+  return new Date(
+    Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0),
+  ).getUTCDate();
 }
 
 function daysInRange(startIso: string, endIso: string): number {

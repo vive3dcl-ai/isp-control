@@ -36,4 +36,3 @@ import { ClientPortalAppController } from './client-portal-app.controller';
   exports: [ClientPortalService],
 })
 export class ClientPortalModule {}
-

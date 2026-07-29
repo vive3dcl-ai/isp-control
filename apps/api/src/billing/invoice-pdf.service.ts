@@ -47,7 +47,11 @@ export class InvoicePdfService {
     return completed;
   }
 
-  private drawHeader(doc: PDFKit.PDFDocument, tenant: Tenant, invoice: Invoice) {
+  private drawHeader(
+    doc: PDFKit.PDFDocument,
+    tenant: Tenant,
+    invoice: Invoice,
+  ) {
     const top = doc.y;
     const logo = this.logoBuffer(tenant.logoUrl);
     if (logo) {
@@ -90,11 +94,7 @@ export class InvoicePdfService {
       });
 
     doc.y = top + 88;
-    doc
-      .moveTo(48, doc.y)
-      .lineTo(547, doc.y)
-      .strokeColor('#d1d5db')
-      .stroke();
+    doc.moveTo(48, doc.y).lineTo(547, doc.y).strokeColor('#d1d5db').stroke();
     doc.moveDown(1.3);
   }
 
@@ -134,11 +134,7 @@ export class InvoicePdfService {
     ]
       .filter(Boolean)
       .join('\n');
-    const client = [
-      input.clientAddress,
-      input.clientEmail,
-      input.clientPhone,
-    ]
+    const client = [input.clientAddress, input.clientEmail, input.clientPhone]
       .filter(Boolean)
       .join('\n');
     doc
@@ -242,7 +238,11 @@ export class InvoicePdfService {
     doc.y = y + 80;
   }
 
-  private drawFooter(doc: PDFKit.PDFDocument, tenant: Tenant, invoice: Invoice) {
+  private drawFooter(
+    doc: PDFKit.PDFDocument,
+    tenant: Tenant,
+    invoice: Invoice,
+  ) {
     if (invoice.notes?.trim()) {
       doc
         .font('Helvetica-Bold')

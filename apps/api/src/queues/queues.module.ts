@@ -19,10 +19,7 @@ import { QUEUE_NETWORK, QUEUE_SYSTEM } from './queue.constants';
         },
       }),
     }),
-    BullModule.registerQueue(
-      { name: QUEUE_SYSTEM },
-      { name: QUEUE_NETWORK },
-    ),
+    BullModule.registerQueue({ name: QUEUE_SYSTEM }, { name: QUEUE_NETWORK }),
   ],
   controllers: [QueuesController],
   providers: [QueuesService, SystemProcessor, NetworkProcessor],

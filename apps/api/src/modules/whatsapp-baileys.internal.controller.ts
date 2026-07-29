@@ -6,6 +6,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { secureSecretEquals } from '../auth/secure-compare';
 import { ModulesService } from './modules.service';
 import { WhatsAppBaileysStatusDto } from './dto/modules.dto';
 
@@ -22,9 +23,8 @@ export class WhatsAppBaileysInternalController {
     @Headers('x-wa-internal-secret') secret: string | undefined,
     @Body() dto: WhatsAppBaileysStatusDto,
   ) {
-    const expected =
-      this.config.get<string>('WHATSAPP_BAILEYS_SECRET') || '';
-    if (!expected || secret !== expected) {
+    const expected = this.config.get<string>('WHATSAPP_BAILEYS_SECRET') || '';
+    if (!secureSecretEquals(secret, expected)) {
       throw new UnauthorizedException('Invalid WhatsApp internal secret');
     }
     return this.modules.handleBaileysStatusWebhook(dto);

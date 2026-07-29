@@ -14,10 +14,7 @@ import {
 } from './dto/network-node.dto';
 import type { NetworkDevice } from './entities/network-device.entity';
 import type { NetworkNode } from './entities/network-node.entity';
-import type {
-  NodeHeader,
-  NodeHeaderPort,
-} from './entities/node-header.entity';
+import type { NodeHeader, NodeHeaderPort } from './entities/node-header.entity';
 
 export type NodeAssetStatus = 'online' | 'offline' | 'unknown';
 export type NodeHealth = 'ok' | 'degraded' | 'down' | 'unknown';
@@ -70,10 +67,7 @@ export class NetworkNodeService {
     };
   }
 
-  private serializeNode(
-    node: NetworkNode,
-    devices: NetworkDevice[],
-  ) {
+  private serializeNode(node: NetworkNode, devices: NetworkDevice[]) {
     const assets = devices.map((d) => this.serializeDevice(d));
     const health = this.rollupHealth(assets.map((a) => a.status));
     return {
@@ -398,10 +392,7 @@ export class NetworkNodeService {
     }
     if (dto.portCount !== undefined) header.portCount = dto.portCount;
     if (dto.ports !== undefined) {
-      header.ports = this.normalizePorts(
-        header.portCount,
-        dto.ports as Array<Partial<NodeHeaderPort>>,
-      );
+      header.ports = this.normalizePorts(header.portCount, dto.ports);
     } else if (dto.portCount !== undefined) {
       header.ports = this.normalizePorts(header.portCount, header.ports);
     }
@@ -430,9 +421,9 @@ export class NetworkNodeService {
     const ports = this.normalizePorts(header.portCount, header.ports);
     header.ports = ports.map((p) =>
       p.index === dto.index
-        ? this.normalizePorts(header.portCount, [
-            { ...p, ...dto },
-          ]).find((x) => x.index === dto.index)!
+        ? this.normalizePorts(header.portCount, [{ ...p, ...dto }]).find(
+            (x) => x.index === dto.index,
+          )!
         : p,
     );
     const saved = await headerRepo.save(header);

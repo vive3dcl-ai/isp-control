@@ -760,18 +760,18 @@ export function NetworkMapPage() {
 
   function finishZoneDrawing() {
     if (!drawingZoneId) return
-    let finished: MapDraftElement | null = null
-    setDrafts((prev) => {
-      const zone = prev.find((d) => d.id === drawingZoneId)
-      if (!zone || (zone.path?.length ?? 0) < 3) return prev
-      const center = zoneCentroid(zone.path) ?? {
-        lat: zone.lat,
-        lng: zone.lng,
-      }
-      finished = { ...zone, lat: center.lat, lng: center.lng }
-      return prev.map((d) => (d.id === finished!.id ? finished! : d))
-    })
-    if (!finished) return
+    const zone = drafts.find((d) => d.id === drawingZoneId)
+    if (!zone || (zone.path?.length ?? 0) < 3) return
+    const center = zoneCentroid(zone.path) ?? {
+      lat: zone.lat,
+      lng: zone.lng,
+    }
+    const finished: MapDraftElement = {
+      ...zone,
+      lat: center.lat,
+      lng: center.lng,
+    }
+    setDrafts((prev) => prev.map((d) => (d.id === finished.id ? finished : d)))
     setDrawingZoneId(null)
     setSelectedZoneId(finished.id)
     setEditing(finished)

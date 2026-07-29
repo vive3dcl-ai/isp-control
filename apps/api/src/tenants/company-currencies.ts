@@ -23,9 +23,7 @@ export const COMPANY_CURRENCIES = [
 
 export type CompanyCurrencyCode = (typeof COMPANY_CURRENCIES)[number]['code'];
 
-export const COMPANY_CURRENCY_CODES = COMPANY_CURRENCIES.map(
-  (c) => c.code,
-) as CompanyCurrencyCode[];
+export const COMPANY_CURRENCY_CODES = COMPANY_CURRENCIES.map((c) => c.code);
 
 /**
  * Países disponibles en Ajustes → Empresa.
@@ -56,6 +54,4 @@ export const COMPANY_COUNTRIES = [
 
 export type CompanyCountryCode = (typeof COMPANY_COUNTRIES)[number]['code'];
 
-export const COMPANY_COUNTRY_CODES = COMPANY_COUNTRIES.map(
-  (c) => c.code,
-) as CompanyCountryCode[];
+export const COMPANY_COUNTRY_CODES = COMPANY_COUNTRIES.map((c) => c.code);

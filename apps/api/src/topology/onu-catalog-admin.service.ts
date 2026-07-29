@@ -47,8 +47,7 @@ const GENERIC_PROFILE_SEEDS = [
   {
     code: 'generic_2',
     name: 'Generic_2',
-    description:
-      'Bridge/SFU: VLAN sin etiqueta (untag) en eth_0/1 (acceso).',
+    description: 'Bridge/SFU: VLAN sin etiqueta (untag) en eth_0/1 (acceso).',
     vlanCli: 'vlan port eth_0/1 mode untag',
     portKind: 'eth',
     sortOrder: 2,
@@ -56,8 +55,7 @@ const GENERIC_PROFILE_SEEDS = [
   {
     code: 'generic_3',
     name: 'Generic_3',
-    description:
-      'Multi-ETH: etiqueta VLAN en eth_0/2 (segundo puerto LAN).',
+    description: 'Multi-ETH: etiqueta VLAN en eth_0/2 (segundo puerto LAN).',
     vlanCli: 'vlan port eth_0/2 mode tag',
     portKind: 'eth',
     sortOrder: 3,
@@ -73,8 +71,7 @@ const GENERIC_PROFILE_SEEDS = [
   {
     code: 'generic_5',
     name: 'Generic_5',
-    description:
-      'HGU/router: VLAN untag vía interfaz virtual VEIP (veip_1).',
+    description: 'HGU/router: VLAN untag vía interfaz virtual VEIP (veip_1).',
     vlanCli: 'vlan port veip_1 mode untag',
     portKind: 'veip',
     sortOrder: 5,
@@ -212,8 +209,7 @@ export class OnuCatalogAdminService {
     const capability = dto.capability ?? 'bridging_routing';
     const vendor = dto.vendor.trim().toLowerCase();
     const imageKey =
-      dto.imageKey?.trim() ||
-      imageKeyForVendorCapability(vendor, capability);
+      dto.imageKey?.trim() || imageKeyForVendorCapability(vendor, capability);
     const row = await this.catalogRepo.save(
       this.catalogRepo.create({
         vendor,
@@ -323,8 +319,9 @@ export class OnuCatalogAdminService {
     for (const t of tenants) {
       if (!t.schemaName) continue;
       try {
-        const typeRepo =
-          await this.tenantConnections.getOnuTypeRepository(t.schemaName);
+        const typeRepo = await this.tenantConnections.getOnuTypeRepository(
+          t.schemaName,
+        );
         const existing = await typeRepo.find();
         const has = existing.some(
           (r) =>
@@ -444,9 +441,7 @@ export class OnuCatalogAdminService {
   /**
    * Count imported ONUs per normalized model code for a tenant.
    */
-  async countOnusByModel(
-    schemaName: string,
-  ): Promise<Map<string, number>> {
+  async countOnusByModel(schemaName: string): Promise<Map<string, number>> {
     const onuRepo = await this.tenantConnections.getOnuRepository(schemaName);
     const onus = await onuRepo.find({ select: ['onuType'] });
     const counts = new Map<string, number>();
@@ -462,7 +457,9 @@ export class OnuCatalogAdminService {
    * Collapse Huawei-/ZTE- prefixed duplicates into model codes only.
    * Keeps one row per normalized name (prefers already-clean name).
    */
-  async dedupeTenantModelNames(schemaName: string): Promise<{ removed: number }> {
+  async dedupeTenantModelNames(
+    schemaName: string,
+  ): Promise<{ removed: number }> {
     await this.tenantConnections.ensureTenantSchema(schemaName);
     const typeRepo =
       await this.tenantConnections.getOnuTypeRepository(schemaName);
@@ -648,8 +645,7 @@ export class OnuCatalogAdminService {
       return item;
     }
 
-    const vendor =
-      opts.vendor?.trim().toLowerCase() || inferOnuVendor(name);
+    const vendor = opts.vendor?.trim().toLowerCase() || inferOnuVendor(name);
     const capability = opts.capability || 'bridging_routing';
     const imageKey = imageKeyForVendorCapability(vendor, capability);
 

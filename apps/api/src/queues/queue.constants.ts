@@ -4,15 +4,10 @@ export const QUEUE_BILLING = 'billing';
 
 export type SystemJobName = 'health.ping';
 
-export type NetworkJobName =
-  | 'mikrotik.sync'
-  | 'olt.sync'
-  | 'olt.provision';
+export type NetworkJobName = 'mikrotik.sync' | 'olt.sync' | 'olt.provision';
 
 export type BillingJobName =
-  | 'billing.periods'
-  | 'billing.generate'
-  | 'billing.send';
+  'billing.periods' | 'billing.generate' | 'billing.send';
 
 export interface SystemPingJob {
   at: string;

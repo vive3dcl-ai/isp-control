@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuthModule } from './auth/auth.module';
 import { TenantsModule } from './tenants/tenants.module';
@@ -41,42 +43,64 @@ import { TenantMapDraft } from './crm/entities/tenant-map-draft.entity';
       isGlobal: true,
       envFilePath: ['.env', '../../.env'],
     }),
+    ThrottlerModule.forRoot([
+      {
+        ttl: 60_000,
+        limit: 120,
+      },
+    ]),
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
-      useFactory: (config: ConfigService) => ({
-        type: 'postgres' as const,
-        host: config.get<string>('DATABASE_HOST', 'localhost'),
-        port: Number(config.get<string>('DATABASE_PORT', '5432')),
-        username: config.get<string>('DATABASE_USER', 'isp'),
-        password: config.get<string>('DATABASE_PASSWORD', 'isp'),
-        database: config.get<string>('DATABASE_NAME', 'isp_control'),
-        schema: 'public',
-        entities: [
-          Tenant,
-          UserDirectory,
-          PlatformAdmin,
-          PasswordResetToken,
-          OnuCatalogItem,
-          PlatformPaymentMethod,
-          PlatformModulePricing,
-          PlatformFxRate,
-          PlatformSmtpSettings,
-          PlatformPublicUrls,
-          PlatformSystemPlan,
-          PlatformModuleContract,
-          PlatformCharge,
-          PlatformBranding,
-          SupportTicket,
-          SupportTicketMessage,
-          AppNotification,
-          PushSubscriptionEntity,
-          ClientPortalUser,
-          ClientPortalInvite,
-          TenantMapDraft,
-        ],
-        synchronize: true,
-      }),
+      useFactory: (config: ConfigService) => {
+        const isProduction = config.get<string>('NODE_ENV') === 'production';
+        const required = (name: string, fallback: string): string => {
+          const value = config.get<string>(name)?.trim();
+          if (isProduction && !value) {
+            throw new Error(`${name} debe estar definido en producción`);
+          }
+          return value || fallback;
+        };
+        const synchronize =
+          config.get<string>(
+            'DATABASE_SYNCHRONIZE',
+            isProduction ? 'false' : 'true',
+          ) === 'true';
+
+        return {
+          type: 'postgres' as const,
+          host: required('DATABASE_HOST', 'localhost'),
+          port: Number(config.get<string>('DATABASE_PORT', '5432')),
+          username: required('DATABASE_USER', 'isp'),
+          password: required('DATABASE_PASSWORD', 'isp'),
+          database: required('DATABASE_NAME', 'isp_control'),
+          schema: 'public',
+          entities: [
+            Tenant,
+            UserDirectory,
+            PlatformAdmin,
+            PasswordResetToken,
+            OnuCatalogItem,
+            PlatformPaymentMethod,
+            PlatformModulePricing,
+            PlatformFxRate,
+            PlatformSmtpSettings,
+            PlatformPublicUrls,
+            PlatformSystemPlan,
+            PlatformModuleContract,
+            PlatformCharge,
+            PlatformBranding,
+            SupportTicket,
+            SupportTicketMessage,
+            AppNotification,
+            PushSubscriptionEntity,
+            ClientPortalUser,
+            ClientPortalInvite,
+            TenantMapDraft,
+          ],
+          synchronize,
+        };
+      },
     }),
     DatabaseModule,
     QueuesModule,
@@ -90,6 +114,12 @@ import { TenantMapDraft } from './crm/entities/tenant-map-draft.entity';
     SupportModule,
     ClientPortalModule,
     CalendarModule,
+  ],
+  providers: [
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
+    },
   ],
 })
 export class AppModule {}

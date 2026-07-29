@@ -67,19 +67,13 @@ export class VpnController {
 
   @Post('tunnels/:id/setup')
   @TenantRoles(...CRM_WRITE_ROLES)
-  setup(
-    @CurrentUser() user: AuthUser,
-    @Param('id', ParseUUIDPipe) id: string,
-  ) {
+  setup(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string) {
     return this.vpn.getSetup(user, id);
   }
 
   @Post('tunnels/:id/probe')
   @TenantRoles(...CRM_WRITE_ROLES)
-  probe(
-    @CurrentUser() user: AuthUser,
-    @Param('id', ParseUUIDPipe) id: string,
-  ) {
+  probe(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string) {
     return this.vpn.probeTunnelReachability(user, id);
   }
 
@@ -90,12 +84,7 @@ export class VpnController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ImportVpnToRouterDto,
   ) {
-    return this.vpn.importToRouter(
-      user,
-      id,
-      dto.deviceId,
-      dto.phase ?? 'all',
-    );
+    return this.vpn.importToRouter(user, id, dto.deviceId, dto.phase ?? 'all');
   }
 }
 
@@ -106,10 +95,7 @@ export class VpnPublicController {
 
   @Get(':token')
   @Header('Content-Type', 'text/plain; charset=utf-8')
-  async fetchScript(
-    @Param('token') token: string,
-    @Res() res: Response,
-  ) {
+  async fetchScript(@Param('token') token: string, @Res() res: Response) {
     const script = await this.vpn.getSetupByTokenAcrossTenants(token);
     res.setHeader(
       'Content-Disposition',

@@ -16,6 +16,7 @@ import {
   EMPTY_MERCADOPAGO_CONFIG,
   EMPTY_SMTP_CONFIG,
   EMPTY_WHATSAPP_CONFIG,
+  baileysNeedsAttention,
   formatMercadoPagoCountries,
   getModuleDefinition,
   isMercadoPagoCheckoutProCountry,
@@ -89,8 +90,7 @@ export class ModulesService {
     const country = (tenant.country || '').toUpperCase();
     return catalog.map((m) => {
       const available =
-        !m.availableCountries ||
-        m.availableCountries.includes(country);
+        !m.availableCountries || m.availableCountries.includes(country);
       return {
         ...m,
         enabled: enabled.has(m.id),
@@ -227,32 +227,22 @@ export class ModulesService {
         const row = await configs.findOne({ where: { moduleId: m.id } });
         let configured = false;
         if (m.id === 'smtp') {
-          configured = isSmtpConfigured(
-            (row?.config ?? {}) as Partial<SmtpModuleConfig>,
-          );
+          configured = isSmtpConfigured(row?.config ?? {});
         } else if (m.id === 'mercadopago') {
-          configured = isMercadoPagoConfigured(
-            (row?.config ?? {}) as Partial<MercadoPagoModuleConfig>,
-          );
+          configured = isMercadoPagoConfigured(row?.config ?? {});
         } else if (m.id === 'whatsapp') {
-          configured = isWhatsAppConfigured(
-            (row?.config ?? {}) as Partial<WhatsAppModuleConfig>,
-          );
+          configured = isWhatsAppConfigured(row?.config ?? {});
         } else if (row?.config && Object.keys(row.config).length > 0) {
           configured = true;
         }
         const waCfg =
           m.id === 'whatsapp'
-            ? ({
+            ? {
                 ...EMPTY_WHATSAPP_CONFIG,
                 ...((row?.config ?? {}) as Partial<WhatsAppModuleConfig>),
-              } as WhatsAppModuleConfig)
+              }
             : null;
-        const needsAttention =
-          !!waCfg &&
-          waCfg.provider === 'baileys' &&
-          (waCfg.baileysStatus === 'disconnected' ||
-            waCfg.baileysStatus === 'qr');
+        const needsAttention = baileysNeedsAttention(waCfg);
         return {
           ...m,
           priceMonthly: def.priceMonthly,
@@ -405,9 +395,7 @@ export class ModulesService {
     const tenant = await this.requireTenantFromUser(user);
     const cfg = await this.readWhatsAppConfig(tenant.schemaName);
     const slots = await this.getBaileysSlots();
-    const needsAttention =
-      cfg.provider === 'baileys' &&
-      (cfg.baileysStatus === 'disconnected' || cfg.baileysStatus === 'qr');
+    const needsAttention = baileysNeedsAttention(cfg);
     return {
       provider: cfg.provider,
       phoneNumberId: cfg.phoneNumberId,
@@ -458,7 +446,9 @@ export class ModulesService {
       ...prev,
       provider: dto.provider,
       phoneNumberId: (dto.phoneNumberId ?? prev.phoneNumberId).trim(),
-      businessAccountId: (dto.businessAccountId ?? prev.businessAccountId).trim(),
+      businessAccountId: (
+        dto.businessAccountId ?? prev.businessAccountId
+      ).trim(),
       accessToken:
         dto.accessToken != null && dto.accessToken !== ''
           ? dto.accessToken
@@ -467,9 +457,7 @@ export class ModulesService {
         dto.webhookVerifyToken ?? prev.webhookVerifyToken
       ).trim(),
       templateName: (dto.templateName ?? prev.templateName).trim(),
-      templateLanguage: (
-        dto.templateLanguage ?? prev.templateLanguage
-      ).trim(),
+      templateLanguage: (dto.templateLanguage ?? prev.templateLanguage).trim(),
       baileysStatus:
         dto.provider === 'cloud_api' ? 'disconnected' : prev.baileysStatus,
       lastDisconnectAt:
@@ -547,9 +535,12 @@ export class ModulesService {
   async handleBaileysStatusWebhook(dto: WhatsAppBaileysStatusDto) {
     const tenant = await this.tenants.findOne({ where: { id: dto.tenantId } });
     if (!tenant) throw new NotFoundException('Tenant not found');
+    const wantAlert =
+      dto.alert !== false &&
+      (dto.status === 'disconnected' || dto.status === 'qr');
     await this.persistBaileysRuntime(tenant, dto.status, {
       reason: dto.reason,
-      alert: dto.status === 'disconnected' || dto.status === 'qr',
+      alert: wantAlert,
     });
     return { ok: true };
   }

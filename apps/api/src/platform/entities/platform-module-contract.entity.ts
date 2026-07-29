@@ -30,7 +30,12 @@ export class PlatformModuleContract {
   @Column({ type: 'varchar', length: 20, default: 'active' })
   status: ModuleContractStatus;
 
-  @Column({ name: 'monthly_price_usd', type: 'numeric', precision: 12, scale: 2 })
+  @Column({
+    name: 'monthly_price_usd',
+    type: 'numeric',
+    precision: 12,
+    scale: 2,
+  })
   monthlyPriceUsd: string;
 
   /** Monto cobrado al contratar (pago único o prorrateo). */

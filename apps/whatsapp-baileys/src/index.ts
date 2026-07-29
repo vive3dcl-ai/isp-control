@@ -17,18 +17,25 @@ type SessionState = {
   qrDataUrl: string | null;
   reason: string | null;
   sock: WASocket | null;
+  /** Skip attention/alert when user clicked logout. */
+  manualLogout: boolean;
 };
 
 const PORT = Number(process.env.PORT || 3101);
 const SECRET = process.env.WHATSAPP_BAILEYS_SECRET || '';
 const SESSIONS_DIR =
-  process.env.WHATSAPP_SESSIONS_DIR || path.join(process.cwd(), 'data', 'sessions');
+  process.env.WHATSAPP_SESSIONS_DIR ||
+  path.join(process.cwd(), 'data', 'sessions');
 const API_INTERNAL_URL = (
   process.env.API_INTERNAL_URL || 'http://api:3000/api'
 ).replace(/\/$/, '');
 
 const log = pino({ level: process.env.LOG_LEVEL || 'info' });
 const sessions = new Map<string, SessionState>();
+
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
 
 function requireSecret(
   req: express.Request,
@@ -52,6 +59,7 @@ function getOrCreate(tenantId: string): SessionState {
       qrDataUrl: null,
       reason: null,
       sock: null,
+      manualLogout: false,
     };
     sessions.set(tenantId, s);
   }
@@ -81,6 +89,8 @@ async function notifyApi(s: SessionState) {
         status: s.status,
         reason: s.reason ?? undefined,
         qrDataUrl: s.qrDataUrl ?? undefined,
+        /** Intentional logout must not open the attention banner. */
+        alert: !s.manualLogout && s.status !== 'connecting',
       }),
     });
   } catch (err) {
@@ -102,17 +112,43 @@ async function setStatus(
   if (status === 'connected') {
     s.qrDataUrl = null;
     s.reason = null;
+    s.manualLogout = false;
   }
   if (opts?.notify !== false) {
     await notifyApi(s);
   }
 }
 
-async function startSession(tenantId: string): Promise<SessionState> {
+function sessionAuthDir(tenantId: string): string {
+  const sessionsRoot = path.resolve(SESSIONS_DIR);
+  const authDir = path.resolve(sessionsRoot, tenantId);
+  if (!authDir.startsWith(`${sessionsRoot}${path.sep}`)) {
+    throw new Error('tenantId inválido');
+  }
+  return authDir;
+}
+
+function wipeAuthDir(tenantId: string) {
+  const authDir = sessionAuthDir(tenantId);
+  try {
+    fs.rmSync(authDir, { recursive: true, force: true });
+  } catch {
+    /* ignore */
+  }
+  fs.mkdirSync(authDir, { recursive: true });
+  return authDir;
+}
+
+async function startSession(
+  tenantId: string,
+  opts?: { forceQr?: boolean },
+): Promise<SessionState> {
   const s = getOrCreate(tenantId);
-  if (s.status === 'connected' && s.sock) {
+  if (s.status === 'connected' && s.sock && !opts?.forceQr) {
     return s;
   }
+
+  s.manualLogout = false;
 
   if (s.sock) {
     try {
@@ -123,8 +159,17 @@ async function startSession(tenantId: string): Promise<SessionState> {
     s.sock = null;
   }
 
-  const authDir = path.join(SESSIONS_DIR, tenantId);
-  fs.mkdirSync(authDir, { recursive: true });
+  // Stale multi-file auth often reconnects without emitting a QR. When the user
+  // explicitly asks to connect / show QR, start clean unless already connected.
+  const authDir =
+    opts?.forceQr !== false && s.status !== 'connected'
+      ? wipeAuthDir(tenantId)
+      : (() => {
+          const dir = sessionAuthDir(tenantId);
+          fs.mkdirSync(dir, { recursive: true });
+          return dir;
+        })();
+
   const { state, saveCreds } = await useMultiFileAuthState(authDir);
 
   await setStatus(s, 'connecting', { reason: null, qrDataUrl: null });
@@ -145,7 +190,11 @@ async function startSession(tenantId: string): Promise<SessionState> {
     if (qr) {
       try {
         const qrDataUrl = await QRCode.toDataURL(qr, { margin: 1, width: 320 });
-        await setStatus(s, 'qr', { qrDataUrl, reason: 'Escanea el código QR' });
+        await setStatus(s, 'qr', {
+          qrDataUrl,
+          reason: 'Escanea el código QR',
+        });
+        log.info({ tenantId }, 'Baileys QR ready');
       } catch (err) {
         log.error({ err, tenantId }, 'QR encode failed');
       }
@@ -155,25 +204,45 @@ async function startSession(tenantId: string): Promise<SessionState> {
       log.info({ tenantId }, 'Baileys connected');
     }
     if (connection === 'close') {
-      const code = (lastDisconnect?.error as { output?: { statusCode?: number } })
-        ?.output?.statusCode;
+      const code = (
+        lastDisconnect?.error as { output?: { statusCode?: number } } | undefined
+      )?.output?.statusCode;
       const loggedOut = code === DisconnectReason.loggedOut;
-      await setStatus(s, loggedOut ? 'disconnected' : 'disconnected', {
-        qrDataUrl: null,
-        reason: loggedOut
-          ? 'Sesión cerrada en el teléfono; escanea el QR de nuevo'
-          : `Conexión cerrada (code=${code ?? 'unknown'})`,
-      });
+      if (s.manualLogout) {
+        await setStatus(s, 'disconnected', {
+          qrDataUrl: null,
+          reason: 'Sesión cerrada manualmente',
+          notify: false,
+        });
+      } else {
+        await setStatus(s, 'disconnected', {
+          qrDataUrl: null,
+          reason: loggedOut
+            ? 'Sesión cerrada en el teléfono; escanea el QR de nuevo'
+            : `Conexión cerrada (code=${code ?? 'unknown'})`,
+        });
+      }
       s.sock = null;
-      log.warn({ tenantId, code }, 'Baileys disconnected');
+      log.warn({ tenantId, code, manual: s.manualLogout }, 'Baileys disconnected');
     }
   });
 
   return s;
 }
 
+async function waitForQrOrConnected(s: SessionState, timeoutMs: number) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (s.status === 'connected') return;
+    if (s.status === 'qr' && s.qrDataUrl) return;
+    if (s.status === 'disconnected' && s.reason) return;
+    await sleep(250);
+  }
+}
+
 async function logoutSession(tenantId: string): Promise<SessionState> {
   const s = getOrCreate(tenantId);
+  s.manualLogout = true;
   if (s.sock) {
     try {
       await s.sock.logout();
@@ -186,14 +255,9 @@ async function logoutSession(tenantId: string): Promise<SessionState> {
     }
     s.sock = null;
   }
-  const authDir = path.join(SESSIONS_DIR, tenantId);
-  try {
-    fs.rmSync(authDir, { recursive: true, force: true });
-  } catch {
-    /* ignore */
-  }
+  wipeAuthDir(tenantId);
   await setStatus(s, 'disconnected', {
-    reason: 'Sesión cerrada',
+    reason: 'Sesión cerrada manualmente',
     qrDataUrl: null,
   });
   return s;
@@ -205,6 +269,17 @@ function paramId(v: string | string[]): string {
 
 const app = express();
 app.use(express.json({ limit: '20mb' }));
+app.param('tenantId', (_req, res, next, value: string) => {
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      value,
+    )
+  ) {
+    res.status(400).json({ error: 'tenantId inválido' });
+    return;
+  }
+  next();
+});
 
 app.get('/health', (_req, res) => {
   res.json({ ok: true, sessions: sessions.size });
@@ -212,11 +287,10 @@ app.get('/health', (_req, res) => {
 
 app.post('/sessions/:tenantId/start', requireSecret, async (req, res) => {
   try {
-    const s = await startSession(paramId(req.params.tenantId));
-    // Espera breve por QR si aún connecting
-    if (s.status === 'connecting') {
-      await new Promise((r) => setTimeout(r, 1500));
-    }
+    const tenantId = paramId(req.params.tenantId);
+    const s = await startSession(tenantId, { forceQr: true });
+    // QR can take several seconds after socket open.
+    await waitForQrOrConnected(s, 20_000);
     res.json(publicState(s));
   } catch (err) {
     log.error({ err }, 'start failed');
@@ -264,11 +338,9 @@ app.post('/sessions/:tenantId/send', requireSecret, async (req, res) => {
 
     let session = getOrCreate(tenantId);
     if (!session.sock || session.status !== 'connected') {
-      session = await startSession(tenantId);
-      const deadline = Date.now() + 12_000;
-      while (session.status === 'connecting' && Date.now() < deadline) {
-        await new Promise((resolve) => setTimeout(resolve, 250));
-      }
+      // Do not wipe auth when sending — only reconnect existing session.
+      session = await startSession(tenantId, { forceQr: false });
+      await waitForQrOrConnected(session, 12_000);
     }
     if (!session.sock || session.status !== 'connected') {
       res.status(409).json({

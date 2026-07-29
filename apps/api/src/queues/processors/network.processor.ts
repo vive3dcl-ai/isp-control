@@ -15,6 +15,8 @@ import {
 export class NetworkProcessor extends WorkerHost {
   private readonly logger = new Logger(NetworkProcessor.name);
 
+  // WorkerHost requires a Promise-returning processor method.
+  // eslint-disable-next-line @typescript-eslint/require-await
   async process(
     job: Job<NetworkJobPayload, void, NetworkJobName>,
   ): Promise<void> {

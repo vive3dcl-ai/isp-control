@@ -20,7 +20,7 @@ export class MapDraftsService {
     const tenantId = this.requireTenantId(user);
     const row = await this.drafts.findOne({ where: { tenantId } });
     return {
-      elements: Array.isArray(row?.elements) ? row!.elements : [],
+      elements: Array.isArray(row?.elements) ? row.elements : [],
       updatedAt: row?.updatedAt?.toISOString() ?? null,
     };
   }
@@ -41,7 +41,10 @@ export class MapDraftsService {
 
   async upsertElement(user: AuthUser, element: Record<string, unknown>) {
     const tenantId = this.requireTenantId(user);
-    const id = String(element.id ?? '');
+    const id =
+      typeof element.id === 'string' || typeof element.id === 'number'
+        ? String(element.id)
+        : '';
     if (!id) {
       return this.get(user);
     }

@@ -12,10 +12,7 @@ import type { AuthUser } from '../auth/auth.types';
 import { TenantConnectionService } from '../database/tenant-connection.service';
 import { MikrotikClient } from './mikrotik.client';
 import type { VpnTunnel } from './entities/vpn-tunnel.entity';
-import {
-  CreateVpnTunnelDto,
-  UpdateVpnTunnelDto,
-} from './dto/vpn.dto';
+import { CreateVpnTunnelDto, UpdateVpnTunnelDto } from './dto/vpn.dto';
 import {
   DEFAULT_VPN_PORTS,
   DEFAULT_VPN_TUNNEL_ROUTES,
@@ -148,7 +145,9 @@ export class VpnService {
   }
 
   private tenantLabelFromSchema(schema: string): string {
-    return schema.startsWith('tenant_') ? schema.slice('tenant_'.length) : schema;
+    return schema.startsWith('tenant_')
+      ? schema.slice('tenant_'.length)
+      : schema;
   }
 
   private sanitize(t: VpnTunnel) {
@@ -157,10 +156,12 @@ export class VpnService {
       wgPrivateKey,
       setupToken,
       setupTokenExpiresAt,
-      endpointHost: _endpointHost,
-      mode: _mode,
+      endpointHost,
+      mode,
       ...rest
     } = t;
+    void endpointHost;
+    void mode;
     return {
       ...rest,
       protocolLabel:
@@ -443,8 +444,7 @@ export class VpnService {
         timeout: 3000,
       });
       const out = stdout.trim().replace(/\s+/g, ' ');
-      const via =
-        out.match(/\bvia\s+(\d+\.\d+\.\d+\.\d+)/)?.[1] || '';
+      const via = out.match(/\bvia\s+(\d+\.\d+\.\d+\.\d+)/)?.[1] || '';
       const def = await this.readDefaultGateway();
       if (via && def && via === def) {
         return {
@@ -505,9 +505,7 @@ export class VpnService {
       };
       socket.setTimeout(timeoutMs);
       socket.once('connect', () => finish(true));
-      socket.once('timeout', () =>
-        finish(false, `ETIMEDOUT ${host}:${port}`),
-      );
+      socket.once('timeout', () => finish(false, `ETIMEDOUT ${host}:${port}`));
       socket.once('error', (e) =>
         finish(false, e.message || `error ${host}:${port}`),
       );
@@ -574,9 +572,7 @@ export class VpnService {
   private parseSubnet(cidr: string) {
     const m = cidr.match(/^(\d+\.\d+\.\d+)\.0\/24$/);
     if (!m) {
-      throw new BadRequestException(
-        'tunnelSubnet must be like 10.69.10.0/24',
-      );
+      throw new BadRequestException('tunnelSubnet must be like 10.69.10.0/24');
     }
     return {
       tunnelSubnet: cidr,
@@ -681,9 +677,7 @@ export class VpnService {
     const script = this.buildRouterScript(tunnel);
     const acsUrlHint = `http://${tunnel.serverAddress}:${ACS_HINT_PORT}`;
     const apiBase = await this.publicUrls.resolvePublicApiUrl();
-    const fetchUrl = apiBase
-      ? `${apiBase}/public/vpn-setup/${token}`
-      : '';
+    const fetchUrl = apiBase ? `${apiBase}/public/vpn-setup/${token}` : '';
     const bootstrap = fetchUrl
       ? buildMikrotikBootstrapCommand({ fetchUrl })
       : null;
@@ -691,8 +685,7 @@ export class VpnService {
     return {
       tunnel: this.sanitize(tunnel),
       protocolLabel:
-        VPN_PROTOCOL_LABELS[tunnel.protocol as VpnProtocol] ??
-        tunnel.protocol,
+        VPN_PROTOCOL_LABELS[tunnel.protocol as VpnProtocol] ?? tunnel.protocol,
       expiresInSeconds: 300,
       endpoint: { host: ctx.vpnHost, port: ctx.vpnPort },
       script,
@@ -957,7 +950,9 @@ export class VpnService {
       },
       wireguard: {
         privateKey: this.wgServerPrivateKey() || '',
-        publicKey: this.config.get<string>('VPN_WIREGUARD_SERVER_PUBLIC_KEY')?.trim() || '',
+        publicKey:
+          this.config.get<string>('VPN_WIREGUARD_SERVER_PUBLIC_KEY')?.trim() ||
+          '',
         peers: wireguardPeers,
       },
       openvpnUsers,
@@ -1012,7 +1007,8 @@ export class VpnService {
       const stages: Array<Record<string, unknown>> = [];
       for (const p of ['connect', 'plan', 'apply', 'verify'] as const) {
         const r = await this.importToRouterPhase(user, id, deviceId, p);
-        const { phase: _phase, ...rest } = r;
+        const { phase: completedPhase, ...rest } = r;
+        void completedPhase;
         stages.push({ phase: p, ...rest });
         if (!r.ok) {
           return {
@@ -1025,7 +1021,7 @@ export class VpnService {
           };
         }
       }
-      const last = stages[stages.length - 1] as Record<string, unknown>;
+      const last = stages[stages.length - 1];
       return {
         ok: true,
         phase: 'all' as const,
@@ -1062,7 +1058,9 @@ export class VpnService {
       await devices.save(device);
     }
     if (device.subtype !== 'mikrotik') {
-      throw new BadRequestException('Solo se puede importar a routers MikroTik');
+      throw new BadRequestException(
+        'Solo se puede importar a routers MikroTik',
+      );
     }
     if (!device.mgmtHost || !device.mgmtUsername || !device.mgmtPassword) {
       throw new BadRequestException(
@@ -1076,8 +1074,7 @@ export class VpnService {
       );
     }
 
-    const port =
-      device.mgmtPort ?? (protocol === 'api_plain' ? 8728 : 8729);
+    const port = device.mgmtPort ?? (protocol === 'api_plain' ? 8728 : 8729);
     const useTls = protocol === 'api_ssl';
     const conn = {
       host: device.mgmtHost,
@@ -1147,7 +1144,12 @@ export class VpnService {
           pendingCommands: scriptToApiBatches(script).length,
           addedRoutes: desiredRoutes,
           skippedRoutes: [] as string[],
-          firewallPending: ['vpn-fwd-in', 'vpn-fwd-out', 'vpn-input', 'vpn-no-masq'],
+          firewallPending: [
+            'vpn-fwd-in',
+            'vpn-fwd-out',
+            'vpn-input',
+            'vpn-no-masq',
+          ],
           detail: `Interfaz ${iface} no existe → importación completa (${scriptToApiBatches(script).length} comandos)`,
           note: 'Plan: script completo del túnel',
           tunnel: this.sanitize(tunnel),
@@ -1155,7 +1157,12 @@ export class VpnService {
         };
       }
 
-      const plan = await this.buildIncrementalImportPlan(conn, ctx, tunnel, iface);
+      const plan = await this.buildIncrementalImportPlan(
+        conn,
+        ctx,
+        tunnel,
+        iface,
+      );
       return {
         ok: true,
         phase,
@@ -1200,7 +1207,10 @@ export class VpnService {
           addedRoutes: desiredRoutes,
           skippedRoutes: [] as string[],
           updatedWgAllowed: tunnel.protocol === 'wireguard',
-          errors: failed.slice(0, 8).map((f) => f.error).filter(Boolean) as string[],
+          errors: failed
+            .slice(0, 8)
+            .map((f) => f.error)
+            .filter(Boolean) as string[],
           script,
           detail: `Script completo: ${results.length - failed.length}/${results.length} OK`,
           note: 'Primera importación: se aplicó el script completo del túnel.',
@@ -1208,7 +1218,12 @@ export class VpnService {
         };
       }
 
-      const plan = await this.buildIncrementalImportPlan(conn, ctx, tunnel, iface);
+      const plan = await this.buildIncrementalImportPlan(
+        conn,
+        ctx,
+        tunnel,
+        iface,
+      );
       const results =
         plan.commands.length > 0
           ? await this.mikrotik.runWordsMany({
@@ -1236,7 +1251,10 @@ export class VpnService {
         skippedRoutes: plan.skippedRoutes,
         updatedWgAllowed: plan.updatedWgAllowed,
         firewallPending: plan.firewallPending,
-        errors: failed.slice(0, 8).map((f) => f.error).filter(Boolean) as string[],
+        errors: failed
+          .slice(0, 8)
+          .map((f) => f.error)
+          .filter(Boolean) as string[],
         script,
         detail:
           plan.commands.length === 0
@@ -1255,8 +1273,12 @@ export class VpnService {
     }
 
     // verify
-    const checks: Array<{ id: string; label: string; ok: boolean; detail: string }> =
-      [];
+    const checks: Array<{
+      id: string;
+      label: string;
+      ok: boolean;
+      detail: string;
+    }> = [];
 
     checks.push({
       id: 'iface',
@@ -1371,9 +1393,7 @@ export class VpnService {
       words: ['/ip/firewall/filter/print'],
     });
     const filterComments = new Set(
-      (filterPrint.rows ?? [])
-        .map((r) => r.comment || '')
-        .filter(Boolean),
+      (filterPrint.rows ?? []).map((r) => r.comment || '').filter(Boolean),
     );
     const firewallPending: string[] = [];
     const needFwdIn = ![...filterComments].some((c) =>
@@ -1442,10 +1462,7 @@ export class VpnService {
     if (tunnel.protocol === 'wireguard') {
       const peers = await this.mikrotik.runWords({
         ...conn,
-        words: [
-          '/interface/wireguard/peers/print',
-          `?interface=${iface}`,
-        ],
+        words: ['/interface/wireguard/peers/print', `?interface=${iface}`],
       });
       const peer = peers.rows?.[0];
       const peerId = peer?.['.id'];

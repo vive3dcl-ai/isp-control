@@ -17,13 +17,31 @@ import {
 } from './genieacs-nbi.client';
 import { IpPoolService } from './ip-pool.service';
 import { ZteOltClient } from './zte-olt.client';
+import { HuaweiOltClient } from './huawei-olt.client';
 import {
   DEFAULT_OLT_PORTS,
-  isZteOltDevice,
+  isHuaweiOltDevice,
+  isManagedOltDevice,
 } from './olt.constants';
+import { stripHuaweiDialectTag } from './huawei-olt-firmware.util';
 import { computeIpNetwork } from './ip-pool.util';
 import type { NetworkDevice } from './entities/network-device.entity';
 import type { Tr069Profile } from './entities/tr069-profile.entity';
+
+function deviceIdString(value: unknown): string {
+  return typeof value === 'string' || typeof value === 'number'
+    ? String(value)
+    : '';
+}
+
+function oltFirmwareHint(olt: NetworkDevice): string | null {
+  return (
+    stripHuaweiDialectTag(olt.metricVersion) ||
+    olt.metricVersion ||
+    olt.metricBoardName ||
+    null
+  );
+}
 
 function prefixToMask(prefix: number): string {
   const mask = prefix === 0 ? 0 : (~0 << (32 - prefix)) >>> 0;
@@ -104,7 +122,14 @@ export class OnuTr069ConfigService {
     private readonly tenantConnections: TenantConnectionService,
     private readonly ipPools: IpPoolService,
     private readonly zteOlt: ZteOltClient,
+    private readonly huaweiOlt: HuaweiOltClient,
   ) {}
+
+  private oltCli(device: NetworkDevice) {
+    return isHuaweiOltDevice(device.type, device.subtype)
+      ? this.huaweiOlt
+      : this.zteOlt;
+  }
 
   private requireSchema(user: AuthUser): string {
     if (!user.schemaName) {
@@ -189,10 +214,10 @@ export class OnuTr069ConfigService {
       const deviceRepo =
         await this.tenantConnections.getNetworkDeviceRepository(schema);
       const olt = await deviceRepo.findOne({ where: { id: onu.oltId } });
-      if (!olt || !isZteOltDevice(olt.type, olt.subtype)) {
+      if (!olt || !isManagedOltDevice(olt.type, olt.subtype)) {
         omciOk = false;
         omciMessage =
-          'TR069 guardado en DB, pero la OLT no es ZTE — OMCI no aplicado';
+          'TR069 guardado en DB, pero la OLT no es gestionada (ZTE/Huawei) — OMCI no aplicado';
       } else if (!olt.mgmtHost || !olt.mgmtUsername || !olt.mgmtPassword) {
         omciOk = false;
         omciMessage =
@@ -247,7 +272,7 @@ export class OnuTr069ConfigService {
           }
         }
 
-        const omciPromise = this.zteOlt.applyOnuTr069Mgmt({
+        const omciPromise = this.oltCli(olt).applyOnuTr069Mgmt({
           host: olt.mgmtHost,
           port,
           protocol,
@@ -262,6 +287,8 @@ export class OnuTr069ConfigService {
           mgmtMask,
           mgmtGateway,
           mgmtVlan,
+          subtypeHint: olt.subtype,
+          firmwareHint: oltFirmwareHint(olt),
         });
         const omci = await Promise.race([
           omciPromise,
@@ -279,8 +306,8 @@ export class OnuTr069ConfigService {
         ]);
         omciOk = omci.ok;
         omciMessage = omci.ok
-          ? ('message' in omci ? omci.message : null) ?? 'OMCI OK'
-          : omci.error ?? 'OMCI falló';
+          ? (('message' in omci ? omci.message : null) ?? 'OMCI OK')
+          : (omci.error ?? 'OMCI falló');
         if (!omci.ok && 'cliLog' in omci && omci.cliLog) {
           omciMessage = `${omciMessage} | ${String(omci.cliLog).slice(-300)}`;
         }
@@ -375,9 +402,7 @@ export class OnuTr069ConfigService {
           ssid: strVal(genieGet(device, `${prefix}.SSID`)),
           key: strVal(genieGet(device, keyPath)),
           enabled: boolVal(genieGet(device, `${prefix}.Enable`)),
-          channel: strVal(
-            genieGet(device, `Device.WiFi.Radio.1.Channel`),
-          ),
+          channel: strVal(genieGet(device, `Device.WiFi.Radio.1.Channel`)),
           standard: strVal(
             genieGet(device, `Device.WiFi.Radio.1.OperatingStandards`),
           ),
@@ -438,14 +463,12 @@ export class OnuTr069ConfigService {
     if (webUsers.length === 0) {
       const candidates = [
         {
-          prefix:
-            'InternetGatewayDevice.UserInterface.X_HW_WebUserInfo.1',
+          prefix: 'InternetGatewayDevice.UserInterface.X_HW_WebUserInfo.1',
           user: 'UserName',
           pass: 'Password',
         },
         {
-          prefix:
-            'InternetGatewayDevice.UserInterface.X_HW_WebUserInfo.2',
+          prefix: 'InternetGatewayDevice.UserInterface.X_HW_WebUserInfo.2',
           user: 'UserName',
           pass: 'Password',
         },
@@ -494,8 +517,8 @@ export class OnuTr069ConfigService {
     const li = device._lastInform;
     if (li instanceof Date) lastInform = li.toISOString();
     else if (typeof li === 'string') lastInform = li;
-    else if (li && typeof li === 'object' && '$date' in (li as object)) {
-      lastInform = String((li as { $date: unknown }).$date);
+    else if (li && typeof li === 'object' && '$date' in li) {
+      lastInform = String(li.$date);
     }
 
     return {
@@ -552,7 +575,7 @@ export class OnuTr069ConfigService {
           'Mgmt IP activa, pero la ONU aún no aparece en GenieACS. Verifica que tenga ACS URL (OMCI/TR069) y que pueda alcanzar el ACS; espera el próximo Inform.';
         return base;
       }
-      const id = String(device._id ?? '');
+      const id = deviceIdString(device._id);
       const parsed = this.parseDevice(device);
       return {
         ...base,
@@ -613,17 +636,14 @@ export class OnuTr069ConfigService {
         'ONU no registrada en el ACS. Espera el Inform o aplica el perfil TR069 (ACS URL) primero.',
       );
     }
-    const deviceId = String(device._id);
+    const deviceId = deviceIdString(device._id);
     const parsed = this.parseDevice(device);
     const params: Array<[string, string | number | boolean, string?]> = [];
 
     if (dto.refresh) {
       // First Inform is often DeviceInfo-only; pull LAN subtree (WiFi/ETH).
       try {
-        await client.refreshObject(
-          deviceId,
-          'InternetGatewayDevice.LANDevice',
-        );
+        await client.refreshObject(deviceId, 'InternetGatewayDevice.LANDevice');
       } catch {
         await client.refreshObject(deviceId, '');
       }
@@ -648,7 +668,9 @@ export class OnuTr069ConfigService {
     for (const e of dto.ethernet ?? []) {
       const port = parsed.ethernet.find((x) => x.index === e.index);
       if (!port) {
-        throw new BadRequestException(`Ethernet index ${e.index} no encontrado`);
+        throw new BadRequestException(
+          `Ethernet index ${e.index} no encontrado`,
+        );
       }
       if (e.enabled != null && port.enablePath) {
         params.push([port.enablePath, e.enabled, 'xsd:boolean']);
@@ -658,7 +680,9 @@ export class OnuTr069ConfigService {
     for (const u of dto.webUsers ?? []) {
       const userRow = parsed.webUsers.find((x) => x.index === u.index);
       if (!userRow) {
-        throw new BadRequestException(`Usuario web index ${u.index} no encontrado`);
+        throw new BadRequestException(
+          `Usuario web index ${u.index} no encontrado`,
+        );
       }
       if (u.username != null) {
         params.push([userRow.usernamePath, u.username, 'xsd:string']);
@@ -745,8 +769,8 @@ export class OnuTr069ConfigService {
     const deviceRepo =
       await this.tenantConnections.getNetworkDeviceRepository(schema);
     const olt = await deviceRepo.findOne({ where: { id: onu.oltId } });
-    if (!olt || !isZteOltDevice(olt.type, olt.subtype)) {
-      throw new BadRequestException('OLT no es ZTE conectada');
+    if (!olt || !isManagedOltDevice(olt.type, olt.subtype)) {
+      throw new BadRequestException('OLT no es ZTE/Huawei gestionada');
     }
     if (!olt.mgmtHost || !olt.mgmtUsername || !olt.mgmtPassword) {
       throw new BadRequestException('OLT sin credenciales de gestión');
@@ -772,11 +796,13 @@ export class OnuTr069ConfigService {
       return { ok: true, message: 'OLT: sin cambios de VLAN' };
     }
 
-    const result = await this.zteOlt.applyOnuServiceVlans({
+    const result = await this.oltCli(olt).applyOnuServiceVlans({
       ...conn,
       onuIf: onu.onuIf,
       wanVlan,
       mgmtVlan,
+      subtypeHint: olt.subtype,
+      firmwareHint: oltFirmwareHint(olt),
     });
     if (!result.ok) {
       throw new BadRequestException(
@@ -828,11 +854,7 @@ export class OnuTr069ConfigService {
         notes.push('WAN liberada');
         onu = (await onuRepo.findOne({ where: { id: onuId } }))!;
       } else {
-        const wan = await this.ipPools.assignWanIp(
-          schema,
-          onu,
-          dto.wanVlanId,
-        );
+        const wan = await this.ipPools.assignWanIp(schema, onu, dto.wanVlanId);
         notes.push(`WAN ${wan.wanIp} (VLAN ${wan.wanVlan})`);
         onu = (await onuRepo.findOne({ where: { id: onuId } }))!;
       }
@@ -902,23 +924,26 @@ export class OnuTr069ConfigService {
       const olt = await deviceRepo.findOne({ where: { id: onu.oltId } });
       if (
         olt &&
-        isZteOltDevice(olt.type, olt.subtype) &&
+        isManagedOltDevice(olt.type, olt.subtype) &&
         olt.mgmtHost &&
         olt.mgmtUsername &&
         olt.mgmtPassword &&
         onu.onuIf
       ) {
         const conn = this.zteConn(olt);
+        const cli = this.oltCli(olt);
 
         if (dto.wanVlanId == null) {
-          const cleared = await this.zteOlt.applyOnuWanStaticOmci({
+          const cleared = await cli.applyOnuWanStaticOmci({
             ...conn,
             onuIf: onu.onuIf,
             wan: null,
+            subtypeHint: olt.subtype,
+            firmwareHint: oltFirmwareHint(olt),
           });
           notes.push(
             cleared.ok
-              ? cleared.message ?? 'WAN OMCI quitada'
+              ? (cleared.message ?? 'WAN OMCI quitada')
               : `WAN OMCI: ${cleared.error}`,
           );
         } else if (onu.wanIp) {
@@ -929,9 +954,7 @@ export class OnuTr069ConfigService {
             : null;
           if (wanPool?.dns1) {
             const m =
-              wanPool.prefix === 0
-                ? 0
-                : (~0 << (32 - wanPool.prefix)) >>> 0;
+              wanPool.prefix === 0 ? 0 : (~0 << (32 - wanPool.prefix)) >>> 0;
             const wanMask = [
               (m >>> 24) & 255,
               (m >>> 16) & 255,
@@ -942,7 +965,7 @@ export class OnuTr069ConfigService {
             let omciOk = false;
             let omciErr = '';
             for (let attempt = 1; attempt <= 2; attempt++) {
-              const omci = await this.zteOlt.applyOnuWanStaticOmci({
+              const omci = await cli.applyOnuWanStaticOmci({
                 ...conn,
                 onuIf: onu.onuIf,
                 wan: {
@@ -953,6 +976,8 @@ export class OnuTr069ConfigService {
                   wanDns1: wanPool.dns1,
                   wanDns2: wanPool.dns2,
                 },
+                subtypeHint: olt.subtype,
+                firmwareHint: oltFirmwareHint(olt),
               });
               if (omci.ok) {
                 omciOk = true;
@@ -1030,17 +1055,18 @@ export class OnuTr069ConfigService {
 
     if (
       olt &&
-      isZteOltDevice(olt.type, olt.subtype) &&
+      isManagedOltDevice(olt.type, olt.subtype) &&
       olt.mgmtHost &&
       olt.mgmtUsername &&
       olt.mgmtPassword &&
       onu.onuIf
     ) {
       const conn = this.zteConn(olt);
+      const cli = this.oltCli(olt);
       while (Date.now() - started < waitMs) {
         probes += 1;
         try {
-          const detail = await this.zteOlt.getConnectedOnuDetail({
+          const detail = await cli.getConnectedOnuDetail({
             ...conn,
             onuIf: onu.onuIf,
           });
@@ -1072,9 +1098,7 @@ export class OnuTr069ConfigService {
           }
         } catch (e) {
           lastProbeNote = e instanceof Error ? e.message : String(e);
-          this.logger.warn(
-            `verify probe ${onu.onuIf}: ${lastProbeNote}`,
-          );
+          this.logger.warn(`verify probe ${onu.onuIf}: ${lastProbeNote}`);
         }
         await this.sleep(pollEveryMs);
         onu = (await onuRepo.findOne({ where: { id: onuId } })) ?? onu;
@@ -1223,14 +1247,11 @@ export class OnuTr069ConfigService {
       if (!device?._id) {
         return 'WAN en DB; ONU aún no Informó al ACS';
       }
-      const deviceId = String(device._id);
+      const deviceId = deviceIdString(device._id);
 
       // Ensure WAN tree is present
       try {
-        await client.refreshObject(
-          deviceId,
-          'InternetGatewayDevice.WANDevice',
-        );
+        await client.refreshObject(deviceId, 'InternetGatewayDevice.WANDevice');
         device = (await client.findBySerial(onu.sn)) ?? device;
       } catch {
         /* continue with what we have */
@@ -1241,9 +1262,7 @@ export class OnuTr069ConfigService {
         return 'WAN en DB; no se encontró WANIPConnection en el árbol TR069 — pulsa Refrescar en Configurar ONU';
       }
 
-      const dns = wan.wanDns2
-        ? `${wan.wanDns1},${wan.wanDns2}`
-        : wan.wanDns1;
+      const dns = wan.wanDns2 ? `${wan.wanDns1},${wan.wanDns2}` : wan.wanDns1;
       const params: Array<[string, string | number | boolean, string?]> = [
         [`${conn}.Enable`, true, 'xsd:boolean'],
         // Modo router por defecto: la conexión WAN queda enrutada (NAT/IP_Routed)
@@ -1270,9 +1289,7 @@ export class OnuTr069ConfigService {
     }
   }
 
-  private findWanIpConnection(
-    device: Record<string, unknown>,
-  ): string | null {
+  private findWanIpConnection(device: Record<string, unknown>): string | null {
     const wanDevBase = 'InternetGatewayDevice.WANDevice';
     for (const wd of genieChildIndices(device, wanDevBase)) {
       const connBase = `${wanDevBase}.${wd}.WANConnectionDevice`;

@@ -47,10 +47,7 @@ export class CompanySettingsController {
     @CurrentUser() user: AuthUser,
     @Query('templateId') templateId: string | undefined,
   ) {
-    const html = await this.suspensionPortal.previewTemplate(
-      user,
-      templateId,
-    );
+    const html = await this.suspensionPortal.previewTemplate(user, templateId);
     return { html };
   }
 
@@ -64,10 +61,7 @@ export class CompanySettingsController {
 
   @Patch()
   @TenantRoles(...CRM_WRITE_ROLES)
-  updateCompany(
-    @CurrentUser() user: AuthUser,
-    @Body() dto: UpdateCompanyDto,
-  ) {
+  updateCompany(@CurrentUser() user: AuthUser, @Body() dto: UpdateCompanyDto) {
     if (!user.tenantId) {
       throw new NotFoundException('Sin empresa asociada');
     }

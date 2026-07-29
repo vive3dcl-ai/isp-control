@@ -25,7 +25,6 @@ export interface PortVlanAssignment {
   comment?: string;
 }
 
-
 @Entity({ name: 'network_ports' })
 export class NetworkPort {
   @PrimaryGeneratedColumn('uuid')
@@ -58,7 +57,12 @@ export class NetworkPort {
   sortOrder: number;
 
   /** Physical port link: up / down / disabled / unknown */
-  @Column({ name: 'link_status', type: 'varchar', length: 20, default: 'unknown' })
+  @Column({
+    name: 'link_status',
+    type: 'varchar',
+    length: 20,
+    default: 'unknown',
+  })
   linkStatus: PortLinkStatus;
 
   /** True when port was discovered from the live device (read-only in UI). */

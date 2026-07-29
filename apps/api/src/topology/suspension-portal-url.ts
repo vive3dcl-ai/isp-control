@@ -86,11 +86,10 @@ export function parsePortalUrl(urlRaw: string): {
     throw new Error('La URL del portal debe ser http:// o https://');
   }
   const host = parsed.hostname;
-  const port =
-    parsed.port
-      ? Number(parsed.port)
-      : parsed.protocol === 'https:'
-        ? 443
-        : 80;
+  const port = parsed.port
+    ? Number(parsed.port)
+    : parsed.protocol === 'https:'
+      ? 443
+      : 80;
   return { url, host, port };
 }

@@ -18,9 +18,7 @@ export function toSystemOltProfileName(raw: string): string | null {
   const clean = sanitizeSpeedProfileName(raw);
   if (!clean) return null;
   const base = clean.replace(/^TLG-/i, '');
-  return `${SYSTEM_PROFILE_PREFIX}${base}`
-    .slice(0, 26)
-    .replace(/-+$/, '');
+  return `${SYSTEM_PROFILE_PREFIX}${base}`.slice(0, 26).replace(/-+$/, '');
 }
 
 export function isSystemOltProfileName(name: string): boolean {
@@ -59,15 +57,15 @@ export type RawTrafficProfile = {
  */
 export function parseTcontProfiles(text: string): RawTcontProfile[] {
   const out: RawTcontProfile[] = [];
-  const blocks = text.split(/Profile\s+name\s*:/i).slice(1);
+  const blocks = text.split(/Profile[\s-]*name\s*:/i).slice(1);
   for (const block of blocks) {
     const name = block.match(/^\s*(\S+)/)?.[1]?.trim();
     if (!name || /^default$/i.test(name)) continue;
     // Prefer MBW from data row (last big number on type line)
-    const row = block.match(
-      /^\s*[1-5]\s+(\d+)\s+(\d+)\s+(\d+)/m,
-    );
-    const maximumKbps = row ? Number(row[3]) : null;
+    const row =
+      block.match(/^\s*[1-5]\s+(\d+)\s+(\d+)\s+(\d+)/m) ||
+      block.match(/\bmaximum\s*[:=]?\s*(\d+)/i);
+    const maximumKbps = row ? Number(row[3] ?? row[1]) : null;
     out.push({
       name,
       maximumKbps:
@@ -87,7 +85,7 @@ export function parseTcontProfiles(text: string): RawTcontProfile[] {
  */
 export function parseTrafficProfiles(text: string): RawTrafficProfile[] {
   const out: RawTrafficProfile[] = [];
-  const blocks = text.split(/Profile\s+name\s*:/i).slice(1);
+  const blocks = text.split(/Profile[\s-]*name\s*:/i).slice(1);
   for (const block of blocks) {
     const name = block.match(/^\s*(\S+)/)?.[1]?.trim();
     if (!name || /^default$/i.test(name)) continue;
@@ -153,8 +151,7 @@ export function pairOltSpeedProfiles(
     if (dir === 'down') continue; // tcont named -DOWN is unusual; keep under full name
     row.uploadProfile = t.name;
     row.uploadKbps = t.maximumKbps;
-    row.uploadMbps =
-      t.maximumKbps != null ? kbpsToMbps(t.maximumKbps) : null;
+    row.uploadMbps = t.maximumKbps != null ? kbpsToMbps(t.maximumKbps) : null;
   }
 
   for (const tr of traffics) {

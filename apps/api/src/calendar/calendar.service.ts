@@ -69,7 +69,9 @@ export class CalendarService {
       where: { id: assignedUserId, isActive: true },
     });
     if (!assignee) {
-      throw new BadRequestException('Usuario asignado no encontrado o inactivo');
+      throw new BadRequestException(
+        'Usuario asignado no encontrado o inactivo',
+      );
     }
   }
 
@@ -133,7 +135,8 @@ export class CalendarService {
       .andWhere('e.ends_at > :from', { from })
       .orderBy('e.starts_at', 'ASC');
     if (opts?.type) qb.andWhere('e.type = :type', { type: opts.type });
-    if (opts?.status) qb.andWhere('e.status = :status', { status: opts.status });
+    if (opts?.status)
+      qb.andWhere('e.status = :status', { status: opts.status });
     const rows = await qb.getMany();
     return rows.map((e) => this.serialize(e));
   }
@@ -155,7 +158,9 @@ export class CalendarService {
       throw new BadRequestException('Fechas inválidas');
     }
     if (endsAt <= startsAt) {
-      throw new BadRequestException('La hora de fin debe ser posterior al inicio');
+      throw new BadRequestException(
+        'La hora de fin debe ser posterior al inicio',
+      );
     }
     if (dto.clientId) {
       const clients = await this.tenantConnections.getClientRepository(schema);
@@ -200,7 +205,8 @@ export class CalendarService {
     if (dto.title !== undefined) row.title = dto.title.trim();
     if (dto.notes !== undefined) row.notes = dto.notes.trim();
     if (dto.allDay !== undefined) row.allDay = dto.allDay;
-    if (dto.status !== undefined) row.status = dto.status as CalendarEventStatus;
+    if (dto.status !== undefined)
+      row.status = dto.status as CalendarEventStatus;
     if (dto.address !== undefined) row.address = dto.address.trim();
     if (dto.assignedUserId !== undefined) {
       await this.assertAssignee(schema, dto.assignedUserId);
@@ -208,7 +214,8 @@ export class CalendarService {
     }
     if (dto.clientId !== undefined) {
       if (dto.clientId) {
-        const clients = await this.tenantConnections.getClientRepository(schema);
+        const clients =
+          await this.tenantConnections.getClientRepository(schema);
         const client = await clients.findOne({ where: { id: dto.clientId } });
         if (!client) throw new BadRequestException('Cliente no encontrado');
       }
@@ -216,16 +223,20 @@ export class CalendarService {
     }
     if (dto.startsAt !== undefined) {
       const d = new Date(dto.startsAt);
-      if (Number.isNaN(d.getTime())) throw new BadRequestException('startsAt inválido');
+      if (Number.isNaN(d.getTime()))
+        throw new BadRequestException('startsAt inválido');
       row.startsAt = d;
     }
     if (dto.endsAt !== undefined) {
       const d = new Date(dto.endsAt);
-      if (Number.isNaN(d.getTime())) throw new BadRequestException('endsAt inválido');
+      if (Number.isNaN(d.getTime()))
+        throw new BadRequestException('endsAt inválido');
       row.endsAt = d;
     }
     if (row.endsAt <= row.startsAt) {
-      throw new BadRequestException('La hora de fin debe ser posterior al inicio');
+      throw new BadRequestException(
+        'La hora de fin debe ser posterior al inicio',
+      );
     }
     const saved = await repo.save(row);
 

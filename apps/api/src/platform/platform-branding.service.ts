@@ -89,7 +89,8 @@ export class PlatformBrandingService {
   async getPublic() {
     const row = await this.getOrCreate();
     const full = this.serialize(row);
-    const { raw: _raw, ...publicView } = full;
+    const { raw, ...publicView } = full;
+    void raw;
     return publicView;
   }
 

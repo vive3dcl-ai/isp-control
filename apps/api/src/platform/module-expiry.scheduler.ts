@@ -19,9 +19,7 @@ const TICK_MS = 60 * 60 * 1000; // 1h
  * - Vencimiento de módulos de pago único (+ avisos a platform admins).
  */
 @Injectable()
-export class ModuleExpiryScheduler
-  implements OnModuleInit, OnModuleDestroy
-{
+export class ModuleExpiryScheduler implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(ModuleExpiryScheduler.name);
   private timer: ReturnType<typeof setInterval> | null = null;
   private running = false;
@@ -74,9 +72,7 @@ export class ModuleExpiryScheduler
     for (const c of list) {
       const tenant = await this.tenants.findOne({ where: { id: c.tenantId } });
       if (!tenant?.email?.trim()) {
-        this.logger.warn(
-          `Renewal ${c.id}: tenant sin email, no se avisó`,
-        );
+        this.logger.warn(`Renewal ${c.id}: tenant sin email, no se avisó`);
         await this.subscriptions.markChargeNotified(c.id, days);
         continue;
       }
@@ -94,9 +90,15 @@ export class ModuleExpiryScheduler
         `Si no se paga a tiempo, el acceso puede quedar en mora.`,
       ].join('\n');
       try {
-        await this.mailer.sendMail(tenant.email.trim(), subject, text, undefined, {
-          title: `Renovación en ${days} días`,
-        });
+        await this.mailer.sendMail(
+          tenant.email.trim(),
+          subject,
+          text,
+          undefined,
+          {
+            title: `Renovación en ${days} días`,
+          },
+        );
         await this.subscriptions.markChargeNotified(c.id, days);
       } catch (err) {
         this.logger.warn(

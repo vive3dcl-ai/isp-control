@@ -9,7 +9,10 @@ import {
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
-import { PlatformAccess } from '../auth/decorators/roles.decorator';
+import {
+  PlatformAccess,
+  PlatformWriteAccess,
+} from '../auth/decorators/roles.decorator';
 import { PlatformPaymentsService } from './platform-payments.service';
 import { UpdatePlatformPaymentMethodDto } from './dto/modules.dto';
 
@@ -30,6 +33,7 @@ export class PlatformPaymentsAdminController {
   }
 
   @Patch(':id')
+  @PlatformWriteAccess()
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdatePlatformPaymentMethodDto,

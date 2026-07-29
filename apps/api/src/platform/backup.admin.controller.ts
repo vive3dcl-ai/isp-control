@@ -16,7 +16,7 @@ import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
-import { PlatformAccess, Roles } from '../auth/decorators/roles.decorator';
+import { Roles } from '../auth/decorators/roles.decorator';
 import { BackupService } from './backup.service';
 
 const MAX_UPLOAD_BYTES = 512 * 1024 * 1024; // 512 MB
@@ -32,7 +32,7 @@ export class BackupAdminController {
   constructor(private readonly backup: BackupService) {}
 
   @Get('download')
-  @PlatformAccess()
+  @Roles('superadmin')
   async download(@Res({ passthrough: true }) res: Response) {
     const { stream, filename } = await this.backup.createDump();
     res.set({
@@ -61,7 +61,9 @@ export class BackupAdminController {
       );
     }
     if (!file?.path) {
-      throw new BadRequestException('Falta el archivo de respaldo (campo file).');
+      throw new BadRequestException(
+        'Falta el archivo de respaldo (campo file).',
+      );
     }
 
     try {

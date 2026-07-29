@@ -74,7 +74,11 @@ export function addMonthsUtc(date: Date, months: number): Date {
 }
 
 export function daysBetweenUtc(from: Date, to: Date): number {
-  const a = Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), from.getUTCDate());
+  const a = Date.UTC(
+    from.getUTCFullYear(),
+    from.getUTCMonth(),
+    from.getUTCDate(),
+  );
   const b = Date.UTC(to.getUTCFullYear(), to.getUTCMonth(), to.getUTCDate());
   return Math.max(0, Math.round((b - a) / 86_400_000));
 }

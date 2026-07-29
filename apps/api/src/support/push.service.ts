@@ -28,8 +28,7 @@ export class PushService implements OnModuleInit {
       this.config.get<string>('WEB_PUSH_VAPID_PRIVATE_KEY') ?? ''
     ).trim();
     const subject = (
-      this.config.get<string>('WEB_PUSH_SUBJECT') ??
-      'mailto:soporte@localhost'
+      this.config.get<string>('WEB_PUSH_SUBJECT') ?? 'mailto:soporte@localhost'
     ).trim();
 
     if (!publicKey || !privateKey) {

@@ -1,7 +1,10 @@
 import { Body, Controller, Get, Patch, Post, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
-import { PlatformAccess } from '../auth/decorators/roles.decorator';
+import {
+  PlatformAccess,
+  PlatformWriteAccess,
+} from '../auth/decorators/roles.decorator';
 import { PlatformSmtpService } from './platform-smtp.service';
 import { PlatformPublicUrlsService } from './platform-public-urls.service';
 import { PlatformPlansService } from './platform-plans.service';
@@ -31,11 +34,13 @@ export class PlatformSettingsAdminController {
   }
 
   @Patch('smtp')
+  @PlatformWriteAccess()
   updateSmtp(@Body() dto: UpdatePlatformSmtpDto) {
     return this.smtp.update(dto);
   }
 
   @Post('smtp/test')
+  @PlatformWriteAccess()
   async testSmtp(@Body() dto: SmtpTestDto) {
     const branding = await this.branding.getPublic();
     return this.mailer.sendTest(dto.to, branding.productName || 'ISP Control');
@@ -47,6 +52,7 @@ export class PlatformSettingsAdminController {
   }
 
   @Patch('public-urls')
+  @PlatformWriteAccess()
   updatePublicUrls(@Body() dto: UpdatePlatformPublicUrlsDto) {
     return this.publicUrls.update(dto);
   }
@@ -57,6 +63,7 @@ export class PlatformSettingsAdminController {
   }
 
   @Patch('system-plans')
+  @PlatformWriteAccess()
   updatePlans(@Body() dto: UpdateSystemPlansDto) {
     return this.plans.updateAll(dto);
   }
@@ -67,6 +74,7 @@ export class PlatformSettingsAdminController {
   }
 
   @Patch('branding')
+  @PlatformWriteAccess()
   updateBranding(@Body() dto: UpdatePlatformBrandingDto) {
     return this.branding.update(dto);
   }

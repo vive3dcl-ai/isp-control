@@ -10,11 +10,7 @@ import {
 import { Client } from './client.entity';
 import { ServicePlan } from './service-plan.entity';
 
-export type ClientServiceStatus =
-  | 'prepared'
-  | 'active'
-  | 'suspended'
-  | 'ended';
+export type ClientServiceStatus = 'prepared' | 'active' | 'suspended' | 'ended';
 
 @Entity({ name: 'client_services' })
 export class ClientService {

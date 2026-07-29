@@ -50,11 +50,13 @@ export class AdminController {
   }
 
   @Post('tenants')
+  @Roles('superadmin', 'admin')
   createTenant(@Body() dto: CreateTenantDto) {
     return this.tenantsService.create(dto);
   }
 
   @Patch('tenants/:id')
+  @Roles('superadmin', 'admin')
   updateTenant(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateTenantDto,
@@ -63,6 +65,7 @@ export class AdminController {
   }
 
   @Patch('tenants/:id/status')
+  @Roles('superadmin', 'admin')
   updateStatus(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateTenantStatusDto,
@@ -71,6 +74,7 @@ export class AdminController {
   }
 
   @Post('tenants/:id/impersonate')
+  @Roles('superadmin', 'admin')
   impersonate(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthUser,

@@ -3,16 +3,24 @@ import {
   IsOptional,
   IsString,
   IsUUID,
+  Matches,
   MaxLength,
   MinLength,
 } from 'class-validator';
 import { VPN_PROTOCOLS } from '../vpn.constants';
+
+// Validation intentionally rejects ASCII controls, quotes, and backslashes.
+// eslint-disable-next-line no-control-regex
+const SAFE_PASSWORD_RE = new RegExp('^[^\\x00-\\x1F\\x7F"\\\\]+$');
 
 export class CreateVpnTunnelDto {
   @IsOptional()
   @IsString()
   @MinLength(1)
   @MaxLength(80)
+  @Matches(/^[A-Za-z0-9_-]+$/, {
+    message: 'name solo permite letras, números, guion y guion bajo',
+  })
   name?: string;
 
   @IsIn([...VPN_PROTOCOLS])
@@ -31,6 +39,9 @@ export class CreateVpnTunnelDto {
   @IsOptional()
   @IsString()
   @MaxLength(255)
+  @Matches(SAFE_PASSWORD_RE, {
+    message: 'password contiene caracteres no permitidos',
+  })
   password?: string;
 
   @IsOptional()
@@ -44,6 +55,9 @@ export class UpdateVpnTunnelDto {
   @IsString()
   @MinLength(1)
   @MaxLength(80)
+  @Matches(/^[A-Za-z0-9_-]+$/, {
+    message: 'name solo permite letras, números, guion y guion bajo',
+  })
   name?: string;
 
   @IsOptional()
@@ -59,6 +73,9 @@ export class UpdateVpnTunnelDto {
   @IsOptional()
   @IsString()
   @MaxLength(255)
+  @Matches(SAFE_PASSWORD_RE, {
+    message: 'password contiene caracteres no permitidos',
+  })
   password?: string;
 
   @IsOptional()

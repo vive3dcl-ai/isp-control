@@ -6,41 +6,37 @@
  * Specs are typical ISP/OMCI configs (ports may vary by HW revision).
  */
 
-export type OnuImageKey =
-  | 'zte-sfu'
-  | 'zte-hgu'
-  | 'huawei-sfu'
-  | 'huawei-hgu'
+export type OnuImageKey = 'zte-sfu' | 'zte-hgu' | 'huawei-sfu' | 'huawei-hgu';
 
 export type OnuCatalogSeed = {
-  vendor: 'zte' | 'huawei'
-  name: string
-  ponType: 'gpon' | 'epon'
-  ethernetPorts: number
-  wifiSsids: number
-  voipPorts: number
-  catv: boolean
-  capability: 'bridging' | 'bridging_routing'
-  allowCustomProfiles: boolean
-  defaultProfileCode: string | null
-  imageKey: OnuImageKey
-  note?: string
-}
+  vendor: 'zte' | 'huawei';
+  name: string;
+  ponType: 'gpon' | 'epon';
+  ethernetPorts: number;
+  wifiSsids: number;
+  voipPorts: number;
+  catv: boolean;
+  capability: 'bridging' | 'bridging_routing';
+  allowCustomProfiles: boolean;
+  defaultProfileCode: string | null;
+  imageKey: OnuImageKey;
+  note?: string;
+};
 
 /** Strip vendor brand prefixes so catalog / OLT codes match (HG8245H, F660). */
 export function normalizeOnuModelName(raw: string): string {
-  let s = raw.trim()
-  if (!s) return ''
-  s = s.replace(/^(Huawei|ZTE|FiberHome|Alcatel|Nokia)\s*[-_/]\s*/i, '')
-  s = s.replace(/\s+/g, '')
-  return s
+  let s = raw.trim();
+  if (!s) return '';
+  s = s.replace(/^(Huawei|ZTE|FiberHome|Alcatel|Nokia)\s*[-_/]\s*/i, '');
+  s = s.replace(/\s+/g, '');
+  return s;
 }
 
 export function inferOnuVendor(model: string): 'zte' | 'huawei' | 'other' {
-  const m = normalizeOnuModelName(model)
-  if (/^(HG|EG|HN|HS|MA|OptiX)/i.test(m)) return 'huawei'
-  if (/^(F\d|ZXA|ZTEG|G-\d)/i.test(m)) return 'zte'
-  return 'other'
+  const m = normalizeOnuModelName(model);
+  if (/^(HG|EG|HN|HS|MA|OptiX)/i.test(m)) return 'huawei';
+  if (/^(F\d|ZXA|ZTEG|G-\d)/i.test(m)) return 'zte';
+  return 'other';
 }
 
 function sfu(
@@ -59,10 +55,9 @@ function sfu(
     capability: opts.capability ?? 'bridging',
     allowCustomProfiles: opts.allowCustomProfiles ?? true,
     defaultProfileCode: opts.defaultProfileCode ?? 'generic_1',
-    imageKey:
-      opts.imageKey ?? (vendor === 'huawei' ? 'huawei-sfu' : 'zte-sfu'),
+    imageKey: opts.imageKey ?? (vendor === 'huawei' ? 'huawei-sfu' : 'zte-sfu'),
     note: opts.note,
-  }
+  };
 }
 
 function hgu(
@@ -81,10 +76,9 @@ function hgu(
     capability: opts.capability ?? 'bridging_routing',
     allowCustomProfiles: opts.allowCustomProfiles ?? true,
     defaultProfileCode: opts.defaultProfileCode ?? 'generic_6',
-    imageKey:
-      opts.imageKey ?? (vendor === 'huawei' ? 'huawei-hgu' : 'zte-hgu'),
+    imageKey: opts.imageKey ?? (vendor === 'huawei' ? 'huawei-hgu' : 'zte-hgu'),
     note: opts.note,
-  }
+  };
 }
 
 export const ONU_CATALOG_SEEDS: OnuCatalogSeed[] = [
@@ -285,19 +279,19 @@ export const ONU_CATALOG_SEEDS: OnuCatalogSeed[] = [
     ethernetPorts: 8,
     note: 'MDU',
   }),
-]
+];
 
 export function resolveOnuImageUrl(imageKey: string): string {
-  const key = imageKey.replace(/\.svg$/i, '')
-  return `/onu/${key}.svg`
+  const key = imageKey.replace(/\.svg$/i, '');
+  return `/onu/${key}.svg`;
 }
 
 export function imageKeyForVendorCapability(
   vendor: string,
   capability: string,
 ): OnuImageKey {
-  const isHuawei = vendor === 'huawei'
-  const isBridge = capability === 'bridging'
-  if (isHuawei) return isBridge ? 'huawei-sfu' : 'huawei-hgu'
-  return isBridge ? 'zte-sfu' : 'zte-hgu'
+  const isHuawei = vendor === 'huawei';
+  const isBridge = capability === 'bridging';
+  if (isHuawei) return isBridge ? 'huawei-sfu' : 'huawei-hgu';
+  return isBridge ? 'zte-sfu' : 'zte-hgu';
 }

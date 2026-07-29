@@ -278,7 +278,8 @@ export function colorCodeAt(
   if (group === 0) {
     return { color: base.color, name: base.name, tracer: null }
   }
-  let tracer = TRACER_COLORS[(group - 1) % TRACER_COLORS.length]
+  let tracer: { color: string; name: string } =
+    TRACER_COLORS[(group - 1) % TRACER_COLORS.length]
   if (base.color === BLACK && tracer.color === BLACK) {
     tracer = forTube ? TRACER_ON_BLACK_TUBE : TRACER_ON_BLACK_FIBER
   }

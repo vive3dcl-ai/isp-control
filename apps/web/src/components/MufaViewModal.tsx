@@ -11,7 +11,6 @@ import {
   cablesEnteringMufa,
   createMufaTrays,
   fiberBelongsToTray,
-  fiberPlacementKey,
   findFiberInCable,
   findTube,
   newConnectionId,
@@ -704,7 +703,7 @@ export function MufaViewModal({
       slot: freeSlot,
     }
     onChange({
-      ...mufa,
+      ...mufa!,
       trays,
       connections: [...connections, conn],
       ...(isNap ? { splitters: napSplitters } : {}),
@@ -721,7 +720,7 @@ export function MufaViewModal({
     })
     if (!ok) return
     onChange({
-      ...mufa,
+      ...mufa!,
       connections: connections.filter((c) => c.id !== id),
     })
   }

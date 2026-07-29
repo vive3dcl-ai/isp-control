@@ -31,29 +31,37 @@ function SignalChart({
 }) {
   const points = useMemo(() => {
     if (samples.length === 0) return null
-    const vals = samples.map((s) => s.value)
+    const maxPoints = 360
+    const series =
+      samples.length <= maxPoints
+        ? samples
+        : Array.from({ length: maxPoints }, (_, i) => {
+            const idx = Math.round((i * (samples.length - 1)) / (maxPoints - 1))
+            return samples[idx]!
+          })
+    const vals = series.map((s) => s.value)
     const min = Math.min(...vals) - 1
     const max = Math.max(...vals) + 1
     const span = Math.max(max - min, 0.5)
     const w = 320
     const h = 100
     const pad = 8
-    const coords = samples.map((s, i) => {
+    const coords = series.map((s, i) => {
       const x =
         pad +
-        (samples.length === 1
+        (series.length === 1
           ? (w - pad * 2) / 2
-          : (i / (samples.length - 1)) * (w - pad * 2))
+          : (i / (series.length - 1)) * (w - pad * 2))
       const y = pad + ((max - s.value) / span) * (h - pad * 2)
       return `${x.toFixed(1)},${y.toFixed(1)}`
     })
-    return { w, h, path: coords.join(' '), min, max }
+    return { w, h, path: coords.join(' '), min, max, n: samples.length }
   }, [samples])
 
   if (!points) {
     return (
       <p className="text-xs text-[var(--text-muted)]">
-        Sin muestras de señal aún.
+        Sin muestras aún. Flota ~1 min; con la modal abierta ~3 s.
       </p>
     )
   }
@@ -74,7 +82,7 @@ function SignalChart({
         />
       </svg>
       <p className="mt-1 text-xs text-[var(--text-muted)]">
-        {points.min.toFixed(1)} … {points.max.toFixed(1)} dBm · {samples.length}{' '}
+        {points.min.toFixed(1)} … {points.max.toFixed(1)} dBm · {points.n}{' '}
         muestras
       </p>
     </div>
@@ -215,18 +223,23 @@ export function ServiceOnuViewModal({
         `/app/onus/detail?oltId=${encodeURIComponent(linked!.oltId)}&onuIf=${encodeURIComponent(linked!.onuIf)}`,
       ),
     enabled: open && !!linked,
-    refetchInterval: 60_000,
+    // DB only. Live metrics?live=1 refreshes this ONU via SNMP.
+    staleTime: 2_000,
+    refetchInterval: open ? 3_000 : false,
   })
 
   const onu = detailQuery.data?.onu
   const onuDbId = onu?.id || linked?.id || service.onuId
 
   const metricsQuery = useQuery({
-    queryKey: ['app', 'onus', 'metrics', onuDbId],
+    queryKey: ['app', 'onus', 'metrics', onuDbId, 'live'],
     queryFn: () =>
-      apiFetch<OnuMetricsResponse>(`/app/onus/${onuDbId}/metrics?hours=6`),
+      apiFetch<OnuMetricsResponse>(
+        `/app/onus/${onuDbId}/metrics?hours=24&live=1`,
+      ),
     enabled: open && !!onuDbId,
-    refetchInterval: 60_000,
+    refetchInterval: open ? 3_000 : false,
+    staleTime: 0,
   })
 
   const tr069Query = useQuery({
@@ -387,20 +400,12 @@ export function ServiceOnuViewModal({
                   >
                     LIVE!
                   </button>
-                  <button
-                    type="button"
-                    disabled={detailQuery.isFetching}
-                    onClick={() => void detailQuery.refetch()}
-                    className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm hover:bg-[var(--bg)] disabled:opacity-60"
-                  >
-                    {detailQuery.isFetching ? 'Actualizando…' : 'Actualizar'}
-                  </button>
                 </div>
 
                 <div className="grid gap-4 sm:grid-cols-2">
                   <section className="rounded-lg border border-[var(--border)] p-3">
                     <h3 className="mb-2 text-sm font-semibold">
-                      Tráfico (6 h)
+                      Tráfico (últimas 24 h · live ~3 s)
                     </h3>
                     <TrafficChart
                       download={downloadSamples}
@@ -410,7 +415,9 @@ export function ServiceOnuViewModal({
                     />
                   </section>
                   <section className="rounded-lg border border-[var(--border)] p-3">
-                    <h3 className="mb-2 text-sm font-semibold">Señal (6 h)</h3>
+                    <h3 className="mb-2 text-sm font-semibold">
+                      Señal (últimas 24 h · live ~3 s)
+                    </h3>
                     <SignalChart samples={signalSamples} />
                   </section>
                 </div>

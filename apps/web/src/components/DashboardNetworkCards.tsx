@@ -134,8 +134,9 @@ export function OltDeviceCard({
           alt={board ?? family}
           className="max-h-16 w-full object-contain transition duration-300 group-hover:scale-[1.03] sm:max-h-20"
           onError={(e) => {
-            e.currentTarget.src =
-              'https://raio.smartolt.com/content/img/ZTE-C320.png'
+            e.currentTarget.src = device.subtype?.startsWith('huawei_')
+              ? '/olt/huawei-olt.svg'
+              : 'https://raio.smartolt.com/content/img/ZTE-C320.png'
           }}
         />
         <span

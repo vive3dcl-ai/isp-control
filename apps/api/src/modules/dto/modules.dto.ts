@@ -132,6 +132,11 @@ export class WhatsAppBaileysStatusDto {
   @IsString()
   @MaxLength(2_000_000)
   qrDataUrl?: string;
+
+  /** When false, do not treat as needsAttention / email alert. */
+  @IsOptional()
+  @IsBoolean()
+  alert?: boolean;
 }
 
 export class UpdatePlatformPaymentMethodDto {

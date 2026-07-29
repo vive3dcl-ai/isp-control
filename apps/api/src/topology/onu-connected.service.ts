@@ -9,12 +9,17 @@ import type { AuthUser } from '../auth/auth.types';
 import { TenantConnectionService } from '../database/tenant-connection.service';
 import {
   DEFAULT_OLT_PORTS,
-  isZteOltDevice,
+  isHuaweiOltDevice,
+  isManagedOltDevice,
   OLT_SELECTABLE_SUBTYPES,
 } from './olt.constants';
 import { ZteOltClient } from './zte-olt.client';
+import { ZteOltSnmpClient } from './zte-olt-snmp.client';
+import { HuaweiOltClient } from './huawei-olt.client';
+import { HuaweiOltSnmpClient } from './huawei-olt-snmp.client';
 import type { NetworkDevice } from './entities/network-device.entity';
 import type { Onu } from './entities/onu.entity';
+import { OnuMetricSample } from './entities/onu-metric-sample.entity';
 import { OnuCatalogAdminService } from './onu-catalog-admin.service';
 import { normalizeOnuModelName } from './onu-model-catalog';
 import {
@@ -47,21 +52,31 @@ export type OnuImportSnapshot = {
 export class OnuConnectedService {
   private readonly logger = new Logger(OnuConnectedService.name);
   private readonly pollInFlight = new Set<string>();
+  /** Round-robin offset for traffic sampling subsets per OLT. */
+  private readonly trafficRoundRobin = new Map<string, number>();
+  /** Last IF-MIB octet counters for SNMP delta → bps. */
+  private readonly snmpTrafficPrev = new Map<
+    string,
+    { inOctets: number; outOctets: number; atMs: number }
+  >();
+  /** Coalesce concurrent live modal refreshes per ONU. */
+  private readonly liveRefreshInFlight = new Map<string, Promise<void>>();
+  /** Last persisted live sample wall-clock (avoid >~1 write / 3s per ONU). */
+  private readonly liveSampleLastWriteMs = new Map<string, number>();
   /** Prevents poll/sync from resurrecting an ONU right after Delete (2 min). */
   private readonly recentlyDeletedUntil = new Map<string, number>();
 
   constructor(
     private readonly tenantConnections: TenantConnectionService,
     private readonly zteOlt: ZteOltClient,
+    private readonly zteSnmp: ZteOltSnmpClient,
+    private readonly huaweiOlt: HuaweiOltClient,
+    private readonly huaweiSnmp: HuaweiOltSnmpClient,
     private readonly onuCatalog: OnuCatalogAdminService,
     private readonly onuTypeSync: OnuTypeOltSyncService,
   ) {}
 
-  private recentlyDeletedKey(
-    schema: string,
-    kind: 'sn' | 'if',
-    value: string,
-  ) {
+  private recentlyDeletedKey(schema: string, kind: 'sn' | 'if', value: string) {
     return `${schema}:${kind}:${value}`;
   }
 
@@ -112,10 +127,7 @@ export class OnuConnectedService {
   }
 
   /** Remove ONU row + links without resurrecting via later poll.save(). */
-  private async purgeOnuRow(
-    schema: string,
-    row: Onu,
-  ): Promise<void> {
+  private async purgeOnuRow(schema: string, row: Onu): Promise<void> {
     const onuDbId = row.id;
     const sn = row.sn?.toUpperCase() || null;
 
@@ -184,21 +196,50 @@ export class OnuConnectedService {
       protocol,
       username: device.mgmtUsername,
       password: device.mgmtPassword,
+      subtypeHint: device.subtype ?? null,
+      firmwareHint: device.metricVersion ?? null,
     };
   }
 
-  private async requireZteOlt(schema: string, oltId: string) {
+  /** SNMP RO params — never includes RW community. */
+  private snmpConn(device: NetworkDevice): {
+    host: string;
+    snmpPort: number;
+    snmpCommunity: string;
+  } | null {
+    const community = device.snmpCommunity?.trim();
+    if (!device.mgmtHost?.trim() || !community) return null;
+    return {
+      host: device.mgmtHost.trim(),
+      snmpPort: device.snmpPort && device.snmpPort > 0 ? device.snmpPort : 161,
+      snmpCommunity: community,
+    };
+  }
+
+  private oltCli(device: NetworkDevice): ZteOltClient {
+    return (isHuaweiOltDevice(device.type, device.subtype)
+      ? this.huaweiOlt
+      : this.zteOlt) as unknown as ZteOltClient;
+  }
+
+  private oltSnmp(device: NetworkDevice): ZteOltSnmpClient {
+    return (isHuaweiOltDevice(device.type, device.subtype)
+      ? this.huaweiSnmp
+      : this.zteSnmp) as unknown as ZteOltSnmpClient;
+  }
+
+  private async requireManagedOlt(schema: string, oltId: string) {
     const repo =
       await this.tenantConnections.getNetworkDeviceRepository(schema);
     const olt = await repo.findOne({ where: { id: oltId } });
     if (!olt) throw new NotFoundException('OLT no encontrada');
-    if (!isZteOltDevice(olt.type, olt.subtype)) {
-      throw new BadRequestException('El equipo no es una OLT ZTE');
+    if (!isManagedOltDevice(olt.type, olt.subtype)) {
+      throw new BadRequestException('Device is not a managed OLT');
     }
     return olt;
   }
 
-  private async listZteOlts(schema: string): Promise<NetworkDevice[]> {
+  private async listManagedOlts(schema: string): Promise<NetworkDevice[]> {
     const repo =
       await this.tenantConnections.getNetworkDeviceRepository(schema);
     const devices = await repo.find({
@@ -207,7 +248,7 @@ export class OnuConnectedService {
       },
       order: { name: 'ASC' },
     });
-    return devices.filter((d) => isZteOltDevice(d.type, d.subtype));
+    return devices.filter((d) => isManagedOltDevice(d.type, d.subtype));
   }
 
   private withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
@@ -223,10 +264,20 @@ export class OnuConnectedService {
         },
         (e) => {
           clearTimeout(t);
-          reject(e);
+          reject(e instanceof Error ? e : new Error(String(e)));
         },
       );
     });
+  }
+
+  private formatOnlineDuration(since: Date | null | undefined): string | null {
+    if (!since) return null;
+    const sec = Math.max(0, Math.floor((Date.now() - since.getTime()) / 1000));
+    const d = Math.floor(sec / 86400);
+    const h = Math.floor((sec % 86400) / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = sec % 60;
+    return `${d} days, ${h} hours, ${m} minutes, ${s} seconds`;
   }
 
   private serializeOnu(row: Onu, oltName: string) {
@@ -258,6 +309,8 @@ export class OnuConnectedService {
       tv: row.tv,
       authDate: row.authDate?.toISOString() ?? null,
       probedAt: row.lastProbedAt?.toISOString() ?? null,
+      onlineSince: row.onlineSince?.toISOString() ?? null,
+      onlineDuration: this.formatOnlineDuration(row.onlineSince),
       mgmtIp: row.mgmtIp ?? null,
       mgmtPoolId: row.mgmtPoolId ?? null,
       wanIp: row.wanIp ?? null,
@@ -285,15 +338,35 @@ export class OnuConnectedService {
     if (snap.status) row.status = snap.status;
     if (snap.phaseState != null) row.phaseState = snap.phaseState;
     if (snap.adminState != null) row.adminState = snap.adminState;
-    if (snap.online != null) row.online = snap.online;
-    if (snap.signalDbm !== undefined) row.signalDbm = snap.signalDbm;
+    if (snap.online != null) {
+      const wasOnline = row.online;
+      const nextOnline = !!snap.online;
+      row.online = nextOnline;
+      if (nextOnline) {
+        if (!wasOnline) {
+          row.onlineSince = now;
+        } else if (!row.onlineSince) {
+          // Bootstrap after deploy: keep counting from last probe if possible.
+          row.onlineSince = row.lastProbedAt ?? now;
+        }
+      } else {
+        row.onlineSince = null;
+      }
+    }
+    // Never wipe a good reading with SNMP null / missing optics.
+    if (snap.signalDbm != null && Number.isFinite(snap.signalDbm)) {
+      row.signalDbm = snap.signalDbm;
+    }
     if (snap.mode) row.mode = snap.mode;
     if (snap.vlan !== undefined && snap.vlan != null) row.vlan = snap.vlan;
     if (snap.vlans?.length) row.vlans = snap.vlans;
     row.lastProbedAt = now;
   }
 
-  private async rememberModel(schema: string, onuType: string | null | undefined) {
+  private async rememberModel(
+    schema: string,
+    onuType: string | null | undefined,
+  ) {
     if (!onuType?.trim()) return;
     try {
       await this.onuCatalog.ensureModelSeen(schema, onuType);
@@ -306,7 +379,7 @@ export class OnuConnectedService {
 
   async suggestImport(user: AuthUser, oltId: string) {
     const schema = this.requireSchema(user);
-    const olt = await this.requireZteOlt(schema, oltId);
+    const olt = await this.requireManagedOlt(schema, oltId);
     const onuRepo = await this.tenantConnections.getOnuRepository(schema);
     const count = await onuRepo.count({ where: { oltId } });
     return {
@@ -319,53 +392,103 @@ export class OnuConnectedService {
     };
   }
 
-  async discover(user: AuthUser, oltId: string) {
+  async discover(
+    user: AuthUser,
+    oltId: string,
+    opts?: { includeRunningConfig?: boolean; preferSnmp?: boolean },
+  ) {
     const schema = this.requireSchema(user);
-    const olt = await this.requireZteOlt(schema, oltId);
+    const olt = await this.requireManagedOlt(schema, oltId);
     const onuRepo = await this.tenantConnections.getOnuRepository(schema);
     const importedCount = await onuRepo.count({ where: { oltId } });
 
-    const result = await this.withTimeout(
-      this.zteOlt.listConnectedOnus(this.zteConn(olt)),
-      300_000,
-      `Discover ONUs ${olt.name}`,
-    );
-    if (!result.ok) {
-      throw new BadRequestException(
-        result.error || 'No se pudieron descubrir ONUs',
+    const preferSnmp = opts?.preferSnmp !== false;
+    const includeRunningConfig = opts?.includeRunningConfig !== false;
+
+    type Snap = {
+      onuIf: string;
+      ponType?: string;
+      board?: string;
+      port?: string;
+      onuId?: string;
+      sn?: string | null;
+      onuType?: string | null;
+      name?: string | null;
+      description?: string | null;
+      status?: string;
+      phaseState?: string;
+      adminState?: string;
+      online?: boolean;
+      signalDbm?: number | null;
+      mode?: string | null;
+      vlan?: number | null;
+      vlans?: number[];
+    };
+
+    let onus: Snap[] = [];
+    let probedAt = new Date().toISOString();
+    let source: 'snmp' | 'cli' = 'cli';
+
+    const snmp = preferSnmp ? this.snmpConn(olt) : null;
+    if (snmp) {
+      try {
+        const monitored = await this.withTimeout(
+          this.oltSnmp(olt).walkOnuMonitor(snmp),
+          45_000,
+          `SNMP discover ${olt.name}`,
+        );
+        if (monitored.ok && monitored.onus.length > 0) {
+          source = 'snmp';
+          probedAt = monitored.probedAt;
+          onus = monitored.onus.map((o) => ({
+            onuIf: o.onuIf,
+            ponType: o.onuIf.startsWith('epon') ? 'epon' : 'gpon',
+            board: o.slot,
+            port: o.port,
+            onuId: o.onuId,
+            sn: o.sn,
+            onuType: null,
+            name: o.name,
+            description: null,
+            status: o.status,
+            phaseState: o.phaseState ?? undefined,
+            adminState: undefined,
+            online: o.online,
+            signalDbm: o.signalDbm,
+            mode: null,
+            vlan: null,
+            vlans: [],
+          }));
+          this.logger.log(
+            `Discover ${olt.name}: SNMP ${monitored.source} → ${onus.length} ONUs`,
+          );
+        }
+      } catch (err) {
+        this.logger.warn(
+          `Discover ${olt.name}: SNMP miss — CLI fallback: ${
+            err instanceof Error ? err.message : err
+          }`,
+        );
+      }
+    }
+
+    if (!onus.length) {
+      const result = await this.withTimeout(
+        this.oltCli(olt).listConnectedOnus({
+          ...this.zteConn(olt),
+          // Sync/reconcile needs inventory, not full running-config names.
+          includeRunningConfig: source === 'cli' ? includeRunningConfig : false,
+        }),
+        includeRunningConfig ? 300_000 : 180_000,
+        `Discover ONUs ${olt.name}`,
       );
-    }
-
-    const portMap = new Map<
-      string,
-      { ifName: string; board: string; port: string; count: number; online: number }
-    >();
-    for (const o of result.onus) {
-      const oltIf = o.onuIf.replace(/-onu_/i, '-olt_').replace(/:\d+$/, '');
-      const cur = portMap.get(oltIf) ?? {
-        ifName: oltIf,
-        board: o.board,
-        port: o.port,
-        count: 0,
-        online: 0,
-      };
-      cur.count += 1;
-      if (o.online) cur.online += 1;
-      portMap.set(oltIf, cur);
-    }
-
-    return {
-      oltId: olt.id,
-      oltName: olt.name,
-      probedAt: result.probedAt,
-      total: result.onus.length,
-      online: result.onus.filter((o) => o.online).length,
-      importedCount,
-      suggestOnuImport: importedCount === 0 && !olt.onusImportPromptedAt,
-      ports: [...portMap.values()].sort((a, b) =>
-        a.ifName.localeCompare(b.ifName, undefined, { numeric: true }),
-      ),
-      onus: result.onus.map((o) => ({
+      if (!result.ok) {
+        throw new BadRequestException(
+          result.error || 'No se pudieron descubrir ONUs',
+        );
+      }
+      probedAt = result.probedAt;
+      onus = result.onus.map((o) => ({
         onuIf: o.onuIf,
         ponType: o.ponType,
         board: o.board,
@@ -383,13 +506,52 @@ export class OnuConnectedService {
         mode: o.mode,
         vlan: o.vlan,
         vlans: o.vlans,
-      })),
+      }));
+    }
+
+    const portMap = new Map<
+      string,
+      {
+        ifName: string;
+        board: string;
+        port: string;
+        count: number;
+        online: number;
+      }
+    >();
+    for (const o of onus) {
+      const oltIf = o.onuIf.replace(/-onu_/i, '-olt_').replace(/:\d+$/, '');
+      const cur = portMap.get(oltIf) ?? {
+        ifName: oltIf,
+        board: o.board ?? '',
+        port: o.port ?? '',
+        count: 0,
+        online: 0,
+      };
+      cur.count += 1;
+      if (o.online) cur.online += 1;
+      portMap.set(oltIf, cur);
+    }
+
+    return {
+      oltId: olt.id,
+      oltName: olt.name,
+      probedAt,
+      source,
+      total: onus.length,
+      online: onus.filter((o) => o.online).length,
+      importedCount,
+      suggestOnuImport: importedCount === 0 && !olt.onusImportPromptedAt,
+      ports: [...portMap.values()].sort((a, b) =>
+        a.ifName.localeCompare(b.ifName, undefined, { numeric: true }),
+      ),
+      onus,
     };
   }
 
   async importSkip(user: AuthUser, oltId: string) {
     const schema = this.requireSchema(user);
-    const olt = await this.requireZteOlt(schema, oltId);
+    const olt = await this.requireManagedOlt(schema, oltId);
     const repo =
       await this.tenantConnections.getNetworkDeviceRepository(schema);
     olt.onusImportPromptedAt = new Date();
@@ -399,7 +561,7 @@ export class OnuConnectedService {
 
   async importOne(user: AuthUser, oltId: string, snap: OnuImportSnapshot) {
     const schema = this.requireSchema(user);
-    await this.requireZteOlt(schema, oltId);
+    await this.requireManagedOlt(schema, oltId);
     if (!snap.onuIf?.trim()) {
       throw new BadRequestException('onuIf requerido');
     }
@@ -447,14 +609,14 @@ export class OnuConnectedService {
 
   /**
    * List ONUs waiting for authorization (uncfg) on one or all ZTE OLTs.
-   * Excludes manually denied SNs and SNs already in Conectadas.
+   * Excludes manually denied SNs and SNs already authorized on the same OLT.
    * Bloqueadas = solo denylist de huérfanas; no se mezcla con disable en Conectadas.
    */
   async listUncfg(user: AuthUser, oltId?: string) {
     const schema = this.requireSchema(user);
     const olts = oltId
-      ? [await this.requireZteOlt(schema, oltId)]
-      : await this.listZteOlts(schema);
+      ? [await this.requireManagedOlt(schema, oltId)]
+      : await this.listManagedOlts(schema);
 
     const onus: Array<{
       oltId: string;
@@ -467,6 +629,8 @@ export class OnuConnectedService {
       board: string;
       port: string;
       suggestedOnuId: number | null;
+      /** SN also exists in Conectadas (posible registro obsoleto). */
+      inConnected: boolean;
     }> = [];
     const errors: Array<{ oltId: string; oltName: string; error: string }> = [];
 
@@ -476,21 +640,30 @@ export class OnuConnectedService {
 
     const knownRows = await onuRepo
       .createQueryBuilder('o')
-      .select(['o.id', 'o.sn'])
+      .select(['o.id', 'o.oltId', 'o.sn'])
       .where('o.sn IS NOT NULL')
       .andWhere("o.sn <> ''")
       .getMany();
-    const knownBySn = new Set(
-      knownRows
-        .map((r) => r.sn?.trim().toUpperCase())
-        .filter((sn): sn is string => !!sn),
-    );
+    const knownByOltSn = new Map<string, Set<string>>();
+    const knownBySn = new Set<string>();
+    for (const r of knownRows) {
+      const sn = r.sn?.trim().toUpperCase();
+      if (!sn) continue;
+      knownBySn.add(sn);
+      const set = knownByOltSn.get(r.oltId) ?? new Set<string>();
+      set.add(sn);
+      knownByOltSn.set(r.oltId, set);
+    }
 
     // Stale denylist: SN already in Conectadas must not stay in Bloqueadas
     await this.purgeDeniedAlreadyConnected(deniedRepo, knownBySn);
 
     const deniedRows = await deniedRepo.find();
     const deniedSn = new Set(deniedRows.map((d) => d.sn.toUpperCase()));
+
+    let rawUncfg = 0;
+    let alsoInConnected = 0;
+    let hiddenDenied = 0;
 
     for (const olt of olts) {
       if (!olt.mgmtHost || !olt.mgmtUsername || !olt.mgmtPassword) {
@@ -503,7 +676,7 @@ export class OnuConnectedService {
       }
       try {
         const result = await this.withTimeout(
-          this.zteOlt.listUncfgOnus(this.zteConn(olt)),
+          this.oltCli(olt).listUncfgOnus(this.zteConn(olt)),
           300_000,
           `Uncfg ${olt.name}`,
         );
@@ -515,11 +688,18 @@ export class OnuConnectedService {
           });
           continue;
         }
+        const knownOnThisOlt = knownByOltSn.get(olt.id) ?? new Set<string>();
         for (const u of result.onus) {
-          const sn = u.sn.toUpperCase();
-          // Already in Conectadas → never orphan (disable stays only in Conectadas)
-          if (knownBySn.has(sn)) continue;
-          if (deniedSn.has(sn)) continue;
+          rawUncfg += 1;
+          const sn = u.sn.trim().toUpperCase();
+          if (!sn) continue;
+          // Denylist only — OLT uncfg is source of truth (even if SN still in DB).
+          if (deniedSn.has(sn)) {
+            hiddenDenied += 1;
+            continue;
+          }
+          const inConnected = knownOnThisOlt.has(sn);
+          if (inConnected) alsoInConnected += 1;
           onus.push({
             oltId: olt.id,
             oltName: olt.name,
@@ -531,6 +711,7 @@ export class OnuConnectedService {
             board: u.board,
             port: u.port,
             suggestedOnuId: u.suggestedOnuId,
+            inConnected,
           });
         }
       } catch (err) {
@@ -544,12 +725,18 @@ export class OnuConnectedService {
 
     const deniedCount = await deniedRepo.count();
 
+    this.logger.log(
+      `uncfg list: raw=${rawUncfg} shown=${onus.length} alsoInConnected=${alsoInConnected} hiddenDenied=${hiddenDenied} errors=${errors.length}`,
+    );
+
     return {
       onus,
       olts: olts.map((o) => ({ id: o.id, name: o.name })),
       errors,
       total: onus.length,
       deniedCount,
+      rawUncfg,
+      alsoInConnected,
       probedAt: new Date().toISOString(),
     };
   }
@@ -698,7 +885,7 @@ export class OnuConnectedService {
     },
   ) {
     const schema = this.requireSchema(user);
-    const olt = await this.requireZteOlt(schema, body.oltId);
+    const olt = await this.requireManagedOlt(schema, body.oltId);
     const oltIf = body.oltIf?.trim();
     const onuId = String(body.onuId ?? '').trim();
     const sn = body.sn?.trim().toUpperCase();
@@ -707,9 +894,147 @@ export class OnuConnectedService {
       throw new BadRequestException('oltIf, onuId y sn son requeridos');
     }
 
-    const ponType: 'gpon' | 'epon' = oltIf.startsWith('epon')
-      ? 'epon'
-      : 'gpon';
+    const ponType: 'gpon' | 'epon' = oltIf.startsWith('epon') ? 'epon' : 'gpon';
+    if (isHuaweiOltDevice(olt.type, olt.subtype)) {
+      const steps: AuthorizeProbeStep[] = [];
+      try {
+        const sync = await this.onuTypeSync.syncTypesForConnectedOlt(
+          schema,
+          olt,
+        );
+        steps.push({
+          step: 'sync_types',
+          status: sync.ok ? 'ok' : 'fail',
+          message: sync.ok
+            ? `Perfiles OLT sincronizados (${sync.steps.length} pasos)`
+            : sync.error || 'Sync parcial de perfiles',
+        });
+      } catch (err) {
+        steps.push({
+          step: 'sync_types',
+          status: 'skip',
+          message:
+            err instanceof Error ? err.message : 'Sync de perfiles omitido',
+        });
+      }
+
+      const candidates = await this.onuTypeSync.buildAuthorizeCandidates(
+        schema,
+        sn,
+        ponType,
+        preferred,
+      );
+      const tryTypes = candidates.length
+        ? candidates.map((c) => c.name)
+        : [preferred || '10'];
+
+      let lastError = '';
+      let authorizedType: string | null = null;
+      let canonical: string | null = null;
+
+      for (const typeName of tryTypes) {
+        const ensured = await this.onuTypeSync.ensureTypeOnOlt(olt, {
+          name: typeName,
+          ponType,
+          ethernetPorts: 4,
+          wifiSsids: 0,
+          voipPorts: 0,
+          catv: false,
+        });
+        steps.push({
+          step: 'ensure_type',
+          status: ensured.ok ? 'ok' : 'fail',
+          message: ensured.ok
+            ? ('message' in ensured ? ensured.message : undefined) ||
+              `Perfil «${typeName}» listo`
+            : ('error' in ensured ? ensured.error : undefined) ||
+              `No se pudo asegurar «${typeName}»`,
+          typeName,
+        });
+        if (!ensured.ok) {
+          lastError =
+            ('error' in ensured ? ensured.error : undefined) || lastError;
+          continue;
+        }
+
+        const result = await this.withTimeout(
+          this.huaweiOlt.authorizeOnu({
+            ...this.zteConn(olt),
+            oltIf,
+            onuId,
+            onuType: typeName,
+            sn,
+            name: body.name,
+          }),
+          90_000,
+          `Authorize ${sn} on Huawei (${typeName})`,
+        );
+        if (!result.ok) {
+          lastError = result.error || lastError;
+          steps.push({
+            step: 'try_type',
+            status: 'fail',
+            message: result.error || `Falló con «${typeName}»`,
+            typeName,
+          });
+          continue;
+        }
+        authorizedType = typeName;
+        const baseIf = oltIf.replace(/-olt_/i, '-onu_');
+        const onuIf = baseIf.includes(':') ? baseIf : `${baseIf}:${onuId}`;
+        const parts = onuIf.match(
+          /^(gpon|epon)-onu_(\d+)\/(\d+)\/(\d+):(\d+)$/i,
+        );
+        canonical = parts
+          ? `${parts[1].toLowerCase()}-onu_${parts[2]}/${parts[3]}/${parts[4]}:${parts[5]}`
+          : onuIf;
+        steps.push({
+          step: 'done',
+          status: 'ok',
+          message: `Autorizada con perfil «${typeName}»`,
+          typeName,
+        });
+        break;
+      }
+
+      if (!authorizedType || !canonical) {
+        throw new BadRequestException(
+          lastError ||
+            'No se pudo autorizar la ONU en Huawei con los perfiles disponibles',
+        );
+      }
+
+      const parts = canonical.match(
+        /^(?:gpon|epon)-onu_(\d+)\/(\d+)\/(\d+):(\d+)$/i,
+      );
+      const imported = await this.importOne(user, body.oltId, {
+        onuIf: canonical,
+        ponType,
+        board: parts?.[2] ?? '',
+        port: parts?.[3] ?? '',
+        onuId,
+        sn,
+        onuType: authorizedType,
+        name: body.name?.trim() || null,
+        description: body.description?.trim() || null,
+        status: 'online',
+        phaseState: 'working',
+        adminState: 'enable',
+        online: true,
+      });
+      const deniedRepo =
+        await this.tenantConnections.getOnuDeniedRepository(schema);
+      await deniedRepo.delete({ sn });
+      return {
+        ok: true,
+        message: `ONU ${sn} autorizada`,
+        onuIf: canonical,
+        onu: imported.onu,
+        authorizedType,
+        detectedModel: authorizedType,
+        steps,
+      };
+    }
     const steps: AuthorizeProbeStep[] = [];
     const snVendor = vendorFromSn(sn);
 
@@ -719,10 +1044,7 @@ export class OnuConnectedService {
       message: `SN ${sn} → vendor ${snVendor}; sincronizando perfiles…`,
     });
     try {
-      const sync = await this.onuTypeSync.syncTypesForConnectedOlt(
-        schema,
-        olt,
-      );
+      const sync = await this.onuTypeSync.syncTypesForConnectedOlt(schema, olt);
       steps.push({
         step: 'sync_types',
         status: sync.ok ? 'ok' : 'fail',
@@ -761,12 +1083,15 @@ export class OnuConnectedService {
         step: 'ensure_type',
         status: ensured.ok ? 'ok' : 'fail',
         message: ensured.ok
-          ? ensured.message || `Type «${cand.name}» listo en OLT`
-          : ensured.error || `No se pudo crear «${cand.name}» en OLT`,
+          ? ('message' in ensured ? ensured.message : undefined) ||
+            `Type «${cand.name}» listo en OLT`
+          : ('error' in ensured ? ensured.error : undefined) ||
+            `No se pudo crear «${cand.name}» en OLT`,
         typeName: cand.name,
       });
       if (!ensured.ok) {
-        lastError = ensured.error || lastError;
+        lastError =
+          ('error' in ensured ? ensured.error : undefined) || lastError;
         continue;
       }
 
@@ -833,9 +1158,7 @@ export class OnuConnectedService {
       );
       const rawModel =
         sw.ok && sw.equip
-          ? normalizeOnuModelName(
-              sw.equip.model || sw.equip.equipId || '',
-            )
+          ? normalizeOnuModelName(sw.equip.model || sw.equip.equipId || '')
           : '';
       if (rawModel) {
         steps.push({
@@ -878,7 +1201,9 @@ export class OnuConnectedService {
               : {
                   name: rawModel,
                   ponType:
-                    catalogItem!.ponType === 'epon' ? ('epon' as const) : ponType,
+                    catalogItem!.ponType === 'epon'
+                      ? ('epon' as const)
+                      : ponType,
                   ethernetPorts: catalogItem!.ethernetPorts || 1,
                   wifiSsids: catalogItem!.wifiSsids || 0,
                   voipPorts: catalogItem!.voipPorts || 0,
@@ -928,9 +1253,7 @@ export class OnuConnectedService {
       });
     }
 
-    const parts = onuIf.match(
-      /^(?:gpon|epon)-onu_(\d+)\/(\d+)\/(\d+):(\d+)$/i,
-    );
+    const parts = onuIf.match(/^(?:gpon|epon)-onu_(\d+)\/(\d+)\/(\d+):(\d+)$/i);
     const imported = await this.importOne(user, body.oltId, {
       onuIf,
       ponType,
@@ -1046,7 +1369,7 @@ export class OnuConnectedService {
 
   async list(user: AuthUser) {
     const schema = this.requireSchema(user);
-    const olts = await this.listZteOlts(schema);
+    const olts = await this.listManagedOlts(schema);
     const oltName = new Map(olts.map((o) => [o.id, o.name]));
     const onuRepo = await this.tenantConnections.getOnuRepository(schema);
     const rows = await onuRepo.find({ order: { onuIf: 'ASC' } });
@@ -1071,11 +1394,18 @@ export class OnuConnectedService {
 
   async sync(user: AuthUser, oltId: string) {
     const schema = this.requireSchema(user);
-    const olt = await this.requireZteOlt(schema, oltId);
-    const discovered = await this.discover(user, oltId);
+    const olt = await this.requireManagedOlt(schema, oltId);
+    // Prefer SNMP for speed; CLI only if SNMP unavailable.
+    const discovered = await this.discover(user, oltId, {
+      preferSnmp: true,
+      includeRunningConfig: false,
+    });
     const onuRepo = await this.tenantConnections.getOnuRepository(schema);
     const existing = await onuRepo.find({ where: { oltId } });
     const byIf = new Map(existing.map((e) => [e.onuIf.toLowerCase(), e]));
+    const bySn = new Map(
+      existing.filter((e) => e.sn).map((e) => [e.sn!.toUpperCase(), e]),
+    );
     const seen = new Set<string>();
     const now = new Date();
     let updated = 0;
@@ -1083,16 +1413,16 @@ export class OnuConnectedService {
     let removed = 0;
 
     for (const snap of discovered.onus) {
-      if (
-        this.isRecentlyDeleted(schema, oltId, snap.onuIf, snap.sn ?? null)
-      ) {
+      if (this.isRecentlyDeleted(schema, oltId, snap.onuIf, snap.sn ?? null)) {
         this.logger.log(
           `sync skip recently deleted ${snap.onuIf} (${snap.sn ?? 'sin SN'})`,
         );
         continue;
       }
       seen.add(snap.onuIf.toLowerCase());
-      let row = byIf.get(snap.onuIf.toLowerCase());
+      let row =
+        byIf.get(snap.onuIf.toLowerCase()) ||
+        (snap.sn ? bySn.get(snap.sn.toUpperCase()) : undefined);
       if (!row) {
         row = onuRepo.create({
           oltId,
@@ -1104,6 +1434,10 @@ export class OnuConnectedService {
         added += 1;
       } else {
         updated += 1;
+        // Keep stable onuIf if we matched by SN with a slightly different ifName.
+        if (row.onuIf.toLowerCase() !== snap.onuIf.toLowerCase()) {
+          seen.add(row.onuIf.toLowerCase());
+        }
       }
       this.applySnapshot(row, snap, now);
       await onuRepo.save(row);
@@ -1130,6 +1464,7 @@ export class OnuConnectedService {
       ok: true,
       oltId,
       oltName: olt.name,
+      source: discovered.source,
       totalLive: discovered.total,
       updated,
       added,
@@ -1144,10 +1479,10 @@ export class OnuConnectedService {
     const onuRepo = await this.tenantConnections.getOnuRepository(schema);
     const row = await onuRepo.findOne({ where: { id } });
     if (!row) throw new NotFoundException('ONU no encontrada');
-    const olt = await this.requireZteOlt(schema, row.oltId);
+    const olt = await this.requireManagedOlt(schema, row.oltId);
 
     const result = await this.withTimeout(
-      this.zteOlt.getConnectedOnuDetail({
+      this.oltCli(olt).getConnectedOnuDetail({
         ...this.zteConn(olt),
         onuIf: row.onuIf,
       }),
@@ -1224,20 +1559,19 @@ export class OnuConnectedService {
   /**
    * Write OLT interface `description` (dirección / comentario) and persist locally.
    */
-  async updateDescription(
-    user: AuthUser,
-    id: string,
-    description: string,
-  ) {
+  async updateDescription(user: AuthUser, id: string, description: string) {
     const schema = this.requireSchema(user);
     const onuRepo = await this.tenantConnections.getOnuRepository(schema);
     const row = await onuRepo.findOne({ where: { id } });
     if (!row) throw new NotFoundException('ONU no encontrada');
-    const olt = await this.requireZteOlt(schema, row.oltId);
+    const olt = await this.requireManagedOlt(schema, row.oltId);
 
-    const next = description.trim().replace(/["\r\n]+/g, ' ').slice(0, 200);
+    const next = description
+      .trim()
+      .replace(/["\r\n]+/g, ' ')
+      .slice(0, 200);
     const result = await this.withTimeout(
-      this.zteOlt.configureOnuDescription({
+      this.oltCli(olt).configureOnuDescription({
         ...this.zteConn(olt),
         onuIf: row.onuIf,
         description: next || null,
@@ -1275,12 +1609,10 @@ export class OnuConnectedService {
     const onuRepo = await this.tenantConnections.getOnuRepository(schema);
     const row = await onuRepo.findOne({ where: { id } });
     if (!row) throw new NotFoundException('ONU no encontrada');
-    const olt = await this.requireZteOlt(schema, row.oltId);
+    const olt = await this.requireManagedOlt(schema, row.oltId);
 
     const nextId =
-      zoneId === undefined || zoneId === null || zoneId === ''
-        ? null
-        : zoneId;
+      zoneId === undefined || zoneId === null || zoneId === '' ? null : zoneId;
     if (nextId) {
       const zoneRepo = await this.tenantConnections.getZoneRepository(schema);
       const zone = await zoneRepo.findOne({ where: { id: nextId } });
@@ -1302,12 +1634,23 @@ export class OnuConnectedService {
     };
   }
 
-  async metrics(user: AuthUser, id: string, hours = 6) {
+  async metrics(user: AuthUser, id: string, hours = 24, live = false) {
     const schema = this.requireSchema(user);
     const onuRepo = await this.tenantConnections.getOnuRepository(schema);
     const row = await onuRepo.findOne({ where: { id } });
     if (!row) throw new NotFoundException('ONU no encontrada');
-    const since = new Date(Date.now() - Math.max(1, hours) * 3600_000);
+    const clampedHours = Math.min(Math.max(hours || 24, 1), 24);
+    if (live) {
+      // Non-blocking: return DB samples immediately; live SNMP writes the next point.
+      void this.refreshOnuLiveSample(schema, row).catch((err) => {
+        this.logger.debug(
+          `Live metrics ${row.onuIf}: ${
+            err instanceof Error ? err.message : err
+          }`,
+        );
+      });
+    }
+    const since = new Date(Date.now() - clampedHours * 3600_000);
     const samples =
       await this.tenantConnections.getOnuMetricSampleRepository(schema);
     const rows = await samples
@@ -1318,7 +1661,8 @@ export class OnuConnectedService {
       .getMany();
     return {
       onuId: id,
-      hours,
+      hours: clampedHours,
+      live: !!live,
       samples: rows.map((s) => ({
         kind: s.kind,
         value: s.value,
@@ -1328,18 +1672,168 @@ export class OnuConnectedService {
   }
 
   /**
+   * SNMP GET for one ONU while its detail modal is open (~2–3s poll).
+   * Does not walk the OLT or touch other ONUs.
+   */
+  private async refreshOnuLiveSample(schema: string, row: Onu) {
+    const flightKey = `${schema}:${row.id}`;
+    const existing = this.liveRefreshInFlight.get(flightKey);
+    if (existing) {
+      await existing;
+      return;
+    }
+    const run = this.doRefreshOnuLiveSample(schema, row).finally(() => {
+      this.liveRefreshInFlight.delete(flightKey);
+    });
+    this.liveRefreshInFlight.set(flightKey, run);
+    await run;
+  }
+
+  private async doRefreshOnuLiveSample(schema: string, row: Onu) {
+    let olt: NetworkDevice;
+    try {
+      olt = await this.requireManagedOlt(schema, row.oltId);
+    } catch {
+      return;
+    }
+    const snmp = this.snmpConn(olt);
+    if (!snmp || !row.onuIf?.trim()) return;
+
+    let sampled: Awaited<ReturnType<ZteOltSnmpClient['sampleOneOnu']>>;
+    try {
+      sampled = await this.withTimeout(
+        this.oltSnmp(olt).sampleOneOnu({
+          ...snmp,
+          onuIf: row.onuIf,
+          ifIndexHint: row.ifIndex,
+        }),
+        25_000,
+        `SNMP live ${row.onuIf}`,
+      );
+    } catch (err) {
+      this.logger.debug(
+        `Live SNMP ${row.onuIf}: ${err instanceof Error ? err.message : err}`,
+      );
+      return;
+    }
+    if (!sampled.ok || !sampled.onu) return;
+
+    const snap = sampled.onu;
+    const now = new Date();
+    const atMs = now.getTime();
+    const onuRepo = await this.tenantConnections.getOnuRepository(schema);
+    const samples =
+      await this.tenantConnections.getOnuMetricSampleRepository(schema);
+
+    if (
+      snap.ifIndex != null &&
+      snap.ifIndex > 0 &&
+      row.ifIndex !== snap.ifIndex
+    ) {
+      row.ifIndex = snap.ifIndex;
+    }
+
+    this.applySnapshot(
+      row,
+      {
+        onuIf: row.onuIf,
+        board: snap.slot || row.board,
+        port: snap.port || row.port,
+        onuId: snap.onuId || row.onuId,
+        sn: snap.sn,
+        name: snap.name,
+        status: snap.status,
+        phaseState: snap.phaseState ?? undefined,
+        online: snap.online,
+        signalDbm: snap.signalDbm,
+      },
+      now,
+    );
+    await onuRepoUpdateSafe(onuRepo, row);
+
+    const sampleRows: Array<{
+      onuId: string;
+      kind: string;
+      value: number;
+      sampledAt: Date;
+    }> = [];
+
+    if (snap.signalDbm != null && Number.isFinite(snap.signalDbm)) {
+      sampleRows.push({
+        onuId: row.id,
+        kind: 'signal',
+        value: snap.signalDbm,
+        sampledAt: now,
+      });
+    }
+
+    if (
+      snap.inOctets != null &&
+      snap.outOctets != null &&
+      Number.isFinite(snap.inOctets) &&
+      Number.isFinite(snap.outOctets)
+    ) {
+      const key = `${olt.id}:${row.onuIf.toLowerCase()}`;
+      const prev = this.snmpTrafficPrev.get(key);
+      this.snmpTrafficPrev.set(key, {
+        inOctets: snap.inOctets,
+        outOctets: snap.outOctets,
+        atMs,
+      });
+      // Modal polls ~3s — allow shorter windows than the 30s global poller.
+      if (prev && atMs > prev.atMs) {
+        const dt = (atMs - prev.atMs) / 1000;
+        if (dt >= 1.5) {
+          const dIn = counterDelta(prev.inOctets, snap.inOctets);
+          const dOut = counterDelta(prev.outOctets, snap.outOctets);
+          const uploadBps = (dIn * 8) / dt;
+          const downloadBps = (dOut * 8) / dt;
+          if (Number.isFinite(downloadBps) && downloadBps >= 0) {
+            sampleRows.push({
+              onuId: row.id,
+              kind: 'rx_bps',
+              value: downloadBps,
+              sampledAt: now,
+            });
+          }
+          if (Number.isFinite(uploadBps) && uploadBps >= 0) {
+            sampleRows.push({
+              onuId: row.id,
+              kind: 'tx_bps',
+              value: uploadBps,
+              sampledAt: now,
+            });
+          }
+        }
+      }
+    }
+    // No CLI here: `show interface` is too slow for the ~3s live chart.
+    // Fleet traffic uses XPON SNMP walks; live uses XPON GET on the same OIDs.
+
+    if (sampleRows.length) {
+      const writeKey = row.id;
+      const lastWrite = this.liveSampleLastWriteMs.get(writeKey) ?? 0;
+      // Modal polls ~2.5–3s; persist at most ~every 3s (still denser than fleet 1/min).
+      if (Date.now() - lastWrite >= 2_800) {
+        await samples.save(sampleRows.map((s) => samples.create(s)));
+        this.liveSampleLastWriteMs.set(writeKey, Date.now());
+      }
+    }
+  }
+
+  /**
    * Live status report (optical, detail, LAN, MAC…). Display-only — no DB write
    * except best-effort refresh of onuType from remote equip/model when missing.
    */
   async statusReport(user: AuthUser, oltId: string, onuIf: string) {
     const schema = this.requireSchema(user);
-    const olt = await this.requireZteOlt(schema, oltId);
+    const olt = await this.requireManagedOlt(schema, oltId);
     if (!onuIf?.trim()) {
       throw new BadRequestException('onuIf requerido');
     }
     const ifName = onuIf.trim();
     const result = await this.withTimeout(
-      this.zteOlt.getOnuStatusReport({
+      this.oltCli(olt).getOnuStatusReport({
         ...this.zteConn(olt),
         onuIf: ifName,
       }),
@@ -1361,7 +1855,10 @@ export class OnuConnectedService {
         const row = await onuRepo.findOne({
           where: { oltId, onuIf: ifName },
         });
-        if (row && (!row.onuType || row.onuType === 'N/A' || row.onuType === '—')) {
+        if (
+          row &&
+          (!row.onuType || row.onuType === 'N/A' || row.onuType === '—')
+        ) {
           row.onuType = liveModel;
           await onuRepo.save(row);
         }
@@ -1395,12 +1892,12 @@ export class OnuConnectedService {
   /** Running-config of ONU interface — display-only. */
   async runningConfig(user: AuthUser, oltId: string, onuIf: string) {
     const schema = this.requireSchema(user);
-    const olt = await this.requireZteOlt(schema, oltId);
+    const olt = await this.requireManagedOlt(schema, oltId);
     if (!onuIf?.trim()) {
       throw new BadRequestException('onuIf requerido');
     }
     const result = await this.withTimeout(
-      this.zteOlt.getConnectedOnuDetail({
+      this.oltCli(olt).getConnectedOnuDetail({
         ...this.zteConn(olt),
         onuIf: onuIf.trim(),
       }),
@@ -1424,12 +1921,12 @@ export class OnuConnectedService {
   /** Remote ONU software / equipment info — display-only. */
   async swInfo(user: AuthUser, oltId: string, onuIf: string) {
     const schema = this.requireSchema(user);
-    const olt = await this.requireZteOlt(schema, oltId);
+    const olt = await this.requireManagedOlt(schema, oltId);
     if (!onuIf?.trim()) {
       throw new BadRequestException('onuIf requerido');
     }
     const result = await this.withTimeout(
-      this.zteOlt.getOnuSwInfo({
+      this.oltCli(olt).getOnuSwInfo({
         ...this.zteConn(olt),
         onuIf: onuIf.trim(),
       }),
@@ -1473,12 +1970,12 @@ export class OnuConnectedService {
    */
   async liveTraffic(user: AuthUser, oltId: string, onuIf: string) {
     const schema = this.requireSchema(user);
-    const olt = await this.requireZteOlt(schema, oltId);
+    const olt = await this.requireManagedOlt(schema, oltId);
     if (!onuIf?.trim()) {
       throw new BadRequestException('onuIf requerido');
     }
     const result = await this.withTimeout(
-      this.zteOlt.getOnuLiveTraffic({
+      this.oltCli(olt).getOnuLiveTraffic({
         ...this.zteConn(olt),
         onuIf: onuIf.trim(),
       }),
@@ -1512,9 +2009,14 @@ export class OnuConnectedService {
     };
   }
 
-  async detail(user: AuthUser, oltId: string, onuIf: string) {
+  async detail(
+    user: AuthUser,
+    oltId: string,
+    onuIf: string,
+    opts?: { live?: boolean },
+  ) {
     const schema = this.requireSchema(user);
-    const olt = await this.requireZteOlt(schema, oltId);
+    const olt = await this.requireManagedOlt(schema, oltId);
     if (!onuIf?.trim()) {
       throw new BadRequestException('onuIf requerido');
     }
@@ -1526,17 +2028,20 @@ export class OnuConnectedService {
     let live: Awaited<
       ReturnType<ZteOltClient['getConnectedOnuDetail']>
     > | null = null;
-    try {
-      live = await this.withTimeout(
-        this.zteOlt.getConnectedOnuDetail({
-          ...this.zteConn(olt),
-          onuIf: onuIf.trim(),
-        }),
-        90_000,
-        `Detail ${onuIf}`,
-      );
-    } catch {
-      live = null;
+    // Default: DB only (SNMP poller keeps signal/online fresh). CLI only if live=true.
+    if (opts?.live) {
+      try {
+        live = await this.withTimeout(
+          this.oltCli(olt).getConnectedOnuDetail({
+            ...this.zteConn(olt),
+            onuIf: onuIf.trim(),
+          }),
+          90_000,
+          `Detail ${onuIf}`,
+        );
+      } catch {
+        live = null;
+      }
     }
 
     const base = row
@@ -1628,9 +2133,7 @@ export class OnuConnectedService {
       }
     }
 
-    const persisted = row
-      ? this.serializeOnu(row, olt.name)
-      : base;
+    const persisted = row ? this.serializeOnu(row, olt.name) : base;
 
     let tr069ProfileName: string | null = null;
     const profileId =
@@ -1647,8 +2150,7 @@ export class OnuConnectedService {
     let mgmtVlanId: number | null = null;
     let wanVlanId: number | null = null;
     if (row?.mgmtPoolId || row?.wanPoolId) {
-      const poolRepo =
-        await this.tenantConnections.getIpPoolRepository(schema);
+      const poolRepo = await this.tenantConnections.getIpPoolRepository(schema);
       if (row.mgmtPoolId) {
         const mp = await poolRepo.findOne({ where: { id: row.mgmtPoolId } });
         mgmtVlanId = mp?.vlanId ?? null;
@@ -1688,7 +2190,11 @@ export class OnuConnectedService {
           : {}),
         oltRxDbm: o?.oltRxDbm ?? null,
         distanceM: o?.distanceM ?? null,
-        onlineDuration: o?.onlineDuration ?? null,
+        onlineDuration:
+          o?.onlineDuration ??
+          this.formatOnlineDuration(row?.onlineSince) ??
+          (persisted as { onlineDuration?: string | null }).onlineDuration ??
+          null,
         downloadBps: o?.downloadBps ?? null,
         uploadBps: o?.uploadBps ?? null,
         contact: null,
@@ -1718,12 +2224,12 @@ export class OnuConnectedService {
 
   async reboot(user: AuthUser, oltId: string, onuIf: string) {
     const schema = this.requireSchema(user);
-    const olt = await this.requireZteOlt(schema, oltId);
+    const olt = await this.requireManagedOlt(schema, oltId);
     if (!onuIf?.trim()) {
       throw new BadRequestException('onuIf requerido');
     }
     const result = await this.withTimeout(
-      this.zteOlt.rebootOnu({
+      this.oltCli(olt).rebootOnu({
         ...this.zteConn(olt),
         onuIf: onuIf.trim(),
       }),
@@ -1739,13 +2245,13 @@ export class OnuConnectedService {
   /** Admin-disable ONU on OLT; keeps registration in Conectadas as offline. */
   async disable(user: AuthUser, oltId: string, onuIf: string) {
     const schema = this.requireSchema(user);
-    const olt = await this.requireZteOlt(schema, oltId);
+    const olt = await this.requireManagedOlt(schema, oltId);
     if (!onuIf?.trim()) {
       throw new BadRequestException('onuIf requerido');
     }
     const ifName = onuIf.trim();
     const result = await this.withTimeout(
-      this.zteOlt.disableOnu({
+      this.oltCli(olt).disableOnu({
         ...this.zteConn(olt),
         onuIf: ifName,
       }),
@@ -1775,13 +2281,13 @@ export class OnuConnectedService {
   /** Re-enable a previously admin-disabled ONU on OLT. */
   async enable(user: AuthUser, oltId: string, onuIf: string) {
     const schema = this.requireSchema(user);
-    const olt = await this.requireZteOlt(schema, oltId);
+    const olt = await this.requireManagedOlt(schema, oltId);
     if (!onuIf?.trim()) {
       throw new BadRequestException('onuIf requerido');
     }
     const ifName = onuIf.trim();
     const result = await this.withTimeout(
-      this.zteOlt.enableOnu({
+      this.oltCli(olt).enableOnu({
         ...this.zteConn(olt),
         onuIf: ifName,
       }),
@@ -1789,9 +2295,7 @@ export class OnuConnectedService {
       `ONU enable ${ifName}`,
     );
     if (!result.ok) {
-      throw new BadRequestException(
-        result.error || 'Fallo al rehabilitar ONU',
-      );
+      throw new BadRequestException(result.error || 'Fallo al rehabilitar ONU');
     }
 
     const onuRepo = await this.tenantConnections.getOnuRepository(schema);
@@ -1817,13 +2321,13 @@ export class OnuConnectedService {
    */
   async deleteOnu(user: AuthUser, oltId: string, onuIf: string) {
     const schema = this.requireSchema(user);
-    const olt = await this.requireZteOlt(schema, oltId);
+    const olt = await this.requireManagedOlt(schema, oltId);
     if (!onuIf?.trim()) {
       throw new BadRequestException('onuIf requerido');
     }
     const ifName = onuIf.trim();
     const result = await this.withTimeout(
-      this.zteOlt.deleteOnu({
+      this.oltCli(olt).deleteOnu({
         ...this.zteConn(olt),
         onuIf: ifName,
       }),
@@ -1866,17 +2370,20 @@ export class OnuConnectedService {
 
   /**
    * Background tick: refresh online/signal for imported ONUs, write signal
-   * samples, and sample traffic rates (~1/min per online ONU).
+   * samples, and sample traffic rates. Prefers SNMP RO; falls back to CLI.
    */
   async pollMetricsForSchema(schema: string): Promise<void> {
-    const olts = await this.listZteOlts(schema);
+    const olts = await this.listManagedOlts(schema);
     const onuRepo = await this.tenantConnections.getOnuRepository(schema);
     const samples =
       await this.tenantConnections.getOnuMetricSampleRepository(schema);
 
     for (const olt of olts) {
       if (olt.connectionStatus === 'disconnected') continue;
-      if (!olt.mgmtHost || !olt.mgmtUsername || !olt.mgmtPassword) continue;
+      if (!olt.mgmtHost) continue;
+      const hasSnmp = !!this.snmpConn(olt);
+      const hasCli = !!(olt.mgmtUsername && olt.mgmtPassword);
+      if (!hasSnmp && !hasCli) continue;
       const imported = await onuRepo.count({ where: { oltId: olt.id } });
       if (imported === 0) continue;
 
@@ -1893,6 +2400,32 @@ export class OnuConnectedService {
         this.pollInFlight.delete(lockKey);
       }
     }
+
+    await this.pruneOnuMetricSamples(schema, samples);
+  }
+
+  /** Keep the last 24h of ONU metric history (1-min fleet + denser live). */
+  private async pruneOnuMetricSamples(
+    schema: string,
+    samples: Awaited<
+      ReturnType<TenantConnectionService['getOnuMetricSampleRepository']>
+    >,
+  ) {
+    try {
+      const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      await samples
+        .createQueryBuilder()
+        .delete()
+        .from(OnuMetricSample)
+        .where('sampled_at < :cutoff', { cutoff })
+        .execute();
+    } catch (err) {
+      this.logger.warn(
+        `prune onu_metric_samples ${schema}: ${
+          err instanceof Error ? err.message : err
+        }`,
+      );
+    }
   }
 
   /** Persist rx_bps / tx_bps for the given ONUs (~target: once per minute). */
@@ -1904,13 +2437,29 @@ export class OnuConnectedService {
     >,
   ) {
     if (rows.length === 0) return;
+    // Rotate a subset so we never hold the OLT lock for hundreds of iface shows.
+    const maxPerTick = 24;
+    const slice =
+      rows.length <= maxPerTick
+        ? rows
+        : (() => {
+            const key = `traf:${olt.id}`;
+            const start = (this.trafficRoundRobin.get(key) ?? 0) % rows.length;
+            this.trafficRoundRobin.set(key, start + maxPerTick);
+            const out: typeof rows = [];
+            for (let i = 0; i < maxPerTick; i++) {
+              out.push(rows[(start + i) % rows.length]);
+            }
+            return out;
+          })();
     try {
       const traffic = await this.withTimeout(
-        this.zteOlt.sampleOnuTrafficRates({
+        this.oltCli(olt).sampleOnuTrafficRates({
           ...this.zteConn(olt),
-          onuIfs: rows.map((r) => r.onuIf),
+          onuIfs: slice.map((r) => r.onuIf),
+          priority: 'background',
         }),
-        120_000,
+        90_000,
         `Traffic sample ${olt.name}`,
       );
       if (!traffic.ok || !traffic.rates.length) return;
@@ -1955,28 +2504,255 @@ export class OnuConnectedService {
   private async pollOneOlt(
     schema: string,
     olt: NetworkDevice,
-    onuRepo: Awaited<
-      ReturnType<TenantConnectionService['getOnuRepository']>
-    >,
+    onuRepo: Awaited<ReturnType<TenantConnectionService['getOnuRepository']>>,
     samples: Awaited<
       ReturnType<TenantConnectionService['getOnuMetricSampleRepository']>
     >,
   ) {
     const existing = await onuRepo.find({ where: { oltId: olt.id } });
+    if (existing.length === 0) return;
 
-    // Speed samples first (target ~1/min), before slower inventory refresh.
+    const snmp = this.snmpConn(olt);
+    if (snmp) {
+      try {
+        const monitored = await this.withTimeout(
+          this.oltSnmp(olt).walkOnuMonitor(snmp),
+          90_000,
+          `SNMP ONUs ${olt.name}`,
+        );
+        if (monitored.ok && monitored.onus.length > 0) {
+          const matched = await this.applySnmpMonitor(
+            schema,
+            olt,
+            existing,
+            monitored.onus,
+            onuRepo,
+            samples,
+            new Date(monitored.probedAt),
+          );
+          if (matched > 0) {
+            this.logger.log(
+              `ONU poll ${olt.name}: SNMP ${monitored.source} matched ${matched}/${existing.length}`,
+            );
+            // CLI traffic only if XPON/IF-MIB counters were missing this tick.
+            const snmpTraffic = monitored.onus.some(
+              (o) => o.inOctets != null && o.outOctets != null,
+            );
+            if (!snmpTraffic && olt.mgmtUsername && olt.mgmtPassword) {
+              const online = existing.filter((r) => r.online);
+              if (online.length > 0) {
+                await this.sampleTrafficForOnus(olt, online, samples);
+              }
+            }
+            return;
+          }
+          this.logger.warn(
+            `ONU poll ${olt.name}: SNMP returned rows but none matched DB — CLI fallback`,
+          );
+        } else {
+          this.logger.warn(
+            `ONU poll ${olt.name}: SNMP miss (${monitored.error ?? 'empty'}) — CLI fallback`,
+          );
+        }
+      } catch (err) {
+        this.logger.warn(
+          `ONU poll ${olt.name}: SNMP error — CLI fallback: ${
+            err instanceof Error ? err.message : err
+          }`,
+        );
+      }
+    }
+
+    if (!olt.mgmtUsername || !olt.mgmtPassword) return;
+    await this.pollOneOltViaCli(schema, olt, existing, onuRepo, samples);
+  }
+
+  private async applySnmpMonitor(
+    schema: string,
+    olt: NetworkDevice,
+    existing: Onu[],
+    snmpOnus: Array<{
+      onuIf: string;
+      slot: string;
+      port: string;
+      onuId: string;
+      sn: string | null;
+      name: string | null;
+      phaseState: string | null;
+      online: boolean;
+      status: 'online' | 'offline';
+      signalDbm: number | null;
+      inOctets: number | null;
+      outOctets: number | null;
+      ifIndex?: number | null;
+    }>,
+    onuRepo: Awaited<ReturnType<TenantConnectionService['getOnuRepository']>>,
+    samples: Awaited<
+      ReturnType<TenantConnectionService['getOnuMetricSampleRepository']>
+    >,
+    now: Date,
+  ): Promise<number> {
+    const byIf = new Map(existing.map((e) => [e.onuIf.toLowerCase(), e]));
+    const bySn = new Map(
+      existing.filter((e) => e.sn).map((e) => [e.sn!.toUpperCase(), e]),
+    );
+    const bySlotPortId = new Map(
+      existing.map((e) => [`${e.board}/${e.port}:${e.onuId}`.toLowerCase(), e]),
+    );
+
+    const seen = new Set<string>();
+    const sampleRows: Array<{
+      onuId: string;
+      kind: string;
+      value: number;
+      sampledAt: Date;
+    }> = [];
+    let matched = 0;
+    const atMs = now.getTime();
+
+    for (const snap of snmpOnus) {
+      if (this.isRecentlyDeleted(schema, olt.id, snap.onuIf, snap.sn ?? null)) {
+        continue;
+      }
+      const row =
+        byIf.get(snap.onuIf.toLowerCase()) ||
+        (snap.sn ? bySn.get(snap.sn.toUpperCase()) : undefined) ||
+        bySlotPortId.get(
+          `${snap.slot}/${snap.port}:${snap.onuId}`.toLowerCase(),
+        );
+      if (!row) continue;
+      matched += 1;
+      seen.add(row.onuIf.toLowerCase());
+
+      if (snap.ifIndex != null && snap.ifIndex > 0) {
+        row.ifIndex = snap.ifIndex;
+        this.oltSnmp(olt).rememberIfIndex(
+          olt.mgmtHost ?? '',
+          row.onuIf,
+          snap.ifIndex,
+        );
+      }
+
+      this.applySnapshot(
+        row,
+        {
+          onuIf: row.onuIf,
+          board: snap.slot || row.board,
+          port: snap.port || row.port,
+          onuId: snap.onuId || row.onuId,
+          sn: snap.sn,
+          name: snap.name,
+          status: snap.status,
+          phaseState: snap.phaseState ?? undefined,
+          online: snap.online,
+          signalDbm: snap.signalDbm,
+        },
+        now,
+      );
+      await onuRepoUpdateSafe(onuRepo, row);
+
+      if (snap.signalDbm != null && Number.isFinite(snap.signalDbm)) {
+        sampleRows.push({
+          onuId: row.id,
+          kind: 'signal',
+          value: snap.signalDbm,
+          sampledAt: now,
+        });
+      }
+
+      if (
+        snap.inOctets != null &&
+        snap.outOctets != null &&
+        Number.isFinite(snap.inOctets) &&
+        Number.isFinite(snap.outOctets)
+      ) {
+        const key = `${olt.id}:${row.onuIf.toLowerCase()}`;
+        const prev = this.snmpTrafficPrev.get(key);
+        this.snmpTrafficPrev.set(key, {
+          inOctets: snap.inOctets,
+          outOctets: snap.outOctets,
+          atMs,
+        });
+        if (prev && atMs > prev.atMs) {
+          const dt = (atMs - prev.atMs) / 1000;
+          if (dt >= 5) {
+            const dIn = counterDelta(prev.inOctets, snap.inOctets);
+            const dOut = counterDelta(prev.outOctets, snap.outOctets);
+            // OLT input = upload (tx_bps); OLT output = download (rx_bps)
+            const uploadBps = (dIn * 8) / dt;
+            const downloadBps = (dOut * 8) / dt;
+            if (Number.isFinite(downloadBps) && downloadBps >= 0) {
+              sampleRows.push({
+                onuId: row.id,
+                kind: 'rx_bps',
+                value: downloadBps,
+                sampledAt: now,
+              });
+            }
+            if (Number.isFinite(uploadBps) && uploadBps >= 0) {
+              sampleRows.push({
+                onuId: row.id,
+                kind: 'tx_bps',
+                value: uploadBps,
+                sampledAt: now,
+              });
+            }
+          }
+        }
+      }
+    }
+
+    for (const row of existing) {
+      if (seen.has(row.onuIf.toLowerCase())) continue;
+      await onuRepo.update(
+        { id: row.id },
+        {
+          online: false,
+          status: 'offline',
+          lastProbedAt: now,
+        },
+      );
+    }
+
+    if (sampleRows.length) {
+      await samples.save(sampleRows.map((s) => samples.create(s)));
+    }
+    return matched;
+  }
+
+  private async pollOneOltViaCli(
+    schema: string,
+    olt: NetworkDevice,
+    existing: Onu[],
+    onuRepo: Awaited<ReturnType<TenantConnectionService['getOnuRepository']>>,
+    samples: Awaited<
+      ReturnType<TenantConnectionService['getOnuMetricSampleRepository']>
+    >,
+  ) {
     const previouslyOnline = existing.filter((r) => r.online);
     if (previouslyOnline.length > 0) {
       await this.sampleTrafficForOnus(olt, previouslyOnline, samples);
     }
 
+    const onlyOltIfs = [
+      ...new Set(
+        existing
+          .map((r) => {
+            const m = r.onuIf.match(/^((?:gpon|epon)-onu_[\d/]+):\d+$/i);
+            return m ? m[1].replace(/-onu_/i, '-olt_') : null;
+          })
+          .filter((x): x is string => !!x),
+      ),
+    ];
+
     const discovered = await this.withTimeout(
-      this.zteOlt.listConnectedOnus({
+      this.oltCli(olt).listConnectedOnus({
         ...this.zteConn(olt),
-        // Names come from Sync / detail — avoid full running-config every minute.
         includeRunningConfig: false,
+        onlyOltIfs: onlyOltIfs.length ? onlyOltIfs : undefined,
+        priority: 'background',
       }),
-      180_000,
+      120_000,
       `Poll ONUs ${olt.name}`,
     );
     if (!discovered.ok) return;
@@ -1992,14 +2768,12 @@ export class OnuConnectedService {
     }> = [];
 
     for (const snap of discovered.onus) {
-      if (
-        this.isRecentlyDeleted(schema, olt.id, snap.onuIf, snap.sn ?? null)
-      ) {
+      if (this.isRecentlyDeleted(schema, olt.id, snap.onuIf, snap.sn ?? null)) {
         continue;
       }
       seen.add(snap.onuIf.toLowerCase());
       const row = byIf.get(snap.onuIf.toLowerCase());
-      if (!row) continue; // inventory add is Sync's job
+      if (!row) continue;
       this.applySnapshot(row, snap, now);
       const result = await onuRepo.update(
         { id: row.id },
@@ -2036,7 +2810,6 @@ export class OnuConnectedService {
 
     for (const row of existing) {
       if (seen.has(row.onuIf.toLowerCase())) continue;
-      // Soft-offline only; do not save() a detached entity (that resurrects deletes).
       await onuRepo.update(
         { id: row.id },
         {
@@ -2051,20 +2824,18 @@ export class OnuConnectedService {
       await samples.save(sampleRows.map((s) => samples.create(s)));
     }
 
-    // Backfill SN (and name if still empty) via detail-info — max 8 / tick.
     const stillThere = await onuRepo.find({ where: { oltId: olt.id } });
-    const missing = stillThere
-      .filter((r) => !r.sn || !r.name)
-      .slice(0, 8);
+    const missing = stillThere.filter((r) => !r.sn || !r.name).slice(0, 8);
     for (const row of missing) {
       if (this.isRecentlyDeleted(schema, olt.id, row.onuIf, row.sn)) {
         continue;
       }
       try {
         const detail = await this.withTimeout(
-          this.zteOlt.getConnectedOnuDetail({
+          this.oltCli(olt).getConnectedOnuDetail({
             ...this.zteConn(olt),
             onuIf: row.onuIf,
+            priority: 'background',
           }),
           45_000,
           `Backfill ${row.onuIf}`,
@@ -2078,32 +2849,47 @@ export class OnuConnectedService {
             onuType: o.onuType ?? row.onuType,
             name: o.name ?? row.name,
             description: o.description ?? row.description,
-            status: o.status ?? row.status,
-            phaseState: o.phaseState ?? row.phaseState,
-            adminState: o.adminState ?? row.adminState,
-            online: o.online ?? row.online,
-            signalDbm: o.signalDbm ?? row.signalDbm,
-            mode: o.mode ?? row.mode,
-            vlan: o.vlan ?? row.vlan,
-            vlans: o.vlans?.length ? o.vlans : row.vlans,
             lastProbedAt: new Date(),
           },
         );
       } catch {
-        /* skip one */
+        /* skip */
       }
     }
-
-    // Register model codes in global catalog / tenant types
-    const after = await onuRepo.find({ where: { oltId: olt.id } });
-    const models = new Set(
-      [
-        ...discovered.onus.map((o) => o.onuType),
-        ...after.map((r) => r.onuType),
-      ].filter((t): t is string => Boolean(t?.trim())),
-    );
-    for (const m of models) {
-      await this.rememberModel(schema, m);
-    }
   }
+}
+
+function counterDelta(prev: number, next: number): number {
+  if (next >= prev) return next - prev;
+  // 32-bit wrap
+  if (prev <= 0xffffffff && next <= 0xffffffff) {
+    return next + (0xffffffff - prev) + 1;
+  }
+  // 64-bit wrap (approx)
+  return next;
+}
+
+async function onuRepoUpdateSafe(
+  onuRepo: Awaited<ReturnType<TenantConnectionService['getOnuRepository']>>,
+  row: Onu,
+) {
+  const patch: Record<string, unknown> = {
+    board: row.board,
+    port: row.port,
+    onuId: row.onuId,
+    sn: row.sn,
+    name: row.name,
+    status: row.status,
+    phaseState: row.phaseState,
+    online: row.online,
+    lastProbedAt: row.lastProbedAt,
+    onlineSince: row.onlineSince,
+  };
+  if (row.signalDbm != null && Number.isFinite(row.signalDbm)) {
+    patch.signalDbm = row.signalDbm;
+  }
+  if (row.ifIndex != null && row.ifIndex > 0) {
+    patch.ifIndex = row.ifIndex;
+  }
+  await onuRepo.update({ id: row.id }, patch);
 }

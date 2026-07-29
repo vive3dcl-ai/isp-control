@@ -2,6 +2,15 @@ import { Injectable, Logger } from '@nestjs/common';
 import * as net from 'net';
 import { Client as SshClient } from 'ssh2';
 import { detectPonTypeFromCards } from './olt.constants';
+import { sshHostVerification } from './olt-ssh-host-key.util';
+import {
+  buildZteC6xxVportIf,
+  detectZteFwFamily,
+  toZteCanonicalOnuIf,
+  toZteCliOltIf,
+  toZteCliOnuIf,
+  type ZteFwFamily,
+} from './zte-olt-firmware.util';
 import {
   formatOnuStatusReport,
   oltIfFromOnuIf,
@@ -25,31 +34,36 @@ import {
   type ZteUncfgOnu,
 } from './zte-olt-onu.util';
 import {
+  expandVlanList,
+  extractAllInterfaceBlocks,
+  extractInterfaceBlock,
+  extractUplinkIfNames,
+  formatVlanList,
+  inferMediaType,
+  parseUplinkConfigBlock,
+  type ZteUplinkRaw,
+} from './zte-olt-uplink.util';
+import {
   buildOltIfName,
   defaultMaxOnus,
+  extractPonOltIfNames,
   isPonLineCard,
+  looksCompleteRunningConfig,
+  normalizePonOltIfName,
   parseAdminShutdown,
   parseAvgOnuRx,
   parseDescription,
   parseOnuIdsFromState,
   parseOnuStateCounts,
   parseOpticalTxPower,
+  parsePonOltIfName,
   parseRangeFromConfig,
   type ZtePonPortRaw,
 } from './zte-olt-pon.util';
 import {
-  expandVlanList,
-  extractInterfaceBlock,
-  extractUplinkIfNames,
-  formatVlanList,
-  inferMediaType,
-  parseInterfaceStatus,
-  parseOpticalUplink,
-  parseUplinkConfigBlock,
-  type ZteUplinkRaw,
-} from './zte-olt-uplink.util';
-import {
+  mergeVlanCatalogs,
   parseVlansFromRunningConfig,
+  parseVlansFromShowVlan,
   type ZteVlanRaw,
 } from './zte-olt-vlan.util';
 import {
@@ -146,6 +160,8 @@ export interface ZteOltProbeResult {
   hostname?: string;
   /** SoftVer from show card / show version, e.g. V2.1.0 */
   softVer?: string;
+  /** Huawei SmartAX dialect tag (ma5600t / ma5800), when known */
+  firmwareFamily?: string;
   /** Detected PON family from line cards */
   ponType?: 'gpon' | 'epon' | 'gpon_epon';
   cards?: ZteOltCard[];
@@ -169,33 +185,149 @@ export interface ZteOltProbeResult {
 @Injectable()
 export class ZteOltClient {
   private readonly logger = new Logger(ZteOltClient.name);
-  /** Serialize CLI per OLT — public/NAT VTY often allows only one session. */
-  private readonly cliTails = new Map<string, Promise<unknown>>();
+  /**
+   * Serialize CLI per OLT — public/NAT VTY often allows only one session.
+   * Interactive UI ops jump ahead of background poll work.
+   */
+  private readonly cliQueues = new Map<
+    string,
+    {
+      interactive: Array<{ run: () => Promise<void> }>;
+      background: Array<{ run: () => Promise<void> }>;
+      pumping: boolean;
+    }
+  >();
+  /** Dialecto C3xx / C6xx cacheado tras probe (5 min). */
+  private readonly fwCache = new Map<
+    string,
+    { family: ZteFwFamily; atMs: number }
+  >();
 
   private cliKey(host: string, port: number) {
     return `${host}:${port}`;
+  }
+
+  private rememberFwFamily(host: string, port: number, family: ZteFwFamily) {
+    if (family === 'unknown') return;
+    this.fwCache.set(this.cliKey(host, port), {
+      family,
+      atMs: Date.now(),
+    });
+  }
+
+  private resolveFwFamily(params: {
+    host: string;
+    port: number;
+    subtypeHint?: string | null;
+    firmwareHint?: string | null;
+    productHint?: string | null;
+    cardTypes?: string[];
+  }): ZteFwFamily {
+    const cached = this.fwCache.get(this.cliKey(params.host, params.port));
+    if (cached && Date.now() - cached.atMs < 5 * 60_000) {
+      return cached.family;
+    }
+    const family = detectZteFwFamily({
+      subtype: params.subtypeHint,
+      product: params.productHint ?? params.firmwareHint,
+      softVer: params.firmwareHint,
+      versionText: params.firmwareHint,
+      cardTypes: params.cardTypes,
+    });
+    this.rememberFwFamily(params.host, params.port, family);
+    return family;
+  }
+
+  private cliOnuIf(onuIf: string, family: ZteFwFamily): string {
+    return toZteCliOnuIf(onuIf, family === 'unknown' ? 'c3xx' : family);
+  }
+
+  private cliOltIf(oltIf: string, family: ZteFwFamily): string {
+    return toZteCliOltIf(oltIf, family === 'unknown' ? 'c3xx' : family);
+  }
+
+  /** Resolve dialect + CLI ifNames for an ONU operation. */
+  private dialectOnuContext(
+    params: {
+      host: string;
+      port: number;
+      subtypeHint?: string | null;
+      firmwareHint?: string | null;
+    },
+    onuIfRaw: string,
+  ): {
+    fw: ZteFwFamily;
+    onuIfCanon: string;
+    onuIf: string;
+    oltIfCanon: string;
+    oltIf: string;
+    onuId: string;
+    ponFamily: 'gpon' | 'epon';
+  } | null {
+    const onuIfCanon = toZteCanonicalOnuIf(onuIfRaw);
+    const oltIfCanon = oltIfFromOnuIf(onuIfCanon);
+    const onuId = onuIfCanon.match(/:(\d+)$/)?.[1];
+    if (!oltIfCanon || !onuId) return null;
+    const fw = this.resolveFwFamily({
+      host: params.host,
+      port: params.port,
+      subtypeHint: params.subtypeHint,
+      firmwareHint: params.firmwareHint,
+    });
+    return {
+      fw,
+      onuIfCanon,
+      onuIf: this.cliOnuIf(onuIfCanon, fw),
+      oltIfCanon,
+      oltIf: this.cliOltIf(oltIfCanon, fw),
+      onuId,
+      ponFamily: oltIfCanon.startsWith('epon') ? 'epon' : 'gpon',
+    };
   }
 
   private async withCliLock<T>(
     host: string,
     port: number,
     fn: () => Promise<T>,
+    priority: 'interactive' | 'background' = 'interactive',
   ): Promise<T> {
     const key = this.cliKey(host, port);
-    const prev = this.cliTails.get(key) ?? Promise.resolve();
-    let release!: () => void;
-    const gate = new Promise<void>((r) => {
-      release = r;
+    let q = this.cliQueues.get(key);
+    if (!q) {
+      q = { interactive: [], background: [], pumping: false };
+      this.cliQueues.set(key, q);
+    }
+    return new Promise<T>((resolve, reject) => {
+      const entry = {
+        run: async () => {
+          try {
+            resolve(await fn());
+          } catch (err) {
+            reject(err instanceof Error ? err : new Error(String(err)));
+          }
+        },
+      };
+      if (priority === 'background') q.background.push(entry);
+      else q.interactive.push(entry);
+      void this.pumpCliQueue(key);
     });
-    this.cliTails.set(
-      key,
-      prev.catch(() => undefined).then(() => gate),
-    );
-    await prev.catch(() => undefined);
+  }
+
+  private async pumpCliQueue(key: string) {
+    const q = this.cliQueues.get(key);
+    if (!q || q.pumping) return;
+    q.pumping = true;
     try {
-      return await fn();
+      for (;;) {
+        const next = q.interactive.shift() ?? q.background.shift();
+        if (!next) break;
+        await next.run();
+      }
     } finally {
-      release();
+      q.pumping = false;
+      if (q.interactive.length || q.background.length) {
+        void this.pumpCliQueue(key);
+      }
     }
   }
 
@@ -205,12 +337,30 @@ export class ZteOltClient {
     protocol: 'telnet' | 'ssh';
     username: string;
     password: string;
+    subtypeHint?: string | null;
   }): Promise<ZteOltProbeResult> {
     try {
-      if (params.protocol === 'ssh') {
-        return await this.probeSsh(params);
+      const result =
+        params.protocol === 'ssh'
+          ? await this.probeSsh(params)
+          : await this.probeTelnet(params);
+      if (result.ok) {
+        const family = detectZteFwFamily({
+          subtype: params.subtypeHint,
+          product: result.product,
+          softVer: result.softVer,
+          cardTypes: (result.cards || []).flatMap((c) => [
+            c.cfgType,
+            c.realType,
+          ]),
+        });
+        this.rememberFwFamily(params.host, params.port, family);
+        return {
+          ...result,
+          firmwareFamily: family !== 'unknown' ? family : result.firmwareFamily,
+        };
       }
-      return await this.probeTelnet(params);
+      return result;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.logger.warn(
@@ -283,6 +433,12 @@ export class ZteOltClient {
     protocol: 'telnet' | 'ssh';
     username: string;
     password: string;
+    priority?: 'interactive' | 'background';
+    /**
+     * Light sync: card + per-port running-config only.
+     * ONU counts / optical / Up-Down come from SNMP+DB later.
+     */
+    light?: boolean;
   }): Promise<{
     ok: boolean;
     error?: string;
@@ -292,10 +448,12 @@ export class ZteOltClient {
   }> {
     const probedAt = new Date().toISOString();
     try {
-      const ports =
-        params.protocol === 'ssh'
-          ? await this.runPonPortsSsh(params)
-          : await this.runPonPortsTelnet(params);
+      // Same CLI lock as everything else — never open a second VTY to the OLT.
+      const ports = await this.runConfigWrite(params, (send, read) =>
+        this.collectPonPortsFromSession(send, read, {
+          light: params.light !== false,
+        }),
+      );
       const up = ports.filter((p) => p.status === 'Up').length;
       const onuOnline = ports.reduce((s, p) => s + p.onuOnline, 0);
       return {
@@ -326,6 +484,13 @@ export class ZteOltClient {
     password: string;
     /** Pull interface names/vlans from running-config (slower). Default true. */
     includeRunningConfig?: boolean;
+    /**
+     * Only scan these PON OLT interfaces (e.g. ports that already have
+     * imported ONUs). Background pollers should pass this to avoid walking
+     * every empty port every minute.
+     */
+    onlyOltIfs?: string[];
+    priority?: 'interactive' | 'background';
   }): Promise<{
     ok: boolean;
     error?: string;
@@ -340,6 +505,7 @@ export class ZteOltClient {
           send,
           read,
           params.includeRunningConfig !== false,
+          params.onlyOltIfs,
         ),
       );
       const online = onus.filter((o) => o.online).length;
@@ -369,6 +535,9 @@ export class ZteOltClient {
     username: string;
     password: string;
     onuIf: string;
+    priority?: 'interactive' | 'background';
+    subtypeHint?: string | null;
+    firmwareHint?: string | null;
   }): Promise<{
     ok: boolean;
     error?: string;
@@ -378,7 +547,7 @@ export class ZteOltClient {
     const probedAt = new Date().toISOString();
     try {
       const onu = await this.runConfigWrite(params, (send, read) =>
-        this.collectOnuDetailFromSession(send, read, params.onuIf),
+        this.collectOnuDetailFromSession(send, read, params),
       );
       return { ok: true, onu, probedAt };
     } catch (err) {
@@ -398,6 +567,8 @@ export class ZteOltClient {
     username: string;
     password: string;
     onuIf: string;
+    subtypeHint?: string | null;
+    firmwareHint?: string | null;
   }): Promise<{
     ok: boolean;
     error?: string;
@@ -409,7 +580,7 @@ export class ZteOltClient {
     const probedAt = new Date().toISOString();
     try {
       const data = await this.runConfigWrite(params, (send, read) =>
-        this.collectOnuStatusReportFromSession(send, read, params.onuIf),
+        this.collectOnuStatusReportFromSession(send, read, params),
       );
       return { ok: true, ...data, probedAt };
     } catch (err) {
@@ -429,6 +600,8 @@ export class ZteOltClient {
     username: string;
     password: string;
     onuIf: string;
+    subtypeHint?: string | null;
+    firmwareHint?: string | null;
   }): Promise<{
     ok: boolean;
     error?: string;
@@ -438,8 +611,9 @@ export class ZteOltClient {
     const probedAt = new Date().toISOString();
     try {
       const equip = await this.runConfigWrite(params, async (send, read) => {
-        const family = params.onuIf.startsWith('epon') ? 'epon' : 'gpon';
-        await send(`show ${family} remote-onu equip ${params.onuIf}`);
+        const ctx = this.dialectOnuContext(params, params.onuIf);
+        if (!ctx) throw new Error(`onuIf inválido: ${params.onuIf}`);
+        await send(`show ${ctx.ponFamily} remote-onu equip ${ctx.onuIf}`);
         const out = await read(20_000);
         return parseRemoteOnuEquip(this.cleanCliNoise(out));
       });
@@ -462,6 +636,9 @@ export class ZteOltClient {
     username: string;
     password: string;
     onuIfs: string[];
+    priority?: 'interactive' | 'background';
+    subtypeHint?: string | null;
+    firmwareHint?: string | null;
   }): Promise<{
     ok: boolean;
     error?: string;
@@ -475,12 +652,15 @@ export class ZteOltClient {
     probedAt: string;
   }> {
     const probedAt = new Date().toISOString();
-    const onuIfs = [...new Set(params.onuIfs.map((s) => s.trim()).filter(Boolean))];
+    const onuIfs = [
+      ...new Set(params.onuIfs.map((s) => s.trim()).filter(Boolean)),
+    ];
     if (onuIfs.length === 0) {
       return { ok: true, rates: [], probedAt };
     }
     try {
       const rates = await this.runConfigWrite(params, async (send, read) => {
+        const fw = this.resolveFwFamily(params);
         const out: Array<{
           onuIf: string;
           downloadBps: number | null;
@@ -490,8 +670,9 @@ export class ZteOltClient {
         }> = [];
         for (const onuIf of onuIfs) {
           try {
-            await send(`show interface ${onuIf}`);
-            const text = await read(12_000);
+            const onuIfCli = this.cliOnuIf(onuIf, fw);
+            await send(`show interface ${onuIfCli}`);
+            const text = await read(8_000);
             const parsed = parseOnuInterfaceRates(text);
             out.push({
               onuIf,
@@ -528,6 +709,9 @@ export class ZteOltClient {
     username: string;
     password: string;
     onuIf: string;
+    priority?: 'interactive' | 'background';
+    subtypeHint?: string | null;
+    firmwareHint?: string | null;
   }): Promise<{
     ok: boolean;
     error?: string;
@@ -540,7 +724,9 @@ export class ZteOltClient {
     const probedAt = new Date().toISOString();
     try {
       const rates = await this.runConfigWrite(params, async (send, read) => {
-        await send(`show interface ${params.onuIf}`);
+        const ctx = this.dialectOnuContext(params, params.onuIf);
+        if (!ctx) throw new Error(`onuIf inválido: ${params.onuIf}`);
+        await send(`show interface ${ctx.onuIf}`);
         const text = await read(10_000);
         return parseOnuInterfaceRates(text);
       });
@@ -574,12 +760,16 @@ export class ZteOltClient {
     username: string;
     password: string;
     onuIf: string;
+    subtypeHint?: string | null;
+    firmwareHint?: string | null;
   }): Promise<{ ok: boolean; error?: string; message?: string }> {
+    const ctx = this.dialectOnuContext(params, params.onuIf);
+    if (!ctx) return { ok: false, error: `onuIf inválido: ${params.onuIf}` };
     try {
       return await this.runConfigWrite(params, async (send, read) => {
         await send('configure terminal');
         await read(12_000);
-        await send(`pon-onu-mng ${params.onuIf}`);
+        await send(`pon-onu-mng ${ctx.onuIf}`);
         await read(8_000);
         await send('reboot');
         await read(10_000);
@@ -589,7 +779,7 @@ export class ZteOltClient {
         await read(8_000);
         return {
           ok: true,
-          message: `Reinicio enviado a ${params.onuIf}`,
+          message: `Reinicio enviado a ${ctx.onuIfCanon}`,
         };
       });
     } catch (err) {
@@ -620,11 +810,21 @@ export class ZteOltClient {
     mgmtMask?: string | null;
     mgmtGateway?: string | null;
     mgmtVlan?: number | null;
-  }): Promise<{ ok: boolean; error?: string; message?: string; cliLog?: string }> {
+    /** Unused on ZTE; accepted for Huawei/ZTE oltCli union parity */
+    firmwareHint?: string | null;
+    subtypeHint?: string | null;
+  }): Promise<{
+    ok: boolean;
+    error?: string;
+    message?: string;
+    cliLog?: string;
+  }> {
     const logs: string[] = [];
     const t0 = Date.now();
+    const family = this.resolveFwFamily(params);
+    const onuIf = this.cliOnuIf(params.onuIf, family);
     this.logger.log(
-      `OMCI TR069 ${params.enable ? 'enable' : 'disable'} ${params.onuIf} → ${params.host}:${params.port} (mgmtVlan=${params.mgmtVlan ?? '-'} acs=${params.acsEndpoint ?? '-'})`,
+      `OMCI TR069 ${params.enable ? 'enable' : 'disable'} ${onuIf} (${family}) → ${params.host}:${params.port} (mgmtVlan=${params.mgmtVlan ?? '-'} acs=${params.acsEndpoint ?? '-'})`,
     );
     try {
       return await this.runConfigWrite(params, async (send, read) => {
@@ -632,9 +832,13 @@ export class ZteOltClient {
           const s0 = Date.now();
           await send(line);
           const out = await read(waitMs);
-          const cleaned = this.cleanCliNoise(out).replace(/\s+/g, ' ').slice(0, 180);
+          const cleaned = this.cleanCliNoise(out)
+            .replace(/\s+/g, ' ')
+            .slice(0, 180);
           logs.push(`${line} (${Date.now() - s0}ms) → ${cleaned}`);
-          this.logger.log(`OMCI step ${line.slice(0, 60)} (${Date.now() - s0}ms)`);
+          this.logger.log(
+            `OMCI step ${line.slice(0, 60)} (${Date.now() - s0}ms)`,
+          );
           return out;
         };
 
@@ -642,7 +846,7 @@ export class ZteOltClient {
 
         // Best-effort L2 path for mgmt VLAN (gemport + service-port on vport 2).
         if (params.enable && params.mgmtVlan != null) {
-          let outIf = await step(`interface ${params.onuIf}`, 10_000);
+          let outIf = await step(`interface ${onuIf}`, 10_000);
           if (!/%Error|Invalid|Unknown/i.test(outIf)) {
             await step('tcont 2 profile SMARTOLT-1000MB-UP', 8_000);
             await step('gemport 2 tcont 2', 8_000);
@@ -659,11 +863,29 @@ export class ZteOltClient {
             }
             await step('exit', 5_000);
           }
+          // C6xx Titan fallback: vport interface
+          if (family === 'c6xx' || family === 'unknown') {
+            const vportIf = buildZteC6xxVportIf(
+              toZteCanonicalOnuIf(params.onuIf),
+              2,
+            );
+            if (vportIf) {
+              const outV = await step(`interface ${vportIf}`, 10_000);
+              if (!/%Error|Invalid|Unknown/i.test(outV)) {
+                await step('no service-port 2', 8_000);
+                await step(
+                  `service-port 2 user-vlan ${params.mgmtVlan} vlan ${params.mgmtVlan}`,
+                  10_000,
+                );
+                await step('exit', 5_000);
+              }
+            }
+          }
         }
 
-        let out = await step(`pon-onu-mng ${params.onuIf}`, 10_000);
+        let out = await step(`pon-onu-mng ${onuIf}`, 10_000);
         if (/%Error|Invalid|Unknown/i.test(out)) {
-          throw new Error(`No se pudo entrar a pon-onu-mng ${params.onuIf}`);
+          throw new Error(`No se pudo entrar a pon-onu-mng ${onuIf}`);
         }
 
         if (params.enable && params.mgmtVlan != null) {
@@ -675,11 +897,17 @@ export class ZteOltClient {
         if (!params.enable) {
           await step('tr069-mgmt 1 state lock');
         } else {
-          if (!params.acsEndpoint?.trim()) {
-            throw new Error('acsEndpoint requerido para activar TR069');
+          if (
+            !params.acsEndpoint?.trim() ||
+            !params.acsUsername?.trim() ||
+            !params.acsPassword?.trim()
+          ) {
+            throw new Error(
+              'acsEndpoint, acsUsername y acsPassword son requeridos para activar TR069',
+            );
           }
-          const user = (params.acsUsername || 'acs').replace(/"/g, '');
-          const pass = (params.acsPassword || 'acs').replace(/"/g, '');
+          const user = params.acsUsername.replace(/"/g, '');
+          const pass = params.acsPassword.replace(/"/g, '');
           const ep = params.acsEndpoint.trim().replace(/^https?:\/\//i, '');
           // Huawei HG / ZTE: ACS URL with http:// is what actually triggers Inform.
           out = await step(
@@ -798,13 +1026,16 @@ export class ZteOltClient {
     username: string;
     password: string;
     onuIf: string;
+    subtypeHint?: string | null;
+    firmwareHint?: string | null;
   }): Promise<{ ok: boolean; error?: string; message?: string }> {
-    const oltIf = oltIfFromOnuIf(params.onuIf);
-    const onuId = params.onuIf.match(/:(\d+)$/)?.[1];
-    if (!oltIf || !onuId) {
+    const ctx = this.dialectOnuContext(params, params.onuIf);
+    if (!ctx) {
       return { ok: false, error: `onuIf inválido: ${params.onuIf}` };
     }
-    const family = oltIf.startsWith('epon') ? 'epon' : 'gpon';
+    const oltIf = ctx.oltIf;
+    const onuId = ctx.onuId;
+    const family = ctx.ponFamily;
     try {
       return await this.runConfigWrite(params, async (send, read) => {
         await send('configure terminal');
@@ -818,7 +1049,7 @@ export class ZteOltClient {
         out = await read(12_000);
         const disableOut = this.cleanCliNoise(out);
         this.logger.log(
-          `disableOnu ${params.onuIf} → ${disableOut.replace(/\s+/g, ' ').slice(0, 200)}`,
+          `disableOnu ${ctx.onuIfCanon} → ${disableOut.replace(/\s+/g, ' ').slice(0, 200)}`,
         );
         if (
           /does\s*not\s*exist|not\s*exist|no\s+such|not\s*found|unknown\s+onu/i.test(
@@ -826,7 +1057,7 @@ export class ZteOltClient {
           )
         ) {
           throw new Error(
-            `La ONU ${params.onuIf} no está registrada en la OLT (ya eliminada o nunca autorizada). Usa Delete para quitarla de Conectadas, o vuelve a autorizarla.`,
+            `La ONU ${ctx.onuIfCanon} no está registrada en la OLT (ya eliminada o nunca autorizada). Usa Delete para quitarla de Conectadas, o vuelve a autorizarla.`,
           );
         }
         if (/%Error|Invalid|Failed|Unknown/i.test(disableOut)) {
@@ -846,7 +1077,8 @@ export class ZteOltClient {
         const stateOut = this.cleanCliNoise(await read(20_000));
         const stillThere =
           new RegExp(`:${onuId}\\b`).test(stateOut) ||
-          stateOut.includes(params.onuIf);
+          stateOut.includes(ctx.onuIfCanon) ||
+          stateOut.includes(ctx.onuIf);
         if (!stillThere) {
           throw new Error(
             `Tras disable la ONU ${onuId} desapareció del state — eso sería un borrado, no un disable. Revisa la OLT.`,
@@ -855,7 +1087,7 @@ export class ZteOltClient {
 
         return {
           ok: true,
-          message: `ONU ${params.onuIf} deshabilitada (sigue autorizada en la OLT; admin disable)`,
+          message: `ONU ${ctx.onuIfCanon} deshabilitada (sigue autorizada en la OLT; admin disable)`,
         };
       });
     } catch (err) {
@@ -877,13 +1109,16 @@ export class ZteOltClient {
     username: string;
     password: string;
     onuIf: string;
+    subtypeHint?: string | null;
+    firmwareHint?: string | null;
   }): Promise<{ ok: boolean; error?: string; message?: string }> {
-    const oltIf = oltIfFromOnuIf(params.onuIf);
-    const onuId = params.onuIf.match(/:(\d+)$/)?.[1];
-    if (!oltIf || !onuId) {
+    const ctx = this.dialectOnuContext(params, params.onuIf);
+    if (!ctx) {
       return { ok: false, error: `onuIf inválido: ${params.onuIf}` };
     }
-    const family = oltIf.startsWith('epon') ? 'epon' : 'gpon';
+    const oltIf = ctx.oltIf;
+    const onuId = ctx.onuId;
+    const family = ctx.ponFamily;
     try {
       return await this.runConfigWrite(params, async (send, read) => {
         await send('configure terminal');
@@ -897,7 +1132,7 @@ export class ZteOltClient {
         out = await read(12_000);
         const enableOut = this.cleanCliNoise(out);
         this.logger.log(
-          `enableOnu ${params.onuIf} → ${enableOut.replace(/\s+/g, ' ').slice(0, 200)}`,
+          `enableOnu ${ctx.onuIfCanon} → ${enableOut.replace(/\s+/g, ' ').slice(0, 200)}`,
         );
         if (/%Error|Invalid|Failed|Unknown/i.test(enableOut)) {
           throw new Error(
@@ -912,13 +1147,13 @@ export class ZteOltClient {
         const stateOut = this.cleanCliNoise(await read(20_000));
         if (new RegExp(`:${onuId}\\s+disable\\b`, 'i').test(stateOut)) {
           throw new Error(
-            `Tras enable, la ONU ${params.onuIf} sigue en admin disable en la OLT. Revisa a mano.`,
+            `Tras enable, la ONU ${ctx.onuIfCanon} sigue en admin disable en la OLT. Revisa a mano.`,
           );
         }
 
         return {
           ok: true,
-          message: `ONU ${params.onuIf} rehabilitada (admin enable)`,
+          message: `ONU ${ctx.onuIfCanon} rehabilitada (admin enable)`,
         };
       });
     } catch (err) {
@@ -940,13 +1175,16 @@ export class ZteOltClient {
     username: string;
     password: string;
     onuIf: string;
+    subtypeHint?: string | null;
+    firmwareHint?: string | null;
   }): Promise<{ ok: boolean; error?: string; message?: string }> {
-    const oltIf = oltIfFromOnuIf(params.onuIf);
-    const onuId = params.onuIf.match(/:(\d+)$/)?.[1];
-    if (!oltIf || !onuId) {
+    const ctx = this.dialectOnuContext(params, params.onuIf);
+    if (!ctx) {
       return { ok: false, error: `onuIf inválido: ${params.onuIf}` };
     }
-    const family = oltIf.startsWith('epon') ? 'epon' : 'gpon';
+    const oltIf = ctx.oltIf;
+    const onuId = ctx.onuId;
+    const family = ctx.ponFamily;
     try {
       return await this.runConfigWrite(params, async (send, read) => {
         await send('configure terminal');
@@ -1016,7 +1254,7 @@ export class ZteOltClient {
         await read(8_000);
 
         // Drop leftover gpon-onu interface block if present (best-effort)
-        await send(`no interface ${params.onuIf}`);
+        await send(`no interface ${ctx.onuIf}`);
         out = await read(12_000);
         const noIfOut = this.cleanCliNoise(out);
         this.logger.log(
@@ -1030,12 +1268,14 @@ export class ZteOltClient {
         const stateOut = this.cleanCliNoise(await read(20_000));
         const stateRows = parseOnuStateRows(stateOut, oltIf);
         const stillRegistered = stateRows.some(
-          (r) => r.onuIf.toLowerCase() === params.onuIf.toLowerCase(),
+          (r) =>
+            r.onuIf.toLowerCase() === ctx.onuIfCanon.toLowerCase() ||
+            r.onuId === onuId,
         );
 
         if (stillRegistered) {
           throw new Error(
-            `Tras eliminar, la ONU ${params.onuIf} sigue en «show onu state» (suele verse como disable). ` +
+            `Tras eliminar, la ONU ${ctx.onuIfCanon} sigue en «show onu state» (suele verse como disable). ` +
               `No se completó el borrado; inténtalo de nuevo o borra a mano: interface ${oltIf} → no onu ${onuId}`,
           );
         }
@@ -1043,8 +1283,8 @@ export class ZteOltClient {
         return {
           ok: true,
           message: alreadyGone
-            ? `ONU ${params.onuIf} ya no estaba en la OLT; se limpia de Conectadas.`
-            : `ONU ${params.onuIf} eliminada de la OLT (desautorizada). Si está conectada, pedirá autorización de nuevo.`,
+            ? `ONU ${ctx.onuIfCanon} ya no estaba en la OLT; se limpia de Conectadas.`
+            : `ONU ${ctx.onuIfCanon} eliminada de la OLT (desautorizada). Si está conectada, pedirá autorización de nuevo.`,
         };
       });
     } catch (err) {
@@ -1064,6 +1304,8 @@ export class ZteOltClient {
     protocol: 'telnet' | 'ssh';
     username: string;
     password: string;
+    subtypeHint?: string | null;
+    firmwareHint?: string | null;
   }): Promise<{
     ok: boolean;
     error?: string;
@@ -1073,7 +1315,7 @@ export class ZteOltClient {
     const probedAt = new Date().toISOString();
     try {
       const onus = await this.runConfigWrite(params, (send, read) =>
-        this.collectUncfgOnusFromSession(send, read),
+        this.collectUncfgOnusFromSession(send, read, params),
       );
       return { ok: true, onus, probedAt };
     } catch (err) {
@@ -1098,14 +1340,18 @@ export class ZteOltClient {
     wanVlan?: number | null;
     /** Management VLAN → service-port 2. null = remove. undefined = leave. */
     mgmtVlan?: number | null;
+    firmwareHint?: string | null;
+    subtypeHint?: string | null;
   }): Promise<{ ok: boolean; error?: string; message?: string }> {
     const touchWan = params.wanVlan !== undefined;
     const touchMgmt = params.mgmtVlan !== undefined;
     if (!touchWan && !touchMgmt) {
       return { ok: true, message: 'sin cambios de VLAN en OLT' };
     }
+    const family = this.resolveFwFamily(params);
+    const onuIf = this.cliOnuIf(params.onuIf, family);
     this.logger.log(
-      `ONU service-VLANs ${params.onuIf} → ${params.host}:${params.port} (wan=${
+      `ONU service-VLANs ${onuIf} (${family}) → ${params.host}:${params.port} (wan=${
         touchWan ? (params.wanVlan ?? 'quitar') : 'sin cambio'
       } mgmt=${touchMgmt ? (params.mgmtVlan ?? 'quitar') : 'sin cambio'})`,
     );
@@ -1123,28 +1369,26 @@ export class ZteOltClient {
           );
           return raw;
         };
-        const notes: string[] = [];
+        const notes: string[] = [`dialect=${family}`];
 
         await step('configure terminal', 12_000);
-        let out = await step(`interface ${params.onuIf}`, 10_000);
-        if (/%Error|Invalid|Unknown/i.test(out)) {
-          throw new Error(
-            `No se pudo entrar a ${params.onuIf}: ${this.cleanCliNoise(out).slice(0, 160)}`,
-          );
-        }
 
-        const upsertServicePort = async (
+        const upsertClassic = async (
           sp: number,
           vport: number,
           vlan: number | null,
           label: string,
         ) => {
-          // Always drop the existing service-port first so the VLAN actually
-          // changes (ZTE no permite editar user-vlan en caliente). Ignoramos
-          // el error si no existía.
+          let out = await step(`interface ${onuIf}`, 10_000);
+          if (/%Error|Invalid|Unknown/i.test(out)) {
+            throw new Error(
+              `No se pudo entrar a ${onuIf}: ${this.cleanCliNoise(out).slice(0, 160)}`,
+            );
+          }
           await step(`no service-port ${sp}`, 8_000);
           if (vlan == null) {
             notes.push(`${label}: service-port ${sp} eliminado`);
+            await step('exit', 5_000);
             return;
           }
           await step(`tcont ${sp} profile SMARTOLT-1000MB-UP`, 8_000);
@@ -1153,7 +1397,6 @@ export class ZteOltClient {
             `service-port ${sp} vport ${vport} user-vlan ${vlan} vlan ${vlan}`,
             10_000,
           );
-          // Retry once if it still claims a conflict/duplicate.
           if (/already|exist|duplicate|conflict/i.test(out)) {
             await step(`no service-port ${sp}`, 8_000);
             out = await step(
@@ -1161,9 +1404,12 @@ export class ZteOltClient {
               10_000,
             );
           }
+          await step('exit', 5_000);
           if (/%Error|Invalid|Failed/i.test(out)) {
             throw new Error(
-              `${label} service-port ${sp} VLAN ${vlan}: ${this.cleanCliNoise(out)
+              `${label} service-port ${sp} VLAN ${vlan}: ${this.cleanCliNoise(
+                out,
+              )
                 .replace(/\s+/g, ' ')
                 .slice(0, 160)}`,
             );
@@ -1171,17 +1417,93 @@ export class ZteOltClient {
           notes.push(`${label}: VLAN ${vlan} en service-port ${sp}`);
         };
 
+        /** C6xx Titan: service-port under `interface vport-S/S/P.N:onuId`. */
+        const upsertVport = async (
+          sp: number,
+          vport: number,
+          vlan: number | null,
+          label: string,
+        ) => {
+          const vportIf = buildZteC6xxVportIf(
+            toZteCanonicalOnuIf(params.onuIf),
+            vport,
+          );
+          if (!vportIf) {
+            throw new Error(`vport ifName inválido para ${params.onuIf}`);
+          }
+          // Ensure tcont/gemport on ONU interface first
+          let out = await step(`interface ${onuIf}`, 10_000);
+          if (!/%Error|Invalid|Unknown/i.test(out) && vlan != null) {
+            await step(`tcont ${sp} profile SMARTOLT-1000MB-UP`, 8_000);
+            await step(`gemport ${sp} tcont ${sp}`, 8_000);
+            await step('exit', 5_000);
+          } else if (!/%Error|Invalid|Unknown/i.test(out)) {
+            await step('exit', 5_000);
+          }
+
+          out = await step(`interface ${vportIf}`, 10_000);
+          if (/%Error|Invalid|Unknown/i.test(out)) {
+            throw new Error(
+              `No se pudo entrar a ${vportIf}: ${this.cleanCliNoise(out).slice(0, 120)}`,
+            );
+          }
+          await step(`no service-port ${sp}`, 8_000);
+          if (vlan == null) {
+            notes.push(`${label}: vport ${vportIf} limpiado`);
+            await step('exit', 5_000);
+            return;
+          }
+          out = await step(
+            `service-port ${sp} user-vlan ${vlan} vlan ${vlan}`,
+            10_000,
+          );
+          if (/%Error|Invalid/i.test(out)) {
+            out = await step(
+              `service-port ${sp} user-vlan ${vlan} vlan ${vlan} svlan ${vlan}`,
+              10_000,
+            );
+          }
+          await step('exit', 5_000);
+          if (/%Error|Invalid|Failed/i.test(out)) {
+            throw new Error(
+              `${label} vport VLAN ${vlan}: ${this.cleanCliNoise(out)
+                .replace(/\s+/g, ' ')
+                .slice(0, 160)}`,
+            );
+          }
+          notes.push(`${label}: VLAN ${vlan} en ${vportIf}`);
+        };
+
+        const upsert = async (
+          sp: number,
+          vport: number,
+          vlan: number | null | undefined,
+          label: string,
+        ) => {
+          if (vlan === undefined) return;
+          if (family === 'c6xx') {
+            try {
+              await upsertVport(sp, vport, vlan, label);
+              return;
+            } catch (err) {
+              notes.push(
+                `${label}: vport falló (${err instanceof Error ? err.message : String(err)}), reintento clásico`,
+              );
+            }
+          }
+          await upsertClassic(sp, vport, vlan, label);
+        };
+
         if (touchWan) {
-          await upsertServicePort(1, 1, params.wanVlan ?? null, 'WAN');
+          await upsert(1, 1, params.wanVlan ?? null, 'WAN');
         }
         if (touchMgmt) {
-          await upsertServicePort(2, 2, params.mgmtVlan ?? null, 'Mgmt');
+          await upsert(2, 2, params.mgmtVlan ?? null, 'Mgmt');
         }
 
-        await step('exit', 5_000);
         // Best-effort flow mapping for WAN when set
         if (touchWan && params.wanVlan != null) {
-          out = await step(`pon-onu-mng ${params.onuIf}`, 10_000);
+          const out = await step(`pon-onu-mng ${onuIf}`, 10_000);
           if (!/%Error|Invalid|Unknown/i.test(out)) {
             await step(`flow 1 pri 0 vlan ${params.wanVlan}`, 8_000);
             await step('gemport 1 flow 1', 8_000);
@@ -1223,9 +1545,13 @@ export class ZteOltClient {
       wanDns1: string;
       wanDns2?: string | null;
     } | null;
+    firmwareHint?: string | null;
+    subtypeHint?: string | null;
   }): Promise<{ ok: boolean; error?: string; message?: string }> {
+    const family = this.resolveFwFamily(params);
+    const onuIf = this.cliOnuIf(params.onuIf, family);
     this.logger.log(
-      `ONU WAN OMCI ${params.onuIf} → ${params.host}:${params.port} (${
+      `ONU WAN OMCI ${onuIf} (${family}) → ${params.host}:${params.port} (${
         params.wan
           ? `static ${params.wan.wanIp}/${params.wan.wanVlan}`
           : 'quitar'
@@ -1249,11 +1575,9 @@ export class ZteOltClient {
         await step('configure terminal', 12_000);
 
         if (params.wan == null) {
-          const out = await step(`pon-onu-mng ${params.onuIf}`, 10_000);
+          const out = await step(`pon-onu-mng ${onuIf}`, 10_000);
           if (/%Error|Invalid|Unknown/i.test(out)) {
-            throw new Error(
-              `No se pudo entrar a pon-onu-mng ${params.onuIf}`,
-            );
+            throw new Error(`No se pudo entrar a pon-onu-mng ${onuIf}`);
           }
           await step('no wan-ip 1', 8_000);
           await step('exit', 5_000);
@@ -1290,9 +1614,9 @@ export class ZteOltClient {
         }
         await step('exit', 5_000); // leave gpon
 
-        out = await step(`pon-onu-mng ${params.onuIf}`, 10_000);
+        out = await step(`pon-onu-mng ${onuIf}`, 10_000);
         if (/%Error|Invalid|Unknown/i.test(out)) {
-          throw new Error(`No se pudo entrar a pon-onu-mng ${params.onuIf}`);
+          throw new Error(`No se pudo entrar a pon-onu-mng ${onuIf}`);
         }
         // Drop existing WAN so IP/VLAN change takes effect.
         await step('no wan-ip 1', 8_000);
@@ -1349,23 +1673,42 @@ export class ZteOltClient {
     sn: string;
     name?: string | null;
     description?: string | null;
+    subtypeHint?: string | null;
+    firmwareHint?: string | null;
   }): Promise<{
     ok: boolean;
     error?: string;
     message?: string;
     onuIf?: string;
   }> {
-    const oltIf = params.oltIf.trim();
+    const family = this.resolveFwFamily({
+      host: params.host,
+      port: params.port,
+      subtypeHint: params.subtypeHint,
+      firmwareHint: params.firmwareHint,
+      productHint: params.oltIf,
+    });
+    // Prefer cached dialect; if unknown, try both forms via CLI name
+    const fw =
+      family !== 'unknown'
+        ? family
+        : detectZteFwFamily({
+            subtype: params.subtypeHint,
+            versionText: params.oltIf,
+          });
+    const oltIfCanon = normalizePonOltIfName(params.oltIf.trim());
+    let oltIf = this.cliOltIf(oltIfCanon, fw === 'unknown' ? 'c3xx' : fw);
     const onuId = String(params.onuId).trim();
     const onuType = params.onuType.trim();
     const sn = params.sn.trim().toUpperCase();
     const name = this.sanitizeOnuDisplayName(params.name);
     const description = this.sanitizeOnuDescription(params.description);
-    if (!oltIf || !onuId || !onuType || !sn) {
+    if (!oltIfCanon || !onuId || !onuType || !sn) {
       return { ok: false, error: 'oltIf, onuId, onuType y sn son requeridos' };
     }
-    const family = oltIf.startsWith('epon') ? 'epon' : 'gpon';
-    const onuIf = onuIfFromOltIf(oltIf, onuId);
+    const onuIf = onuIfFromOltIf(oltIfCanon, onuId);
+    const onuIfCli = this.cliOnuIf(onuIf, fw === 'unknown' ? 'c3xx' : fw);
+    const ponFamily = oltIfCanon.startsWith('epon') ? 'epon' : 'gpon';
     try {
       return await this.runConfigWrite(params, async (send, read) => {
         await send('configure terminal');
@@ -1373,6 +1716,23 @@ export class ZteOltClient {
 
         await send(`interface ${oltIf}`);
         out = await read(10_000);
+        if (/%Error|Invalid|Unknown command/i.test(out) && fw === 'unknown') {
+          // Retry opposite dialect ifName
+          const alt = this.cliOltIf(
+            oltIfCanon,
+            oltIf.includes('_olt-') ? 'c3xx' : 'c6xx',
+          );
+          await send(`interface ${alt}`);
+          out = await read(10_000);
+          if (!/%Error|Invalid|Unknown command/i.test(out)) {
+            oltIf = alt;
+            this.rememberFwFamily(
+              params.host,
+              params.port,
+              alt.includes('_olt-') ? 'c6xx' : 'c3xx',
+            );
+          }
+        }
         if (/%Error|Invalid|Unknown command/i.test(out)) {
           throw new Error(`No se pudo entrar a ${oltIf}: ${out.slice(0, 200)}`);
         }
@@ -1391,7 +1751,7 @@ export class ZteOltClient {
           )
         ) {
           throw new Error(
-            `La OLT rechazó la autorización (revisa que el tipo «${onuType}» exista en show onu-type ${family}): ${onuOut.replace(/\s+/g, ' ').trim().slice(0, 280)}`,
+            `La OLT rechazó la autorización (revisa que el tipo «${onuType}» exista en show onu-type ${ponFamily}): ${onuOut.replace(/\s+/g, ' ').trim().slice(0, 280)}`,
           );
         }
 
@@ -1400,11 +1760,11 @@ export class ZteOltClient {
         await read(8_000);
 
         if (name || description) {
-          await send(`interface ${onuIf}`);
+          await send(`interface ${onuIfCli}`);
           out = await read(10_000);
           if (/%Error|Invalid/i.test(out)) {
             this.logger.warn(
-              `authorizeOnu: no se pudo entrar a ${onuIf} para name/description`,
+              `authorizeOnu: no se pudo entrar a ${onuIfCli} para name/description`,
             );
           } else {
             if (name) {
@@ -1423,9 +1783,7 @@ export class ZteOltClient {
                 const nameOut = this.cleanCliNoise(await read(8_000));
                 if (!this.cliFailed(nameOut)) {
                   nameOk = true;
-                  this.logger.log(
-                    `authorizeOnu name OK on ${onuIf}: «${cmd}»`,
-                  );
+                  this.logger.log(`authorizeOnu name OK on ${onuIf}: «${cmd}»`);
                   break;
                 }
                 this.logger.warn(
@@ -1473,27 +1831,35 @@ export class ZteOltClient {
         );
 
         // Verify: SN must appear as authorized and leave uncfg.
-        await send(`show ${family} onu state ${oltIf}`);
+        await send(`show ${ponFamily} onu state ${oltIf}`);
         const stateOut = this.cleanCliNoise(await read(20_000));
         const inState =
-          new RegExp(`${onuIf.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i').test(
-            stateOut,
-          ) ||
+          new RegExp(
+            `${onuIf.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`,
+            'i',
+          ).test(stateOut) ||
+          new RegExp(
+            `${onuIfCli.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`,
+            'i',
+          ).test(stateOut) ||
           new RegExp(`:${onuId}\\b`).test(stateOut);
 
-        await send(`show ${family} onu baseinfo ${oltIf}`);
+        await send(`show ${ponFamily} onu baseinfo ${oltIf}`);
         const baseOut = this.cleanCliNoise(await read(20_000));
         const snInBase = new RegExp(sn, 'i').test(baseOut);
 
-        await send(`show ${family} onu uncfg ${oltIf}`);
+        await send(`show ${ponFamily} onu uncfg ${oltIf}`);
         const uncfgOut = this.cleanCliNoise(await read(15_000));
         const stillUncfg = new RegExp(sn, 'i').test(uncfgOut);
 
-        if (stillUncfg || (!inState && !snInBase && !/Successful/i.test(onuOut))) {
+        if (
+          stillUncfg ||
+          (!inState && !snInBase && !/Successful/i.test(onuOut))
+        ) {
           throw new Error(
             `La OLT no confirmó el registro de ${sn} en ${oltIf}:${onuId}. ` +
               `Sigue en uncfg o no aparece en state. ` +
-              `Comprueba el tipo ONU «${onuType}» (debe coincidir exactamente con show onu-type ${family}). ` +
+              `Comprueba el tipo ONU «${onuType}» (debe coincidir exactamente con show onu-type ${ponFamily}). ` +
               `Respuesta CLI: ${onuOut.replace(/\s+/g, ' ').trim().slice(0, 200) || '(vacía)'}`,
           );
         }
@@ -1557,21 +1923,23 @@ export class ZteOltClient {
     username: string;
     password: string;
     spec: OnuTypeProfileSpec;
-  }): Promise<{ ok: boolean; created: boolean; error?: string; message?: string }> {
+  }): Promise<{
+    ok: boolean;
+    created: boolean;
+    error?: string;
+    message?: string;
+  }> {
     const name = params.spec.name.trim();
     const family = params.spec.ponType === 'epon' ? 'epon' : 'gpon';
-    if (!name) return { ok: false, created: false, error: 'nombre de type vacío' };
+    if (!name)
+      return { ok: false, created: false, error: 'nombre de type vacío' };
 
     try {
       return await this.runConfigWrite(params, async (send, read) => {
         await send(`show onu-type ${family}`);
         const listOut = this.cleanCliNoise(await read(20_000));
         const existing = parseOnuTypeList(listOut, family);
-        if (
-          existing.some(
-            (t) => t.name.toLowerCase() === name.toLowerCase(),
-          )
-        ) {
+        if (existing.some((t) => t.name.toLowerCase() === name.toLowerCase())) {
           return {
             ok: true,
             created: false,
@@ -1593,7 +1961,10 @@ export class ZteOltClient {
         this.logger.log(
           `ensureOnuType create «${name}» → ${out.replace(/\s+/g, ' ').slice(0, 200)}`,
         );
-        if (/%Error|Invalid|Failed|already/i.test(out) && !/already\s*exist/i.test(out)) {
+        if (
+          /%Error|Invalid|Failed|already/i.test(out) &&
+          !/already\s*exist/i.test(out)
+        ) {
           // Retry compact form used on some firmwares
           await send(
             `onu-type ${name} ${family} description ${desc} max-tcont 7 max-gemport 32`,
@@ -1651,19 +2022,78 @@ export class ZteOltClient {
   private async collectUncfgOnusFromSession(
     send: (line: string) => Promise<void>,
     read: (ms?: number) => Promise<string>,
+    params: {
+      host: string;
+      port: number;
+      subtypeHint?: string | null;
+      firmwareHint?: string | null;
+    },
   ): Promise<ZteUncfgOnu[]> {
+    const found: ZteUncfgOnu[] = [];
+    const seenSn = new Set<string>();
+    const nextIdByOltIf = new Map<string, number | null>();
+    let dialect = this.resolveFwFamily(params);
+
+    const attachSuggestedId = async (
+      row: Omit<ZteUncfgOnu, 'suggestedOnuId'>,
+    ) => {
+      if (seenSn.has(row.sn)) return;
+      seenSn.add(row.sn);
+      let nextId = nextIdByOltIf.get(row.oltIf);
+      if (nextId === undefined) {
+        try {
+          const oltIfCli = this.cliOltIf(row.oltIf, dialect);
+          await send(`show ${row.ponType} onu state ${oltIfCli}`);
+          const stateOut = await read(12_000);
+          const occupied = parseOnuIdsFromState(stateOut);
+          nextId = suggestNextOnuId(occupied, defaultMaxOnus(row.ponType));
+        } catch {
+          nextId = null;
+        }
+        nextIdByOltIf.set(row.oltIf, nextId);
+      }
+      found.push({ ...row, suggestedOnuId: nextId ?? null });
+    };
+
+    // Global first (SmartOLT-style) — one/two commands vs tens of per-port loops.
+    let globalHit = false;
+    for (const family of ['gpon', 'epon'] as const) {
+      try {
+        await send(`show ${family} onu uncfg`);
+        const uncfgOut = await read(15_000);
+        if (/%Error|Invalid|Unknown command|Incomplete/i.test(uncfgOut)) {
+          continue;
+        }
+        const rows = parseOnuUncfg(uncfgOut);
+        if (!rows.length) continue;
+        globalHit = true;
+        this.logger.log(`ONU uncfg global ${family}: ${rows.length} row(s)`);
+        for (const row of rows) await attachSuggestedId(row);
+      } catch {
+        /* try next family / fall through */
+      }
+    }
+    if (globalHit) {
+      this.logger.log(`ONU uncfg found: ${found.length} (global)`);
+      return found;
+    }
+
     await send('show card');
     const cardOut = await read(20_000);
     const cards = this.parseShowCard(cardOut);
-    const found: ZteUncfgOnu[] = [];
-    const seenSn = new Set<string>();
+    dialect = detectZteFwFamily({
+      cardTypes: cards.flatMap((c) => [c.cfgType, c.realType]),
+      subtype: params.subtypeHint,
+      softVer: params.firmwareHint,
+      versionText: params.firmwareHint,
+    });
+    this.rememberFwFamily(params.host, params.port, dialect);
 
     for (const card of cards) {
       const family = isPonLineCard(card.cfgType, card.realType);
       if (!family) continue;
       if (!/INSERVICE|OK|ACTIVE|ONLINE/i.test(card.status)) continue;
       const nPorts = card.ports && card.ports > 0 ? card.ports : 16;
-      const maxOnus = defaultMaxOnus(family);
 
       for (let p = 1; p <= nPorts; p++) {
         const oltIf = buildOltIfName(
@@ -1674,28 +2104,20 @@ export class ZteOltClient {
           p,
         );
         try {
-          await send(`show ${family} onu uncfg ${oltIf}`);
-          const uncfgOut = await read(15_000);
+          await send(
+            `show ${family} onu uncfg ${this.cliOltIf(oltIf, dialect)}`,
+          );
+          const uncfgOut = await read(8_000);
           const rows = parseOnuUncfg(uncfgOut, oltIf);
           if (!rows.length) continue;
-
-          await send(`show ${family} onu state ${oltIf}`);
-          const stateOut = await read(20_000);
-          const occupied = parseOnuIdsFromState(stateOut);
-          const nextId = suggestNextOnuId(occupied, maxOnus);
-
-          for (const row of rows) {
-            if (seenSn.has(row.sn)) continue;
-            seenSn.add(row.sn);
-            found.push({ ...row, suggestedOnuId: nextId });
-          }
+          for (const row of rows) await attachSuggestedId(row);
         } catch {
           /* skip port */
         }
       }
     }
 
-    this.logger.log(`ONU uncfg found: ${found.length}`);
+    this.logger.log(`ONU uncfg found: ${found.length} (per-port)`);
     return found;
   }
 
@@ -1703,6 +2125,7 @@ export class ZteOltClient {
     send: (line: string) => Promise<void>,
     read: (ms?: number) => Promise<string>,
     includeRunningConfig = true,
+    onlyOltIfs?: string[],
   ): Promise<ZteConnectedOnu[]> {
     // Per-PON-port inventory — same path as listPonPorts (proven on this OLT).
     // Global `show gpon onu state` often returns only the header on C3xx.
@@ -1710,6 +2133,7 @@ export class ZteOltClient {
       send,
       read,
       includeRunningConfig,
+      onlyOltIfs,
     );
   }
 
@@ -1718,12 +2142,23 @@ export class ZteOltClient {
     send: (line: string) => Promise<void>,
     read: (ms?: number) => Promise<string>,
     includeRunningConfig = true,
+    onlyOltIfs?: string[],
   ): Promise<ZteConnectedOnu[]> {
+    const restrict =
+      onlyOltIfs && onlyOltIfs.length > 0
+        ? new Set(onlyOltIfs.map((s) => s.toLowerCase()))
+        : null;
+
     await send('show card');
     const cardOut = await read(20_000);
     const cards = this.parseShowCard(cardOut);
+    const dialect = detectZteFwFamily({
+      cardTypes: cards.flatMap((c) => [c.cfgType, c.realType]),
+    });
     this.logger.log(
-      `ONU inventory cards=${cards.length} ponLine=${cards.filter((c) => isPonLineCard(c.cfgType, c.realType)).length}`,
+      `ONU inventory cards=${cards.length} dialect=${dialect} ponLine=${cards.filter((c) => isPonLineCard(c.cfgType, c.realType)).length}${
+        restrict ? ` restrictPorts=${restrict.size}` : ''
+      }`,
     );
     const onus: ZteConnectedOnu[] = [];
 
@@ -1740,9 +2175,11 @@ export class ZteOltClient {
           card.slot,
           p,
         );
+        if (restrict && !restrict.has(oltIf.toLowerCase())) continue;
+        const oltIfCli = this.cliOltIf(oltIf, dialect);
         try {
-          await send(`show ${family} onu state ${oltIf}`);
-          const stateOut = await read(25_000);
+          await send(`show ${family} onu state ${oltIfCli}`);
+          const stateOut = await read(15_000);
           let stateRows = parseOnuStateRows(stateOut, oltIf);
           if (!stateRows.length) {
             const counts = parseOnuStateCounts(stateOut);
@@ -1785,8 +2222,8 @@ export class ZteOltClient {
             }
           }
 
-          await send(`show ${family} onu baseinfo ${oltIf}`);
-          const baseOut = await read(25_000);
+          await send(`show ${family} onu baseinfo ${oltIfCli}`);
+          const baseOut = await read(15_000);
           const baseByIf = new Map(
             parseOnuBaseInfo(baseOut, oltIf).map((b) => [
               b.onuIf.toLowerCase(),
@@ -1796,8 +2233,8 @@ export class ZteOltClient {
 
           let rxByIf = new Map<string, number>();
           if (stateRows.some((r) => r.online)) {
-            await send(`show pon power onu-rx ${oltIf}`);
-            const rxOut = await read(20_000);
+            await send(`show pon power onu-rx ${oltIfCli}`);
+            const rxOut = await read(12_000);
             rxByIf = parseOnuRxByIf(rxOut, oltIf);
           }
 
@@ -1869,29 +2306,41 @@ export class ZteOltClient {
   private async collectOnuDetailFromSession(
     send: (line: string) => Promise<void>,
     read: (ms?: number) => Promise<string>,
-    onuIf: string,
+    params: {
+      host: string;
+      port: number;
+      onuIf: string;
+      subtypeHint?: string | null;
+      firmwareHint?: string | null;
+    },
   ): Promise<ZteConnectedOnuDetail> {
-    const oltIf = oltIfFromOnuIf(onuIf);
-    const family = onuIf.startsWith('epon') ? 'epon' : 'gpon';
-    let stateRow: ZteOnuStateRow | undefined;
-    if (oltIf) {
-      await send(`show ${family} onu state ${oltIf}`);
-      const stateOut = await read(20_000);
-      stateRow = parseOnuStateRows(stateOut).find((r) => r.onuIf === onuIf);
-    }
+    const ctx = this.dialectOnuContext(params, params.onuIf);
+    if (!ctx) throw new Error(`onuIf inválido: ${params.onuIf}`);
+    const onuIf = ctx.onuIfCanon;
+    const onuIfCli = ctx.onuIf;
+    const oltIf = ctx.oltIf;
+    const family = ctx.ponFamily;
+    await send(`show ${family} onu state ${oltIf}`);
+    const stateOut = await read(20_000);
+    const stateRow: ZteOnuStateRow | undefined = parseOnuStateRows(
+      stateOut,
+    ).find(
+      (r) =>
+        r.onuIf.toLowerCase() === onuIf.toLowerCase() || r.onuId === ctx.onuId,
+    );
 
-    await send(`show ${family} onu detail-info ${onuIf}`);
+    await send(`show ${family} onu detail-info ${onuIfCli}`);
     const detailOut = await read(25_000);
     const detail = parseOnuDetailInfo(detailOut);
 
-    await send(`show running-config interface ${onuIf}`);
+    await send(`show running-config interface ${onuIfCli}`);
     const cfgOut = await read(20_000);
     const cfg = parseOnuInterfaceConfig(onuIf, cfgOut);
 
     let onuRxDbm: number | null = null;
     let oltRxDbm: number | null = null;
     try {
-      await send(`show pon power attenuation ${onuIf}`);
+      await send(`show pon power attenuation ${onuIfCli}`);
       const attOut = await read(15_000);
       const att = parseOnuAttenuation(attOut);
       onuRxDbm = att.onuRxDbm;
@@ -1901,9 +2350,9 @@ export class ZteOltClient {
     }
     if (onuRxDbm == null) {
       try {
-        await send(`show pon power onu-rx ${onuIf}`);
+        await send(`show pon power onu-rx ${oltIf}`);
         const rxOut = await read(12_000);
-        onuRxDbm = parseOnuRxByIf(rxOut).get(onuIf) ?? null;
+        onuRxDbm = parseOnuRxByIf(rxOut, ctx.oltIfCanon).get(onuIf) ?? null;
         if (onuRxDbm == null) {
           const m = rxOut.match(/(-?\d+(?:\.\d+)?)/);
           if (m) {
@@ -1919,7 +2368,7 @@ export class ZteOltClient {
     let downloadBps: number | null = null;
     let uploadBps: number | null = null;
     try {
-      await send(`show interface ${onuIf}`);
+      await send(`show interface ${onuIfCli}`);
       const ifOut = await read(15_000);
       const rates = parseOnuInterfaceRates(ifOut);
       downloadBps = rates.downloadBps;
@@ -1928,11 +2377,8 @@ export class ZteOltClient {
       /* optional */
     }
 
-    const parts = onuIf.match(
-      /^(?:gpon|epon)-onu_(\d+)\/(\d+)\/(\d+):(\d+)$/i,
-    );
-    const online =
-      stateRow?.online ?? /working/i.test(detail.phaseState ?? '');
+    const parts = onuIf.match(/^(?:gpon|epon)-onu_(\d+)\/(\d+)\/(\d+):(\d+)$/i);
+    const online = stateRow?.online ?? /working/i.test(detail.phaseState ?? '');
 
     const ethMatches = [...cfg.raw.matchAll(/eth_0\/(\d+)/gi)].map((x) =>
       Number(x[1]),
@@ -1995,24 +2441,24 @@ export class ZteOltClient {
 
   /** Strip OLT prompts (ZXAN#, hostname#) and pager noise from CLI dumps. */
   private cleanCliNoise(text: string): string {
-    return text
-      .replace(/\r/g, '')
-      .replace(/\x1b\[[0-9;]*[A-Za-z]/g, '')
-      .replace(/\x08/g, '')
-      .replace(/--More--|---- More ----/gi, '')
-      // Full-line prompts: ZXAN#, ZXAN(config)#, OLT-C320#
-      .replace(/^[A-Za-z0-9_./()-]+(?:\([^)\n]*\))?[>#]\s*$/gm, '')
-      // Prompt at end of a content line: "...config ZXAN#"
-      .replace(/\s+[A-Za-z0-9_./()-]+(?:\([^)\n]*\))?[>#]\s*$/gm, '')
-      // Prompt glued mid-line before next command echo
-      .replace(
-        /[A-Za-z0-9_./()-]+(?:\([^)\n]*\))?[>#]\s*(?=show\s)/gi,
-        '',
-      )
-      // Leading command echo lines
-      .replace(/^\s*show\s+.+$/gim, '')
-      .replace(/\n{3,}/g, '\n\n')
-      .trim();
+    return (
+      text
+        .replace(/\r/g, '')
+        // eslint-disable-next-line no-control-regex
+        .replace(new RegExp('\\x1b\\[[0-9;]*[A-Za-z]', 'g'), '')
+        .replaceAll('\b', '')
+        .replace(/--More--|---- More ----/gi, '')
+        // Full-line prompts: ZXAN#, ZXAN(config)#, OLT-C320#
+        .replace(/^[A-Za-z0-9_./()-]+(?:\([^)\n]*\))?[>#]\s*$/gm, '')
+        // Prompt at end of a content line: "...config ZXAN#"
+        .replace(/\s+[A-Za-z0-9_./()-]+(?:\([^)\n]*\))?[>#]\s*$/gm, '')
+        // Prompt glued mid-line before next command echo
+        .replace(/[A-Za-z0-9_./()-]+(?:\([^)\n]*\))?[>#]\s*(?=show\s)/gi, '')
+        // Leading command echo lines
+        .replace(/^\s*show\s+.+$/gim, '')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim()
+    );
   }
 
   /** Remove echoed config command lines so regexes don't match the command itself. */
@@ -2030,7 +2476,7 @@ export class ZteOltClient {
     return (value ?? '')
       .normalize('NFKD')
       .replace(/[\u0300-\u036f]/g, '')
-      .replace(/[+\-]/g, ' ')
+      .replace(/[+-]/g, ' ')
       .replace(/["'`\\<>|]/g, '')
       .replace(/[^A-Za-z0-9 @#$&()._/,\s]/g, '')
       .replace(/\s+/g, ' ')
@@ -2093,14 +2539,25 @@ export class ZteOltClient {
   private async collectOnuStatusReportFromSession(
     send: (line: string) => Promise<void>,
     read: (ms?: number) => Promise<string>,
-    onuIf: string,
+    params: {
+      host: string;
+      port: number;
+      onuIf: string;
+      subtypeHint?: string | null;
+      firmwareHint?: string | null;
+    },
   ): Promise<{
     report: string;
     runningConfig: string;
     swInfo: ZteRemoteOnuEquip;
   }> {
-    const family = onuIf.startsWith('epon') ? 'epon' : 'gpon';
-    const oltIf = oltIfFromOnuIf(onuIf);
+    const ctx = this.dialectOnuContext(params, params.onuIf);
+    if (!ctx) throw new Error(`onuIf inválido: ${params.onuIf}`);
+    const onuIf = ctx.onuIfCanon;
+    const onuIfCli = ctx.onuIf;
+    const family = ctx.ponFamily;
+    const oltIf = ctx.oltIf;
+    const oltIfCanon = ctx.oltIfCanon;
 
     // Ensure privileged EXEC (not a leftover config-if from another op).
     await send('end');
@@ -2109,60 +2566,60 @@ export class ZteOltClient {
     let opticalRaw = await this.safeShow(
       send,
       read,
-      `show pon power attenuation ${onuIf}`,
+      `show pon power attenuation ${onuIfCli}`,
       15_000,
     );
-    if (!opticalRaw && oltIf) {
+    if (!opticalRaw) {
       const rxRaw = await this.safeShow(
         send,
         read,
         `show pon power onu-rx ${oltIf}`,
         15_000,
       );
-      const rxMap = parseOnuRxByIf(rxRaw, oltIf);
+      const rxMap = parseOnuRxByIf(rxRaw, oltIfCanon);
       const dbm = rxMap.get(onuIf);
       if (dbm != null) {
-        opticalRaw = `ONU Rx: ${dbm.toFixed(3)} (dbm)  [via onu-rx ${oltIf}]`;
+        opticalRaw = `ONU Rx: ${dbm.toFixed(3)} (dbm)  [via onu-rx ${oltIfCanon}]`;
       }
     }
     const detailRaw = await this.safeShow(
       send,
       read,
-      `show ${family} onu detail-info ${onuIf}`,
+      `show ${family} onu detail-info ${onuIfCli}`,
       25_000,
     );
     const catvRaw = await this.safeShow(
       send,
       read,
-      `show ${family} remote-onu interface catv ${onuIf}`,
+      `show ${family} remote-onu interface catv ${onuIfCli}`,
     );
     const lanRaw = await this.safeShow(
       send,
       read,
-      `show ${family} remote-onu interface eth ${onuIf}`,
+      `show ${family} remote-onu interface eth ${onuIfCli}`,
     );
     // `remote-onu vlan` no existe en firmwares ZTE recientes; usar ex-vlan.
     let vlanRaw = await this.safeShow(
       send,
       read,
-      `show ${family} remote-onu ex-vlan ${onuIf}`,
+      `show ${family} remote-onu ex-vlan ${onuIfCli}`,
     );
     if (!vlanRaw || /No relate|Invalid|Error/i.test(vlanRaw)) {
       vlanRaw = await this.safeShow(
         send,
         read,
-        `show ${family} remote-onu ex-vlan-table ${onuIf}`,
+        `show ${family} remote-onu ex-vlan-table ${onuIfCli}`,
       );
     }
     const voipRaw = await this.safeShow(
       send,
       read,
-      `show ${family} remote-onu voip ${onuIf}`,
+      `show ${family} remote-onu voip ${onuIfCli}`,
     );
     const wanRaw = await this.safeShow(
       send,
       read,
-      `show ${family} remote-onu wan-ip ${onuIf}`,
+      `show ${family} remote-onu wan-ip ${onuIfCli}`,
     );
     // Si no hay ex-vlan, sintetizar VLAN desde wan-ip (CVLAN configurada).
     if (
@@ -2187,18 +2644,18 @@ export class ZteOltClient {
     const macRaw = await this.safeShow(
       send,
       read,
-      `show mac gpon onu ${onuIf}`,
+      `show mac gpon onu ${onuIfCli}`,
     );
     const runningConfig = await this.safeShow(
       send,
       read,
-      `show running-config interface ${onuIf}`,
+      `show running-config interface ${onuIfCli}`,
       20_000,
     );
     const equipRaw = await this.safeShow(
       send,
       read,
-      `show ${family} remote-onu equip ${onuIf}`,
+      `show ${family} remote-onu equip ${onuIfCli}`,
       20_000,
     );
 
@@ -2255,15 +2712,24 @@ export class ZteOltClient {
     password: string;
     onuIf: string;
     name: string | null;
-  }): Promise<{ ok: boolean; error?: string; message?: string; appliedName?: string }> {
-    const onuIf = params.onuIf.trim();
-    if (!onuIf) return { ok: false, error: 'onuIf requerido' };
+    subtypeHint?: string | null;
+    firmwareHint?: string | null;
+  }): Promise<{
+    ok: boolean;
+    error?: string;
+    message?: string;
+    appliedName?: string;
+  }> {
+    const ctx = this.dialectOnuContext(params, params.onuIf);
+    if (!ctx) return { ok: false, error: 'onuIf requerido' };
+    const onuIf = ctx.onuIf;
+    const onuIfCanon = ctx.onuIfCanon;
     try {
       return await this.runConfigWrite(params, async (send, read) => {
         await send('configure terminal');
         await read(12_000);
         await send(`interface ${onuIf}`);
-        let out = await read(10_000);
+        const out = await read(10_000);
         if (/%Error|Invalid|Unknown command/i.test(out)) {
           throw new Error(`No se pudo entrar a ${onuIf}: ${out.slice(0, 200)}`);
         }
@@ -2299,7 +2765,7 @@ export class ZteOltClient {
         await this.persistRunningConfig(send, read);
         return {
           ok: true,
-          message: `Name actualizado en ${onuIf}`,
+          message: `Name actualizado en ${onuIfCanon}`,
           appliedName: applied,
         };
       });
@@ -2323,9 +2789,13 @@ export class ZteOltClient {
     password: string;
     onuIf: string;
     description: string | null;
+    subtypeHint?: string | null;
+    firmwareHint?: string | null;
   }): Promise<{ ok: boolean; error?: string; message?: string }> {
-    const onuIf = params.onuIf.trim();
-    if (!onuIf) return { ok: false, error: 'onuIf requerido' };
+    const ctx = this.dialectOnuContext(params, params.onuIf);
+    if (!ctx) return { ok: false, error: 'onuIf requerido' };
+    const onuIf = ctx.onuIf;
+    const onuIfCanon = ctx.onuIfCanon;
     try {
       return await this.runConfigWrite(params, async (send, read) => {
         await send('configure terminal');
@@ -2369,8 +2839,8 @@ export class ZteOltClient {
         return {
           ok: true,
           message: d
-            ? `Description actualizada en ${onuIf}`
-            : `Description eliminada en ${onuIf}`,
+            ? `Description actualizada en ${onuIfCanon}`
+            : `Description eliminada en ${onuIfCanon}`,
         };
       });
     } catch (err) {
@@ -2445,7 +2915,12 @@ export class ZteOltClient {
     protocol: 'telnet' | 'ssh';
     username: string;
     password: string;
-  }): Promise<{ ok: boolean; error?: string; message?: string; count?: number }> {
+  }): Promise<{
+    ok: boolean;
+    error?: string;
+    message?: string;
+    count?: number;
+  }> {
     try {
       return await this.runConfigWrite(params, async (send, read) => {
         await send('show card');
@@ -2496,17 +2971,26 @@ export class ZteOltClient {
     username: string;
     password: string;
     ifName: string;
-  }): Promise<{ ok: boolean; error?: string; message?: string; count?: number }> {
+    subtypeHint?: string | null;
+    firmwareHint?: string | null;
+  }): Promise<{
+    ok: boolean;
+    error?: string;
+    message?: string;
+    count?: number;
+  }> {
     try {
       return await this.runConfigWrite(params, async (send, read) => {
         const family = params.ifName.startsWith('epon') ? 'epon' : 'gpon';
-        await send(`show ${family} onu state ${params.ifName}`);
+        const fw = this.resolveFwFamily(params);
+        const oltIfCli = this.cliOltIf(params.ifName, fw);
+        await send(`show ${family} onu state ${oltIfCli}`);
         const stateOut = await read(25_000);
         const ids = parseOnuIdsFromState(stateOut);
         await send('configure terminal');
         await read(12_000);
         for (const id of ids) {
-          const onuIf = params.ifName.replace('-olt_', '-onu_') + `:${id}`;
+          const onuIf = this.cliOnuIf(onuIfFromOltIf(params.ifName, id), fw);
           await send(`pon-onu-mng ${onuIf}`);
           await read(8_000);
           await send('reboot');
@@ -2537,7 +3021,12 @@ export class ZteOltClient {
     username: string;
     password: string;
     slot?: string;
-  }): Promise<{ ok: boolean; error?: string; message?: string; count?: number }> {
+  }): Promise<{
+    ok: boolean;
+    error?: string;
+    message?: string;
+    count?: number;
+  }> {
     const listed = await this.listPonPorts(params);
     if (!listed.ok) return { ok: false, error: listed.error };
     const targets = listed.ports.filter(
@@ -2578,8 +3067,20 @@ export class ZteOltClient {
         await send('show card');
         const cardOut = await read(20_000);
         const cards = this.parseShowCard(cardOut);
-        await send('show running-config');
-        const cfg = await read(45_000);
+        let cfg = '';
+        try {
+          await send('show running-config | include rogue-onu-detect');
+          cfg = await read(12_000);
+          if (/%Error|Invalid|Unknown command|Incomplete/i.test(cfg)) {
+            cfg = '';
+          }
+        } catch {
+          cfg = '';
+        }
+        if (!cfg.trim()) {
+          await send('show running-config');
+          cfg = await read(45_000);
+        }
         const bySlot = this.parseRogueDetectConfig(cfg);
 
         const rows = cards
@@ -2675,10 +3176,7 @@ export class ZteOltClient {
           .map((l) => l.trim())
           .filter(
             (l) =>
-              l &&
-              !/^show /i.test(l) &&
-              !/#\s*$/.test(l) &&
-              /rogue/i.test(l),
+              l && !/^show /i.test(l) && !/#\s*$/.test(l) && /rogue/i.test(l),
           );
         return {
           ok: true,
@@ -2697,18 +3195,15 @@ export class ZteOltClient {
     }
   }
 
-  private parseRogueDetectConfig(text: string): Map<
-    string,
-    { detect: boolean; locate: boolean; autoShutdown: boolean }
-  > {
+  private parseRogueDetectConfig(
+    text: string,
+  ): Map<string, { detect: boolean; locate: boolean; autoShutdown: boolean }> {
     const map = new Map<
       string,
       { detect: boolean; locate: boolean; autoShutdown: boolean }
     >();
     for (const line of text.split(/\r?\n/)) {
-      const m = line.match(
-        /^\s*rogue-onu-detect\s+(\d+)\s+(enable|disable)/i,
-      );
+      const m = line.match(/^\s*rogue-onu-detect\s+(\d+)\s+(enable|disable)/i);
       if (!m) continue;
       const slot = m[1];
       const enabled = /^enable$/i.test(m[2]);
@@ -2721,12 +3216,17 @@ export class ZteOltClient {
     return map;
   }
 
+  /**
+   * Uplink inventory from one `show running-config` dump.
+   * Oper status / optics come from SNMP + previous cache (not per-port CLI).
+   */
   async listUplinks(params: {
     host: string;
     port: number;
     protocol: 'telnet' | 'ssh';
     username: string;
     password: string;
+    priority?: 'interactive' | 'background';
   }): Promise<{
     ok: boolean;
     error?: string;
@@ -2738,29 +3238,41 @@ export class ZteOltClient {
     try {
       const uplinks = await this.runConfigWrite(params, async (send, read) => {
         await send('show running-config');
-        const cfg = await read(60_000);
+        const cfg = await read(120_000);
+        if (!looksCompleteRunningConfig(cfg)) {
+          throw new Error(
+            'running-config incompleto o truncado (uplinks); reintente sincronizar',
+          );
+        }
+        const blocks = extractAllInterfaceBlocks(cfg);
         const names = extractUplinkIfNames(cfg);
+        this.logger.log(
+          `uplinks via running-config: ${names.length} ifaces (${blocks.size} blocks)`,
+        );
+        if (!names.length) {
+          throw new Error(
+            'No se encontraron interfaces gei_/xgei_ en running-config',
+          );
+        }
         const rows: ZteUplinkRaw[] = [];
         for (const ifName of names) {
-          const block = extractInterfaceBlock(cfg, ifName);
+          const block =
+            blocks.get(ifName) || extractInterfaceBlock(cfg, ifName) || '';
           const parsed = parseUplinkConfigBlock(block);
-          await send(`show interface ${ifName}`);
-          const ifaceOut = await read(12_000);
-          const st = parseInterfaceStatus(ifaceOut);
-          await send(`show interface optical-module-info ${ifName}`);
-          const optOut = await read(10_000);
-          const optical = parseOpticalUplink(optOut);
           rows.push({
             ifName,
             description: parsed.description,
-            mediaType: inferMediaType(ifName, optical),
+            mediaType: inferMediaType(ifName, {
+              isFiber: /^xgei_/i.test(ifName),
+            }),
             adminEnabled: parsed.adminEnabled,
-            status: parsed.adminEnabled ? st.status : 'Down',
-            negotiation: st.negotiation,
-            mtu: parsed.mtu ?? st.mtu,
-            wavelengthNm: optical.wavelengthNm,
-            signalDbm: optical.signalDbm,
-            tempC: optical.tempC,
+            // Placeholder — SNMP overlay fills live Up/Down/speed
+            status: parsed.adminEnabled ? 'Up' : 'Down',
+            negotiation: null,
+            mtu: parsed.mtu,
+            wavelengthNm: null,
+            signalDbm: null,
+            tempC: null,
             pvidUntag: parsed.pvidUntag,
             mode: parsed.mode,
             taggedVlans: parsed.taggedVlans,
@@ -2888,6 +3400,7 @@ export class ZteOltClient {
     protocol: 'telnet' | 'ssh';
     username: string;
     password: string;
+    priority?: 'interactive' | 'background';
   }): Promise<{
     ok: boolean;
     error?: string;
@@ -2904,16 +3417,23 @@ export class ZteOltClient {
   }> {
     const probedAt = new Date().toISOString();
     try {
-      const profiles = await this.runConfigWrite(params, async (send, read) => {
-        await send('show gpon profile tcont');
-        const tcontRaw = this.cleanCliNoise(await read(30_000));
-        await send('show gpon profile traffic');
-        const trafficRaw = this.cleanCliNoise(await read(30_000));
-        return pairOltSpeedProfiles(
-          parseTcontProfiles(tcontRaw),
-          parseTrafficProfiles(trafficRaw),
-        );
-      });
+      const profiles = await this.runConfigWrite(
+        { ...params, priority: params.priority ?? 'interactive' },
+        async (send, read) => {
+          await send('show gpon profile tcont');
+          const tcontRaw = this.cleanCliNoise(await read(45_000));
+          await send('show gpon profile traffic');
+          const trafficRaw = this.cleanCliNoise(await read(45_000));
+          const paired = pairOltSpeedProfiles(
+            parseTcontProfiles(tcontRaw),
+            parseTrafficProfiles(trafficRaw),
+          );
+          this.logger.log(
+            `speed profiles: tcont blocks≈${(tcontRaw.match(/Profile\s+name\s*:/gi) || []).length}, traffic≈${(trafficRaw.match(/Profile\s+name\s*:/gi) || []).length}, paired=${paired.length}`,
+          );
+          return paired;
+        },
+      );
       return { ok: true, profiles, probedAt };
     } catch (err) {
       return {
@@ -3061,6 +3581,7 @@ export class ZteOltClient {
     protocol: 'telnet' | 'ssh';
     username: string;
     password: string;
+    priority?: 'interactive' | 'background';
   }): Promise<{
     ok: boolean;
     error?: string;
@@ -3071,9 +3592,49 @@ export class ZteOltClient {
     const probedAt = new Date().toISOString();
     try {
       const vlans = await this.runConfigWrite(params, async (send, read) => {
-        await send('show running-config');
-        const cfg = await read(90_000);
-        return parseVlansFromRunningConfig(cfg);
+        // `show vlan` table → ids/names. Full running-config fills isolation,
+        // names in vlan blocks, PON tags and ONU counts.
+        let fromShow: ZteVlanRaw[] = [];
+        try {
+          await send('show vlan');
+          const out = await read(25_000);
+          if (!/%Error|Invalid|Unknown command|Incomplete/i.test(out)) {
+            fromShow = parseVlansFromShowVlan(out);
+            if (fromShow.length <= 1) {
+              fromShow = parseVlansFromRunningConfig(out);
+            }
+            this.logger.log(`vlans via show vlan: ${fromShow.length}`);
+          }
+        } catch {
+          /* try full config */
+        }
+
+        try {
+          await send('show running-config');
+          const cfg = await read(120_000);
+          if (!looksCompleteRunningConfig(cfg)) {
+            throw new Error('running-config incompleto o truncado (vlans)');
+          }
+          const fromCfg = parseVlansFromRunningConfig(cfg);
+          this.logger.log(`vlans via running-config: ${fromCfg.length}`);
+          const merged = mergeVlanCatalogs(fromShow, fromCfg);
+          if (merged.length > 1) return merged;
+        } catch (err) {
+          this.logger.warn(
+            `vlans running-config failed: ${
+              err instanceof Error ? err.message : err
+            }`,
+          );
+        }
+        if (fromShow.length > 1) return fromShow;
+        // Never invent "solo VLAN 1" as a successful catalog — that wipes cache.
+        if (fromShow.length === 1 && fromShow[0]?.vlanId === 1) {
+          throw new Error(
+            'Catálogo VLAN incompleto (solo VLAN 1); reintente sincronizar',
+          );
+        }
+        if (fromShow.length) return fromShow;
+        throw new Error('No se pudieron leer VLANs de la OLT');
       });
       return {
         ok: true,
@@ -3233,42 +3794,49 @@ export class ZteOltClient {
       protocol: 'telnet' | 'ssh';
       username: string;
       password: string;
+      /** interactive (UI) jumps the queue ahead of background pollers. */
+      priority?: 'interactive' | 'background';
     },
     fn: (
       send: (line: string) => Promise<void>,
       read: (ms?: number) => Promise<string>,
     ) => Promise<T>,
   ): Promise<T> {
-    return this.withCliLock(params.host, params.port, async () => {
-      if (params.protocol === 'ssh') {
-        return this.withSshShell(params, fn);
-      }
-      const session = await TelnetSession.connect(
-        params.host,
-        params.port,
-        15_000,
-      );
-      try {
-        await this.ensurePrivilegedTelnet(
-          session,
-          params.username,
-          params.password,
-        );
-        return await fn(
-          async (line) => {
-            await session.sendLine(line);
-          },
-          (ms) => session.readUntilPrompt(ms ?? 15_000),
-        );
-      } finally {
-        try {
-          await session.sendLine('exit');
-        } catch {
-          /* ignore */
+    return this.withCliLock(
+      params.host,
+      params.port,
+      async () => {
+        if (params.protocol === 'ssh') {
+          return this.withSshShell(params, fn);
         }
-        session.close();
-      }
-    });
+        const session = await TelnetSession.connect(
+          params.host,
+          params.port,
+          15_000,
+        );
+        try {
+          await this.ensurePrivilegedTelnet(
+            session,
+            params.username,
+            params.password,
+          );
+          return await fn(
+            async (line) => {
+              await session.sendLine(line);
+            },
+            (ms) => session.readUntilPrompt(ms ?? 15_000),
+          );
+        } finally {
+          try {
+            await session.sendLine('exit');
+          } catch {
+            /* ignore */
+          }
+          session.close();
+        }
+      },
+      params.priority ?? 'interactive',
+    );
   }
 
   private async withSshShell<T>(
@@ -3291,6 +3859,8 @@ export class ZteOltClient {
       }, 300_000);
       conn
         .on('ready', () => {
+          // ssh2's callback is void-returning; the Promise is handled internally.
+          // eslint-disable-next-line @typescript-eslint/no-misused-promises
           conn.shell({ term: 'vt100' }, async (err, stream) => {
             if (err) {
               clearTimeout(timeout);
@@ -3314,15 +3884,16 @@ export class ZteOltClient {
                   8_000,
                 );
                 if (/[Pp]assword\s*:/i.test(afterEnable)) {
-                  stream.write('zxr10\n');
+                  stream.write(params.password + '\n');
                   await reader.readUntil(/#\s*$/, 10_000);
                 }
               }
               stream.write('terminal length 0\n');
               await reader.readUntilPrompt(8_000);
               const result = await fn(
-                async (line) => {
+                (line) => {
                   stream.write(line + '\n');
+                  return Promise.resolve();
                 },
                 (ms) => reader.readUntilPrompt(ms ?? 15_000),
               );
@@ -3333,7 +3904,7 @@ export class ZteOltClient {
             } catch (e) {
               clearTimeout(timeout);
               conn.end();
-              reject(e);
+              reject(e instanceof Error ? e : new Error(String(e)));
             }
           });
         })
@@ -3342,6 +3913,7 @@ export class ZteOltClient {
           reject(e);
         })
         .connect({
+          ...sshHostVerification(params.host, params.port),
           host: params.host,
           port: params.port,
           username: params.username,
@@ -3354,120 +3926,208 @@ export class ZteOltClient {
   private async collectPonPortsFromSession(
     send: (line: string) => Promise<void>,
     read: (ms?: number) => Promise<string>,
+    opts?: { light?: boolean },
   ): Promise<ZtePonPortRaw[]> {
+    const light = opts?.light !== false;
     await send('show card');
     const cardOut = await read(20_000);
     const cards = this.parseShowCard(cardOut);
-    await send('show running-config');
-    const fullCfg = await read(45_000);
-    const rogueBySlot = this.parseRogueDetectConfig(fullCfg);
+
+    // Light path: one running-config dump → parse all gpon-olt_/epon-olt_ blocks
+    // instead of N× `show running-config interface` (was ~16–64 sequential cmds).
+    let blocks = new Map<string, string>();
+    let rogueCfg = '';
+    let dumpPonNames: string[] = [];
+    if (light) {
+      await send('show running-config');
+      const cfg = await read(120_000);
+      if (!looksCompleteRunningConfig(cfg)) {
+        throw new Error(
+          'running-config incompleto o truncado (PON); reintente sincronizar',
+        );
+      }
+      blocks = extractAllInterfaceBlocks(cfg);
+      rogueCfg = cfg;
+      dumpPonNames = extractPonOltIfNames(cfg).map(normalizePonOltIfName);
+      this.logger.log(
+        `PON light: running-config ${blocks.size} blocks, pon-olt ifaces=${dumpPonNames.length}`,
+      );
+      if (!dumpPonNames.length) {
+        throw new Error(
+          'No se encontraron interfaces gpon-olt_/epon-olt_ en running-config',
+        );
+      }
+    } else {
+      try {
+        await send('show running-config | include rogue-onu-detect');
+        rogueCfg = await read(12_000);
+        if (/%Error|Invalid|Unknown command|Incomplete/i.test(rogueCfg)) {
+          rogueCfg = '';
+        }
+      } catch {
+        rogueCfg = '';
+      }
+    }
+    const rogueBySlot = this.parseRogueDetectConfig(rogueCfg);
+
+    const cardBySlot = new Map(
+      cards
+        .filter((c) => isPonLineCard(c.cfgType, c.realType))
+        .map((c) => [c.slot, c]),
+    );
+
     const ports: ZtePonPortRaw[] = [];
 
-    for (const card of cards) {
-      const family = isPonLineCard(card.cfgType, card.realType);
-      if (!family) continue;
-      if (!/INSERVICE|OK|ACTIVE|ONLINE/i.test(card.status)) continue;
-      const nPorts = card.ports && card.ports > 0 ? card.ports : 16;
+    const pushPort = async (
+      ifName: string,
+      card: {
+        rack: string;
+        shelf: string;
+        slot: string;
+        cfgType: string;
+        realType: string;
+      },
+      family: 'gpon' | 'epon',
+      portNum: string,
+      cfgText: string,
+    ) => {
+      const range = parseRangeFromConfig(cfgText);
+      const maxOnus = defaultMaxOnus(family);
+      const adminEnabled = cfgText ? parseAdminShutdown(cfgText) : true;
       const rogue = rogueBySlot.get(card.slot);
-      for (let p = 1; p <= nPorts; p++) {
-        const ifName = buildOltIfName(
-          family,
-          card.rack,
-          card.shelf,
-          card.slot,
-          p,
+
+      let onuOnline = 0;
+      let onuTotal = 0;
+      let avgSignal: number | null = null;
+      let txPowerDbm: number | null = null;
+      let status: 'Up' | 'Down' = adminEnabled ? 'Up' : 'Down';
+
+      if (!light) {
+        const ifCli = this.cliOltIf(
+          ifName,
+          detectZteFwFamily({
+            cardTypes: [card.cfgType, card.realType],
+          }),
         );
-        try {
-          await send(`show running-config interface ${ifName}`);
-          const cfg = await read(12_000);
-          await send(`show ${family} onu state ${ifName}`);
-          const state = await read(20_000);
-          await send(`show interface optical-module-info ${ifName}`);
-          const optical = await read(12_000);
-          let avgSignal: number | null = null;
-          const counts = parseOnuStateCounts(state);
+        await send(`show ${family} onu state ${ifCli}`);
+        const state = await read(12_000);
+        const counts = parseOnuStateCounts(state);
+        onuOnline = counts.online;
+        onuTotal = counts.total;
+        let optical = '';
+        if (counts.online > 0 || counts.total > 0) {
+          await send(`show interface optical-module-info ${ifCli}`);
+          optical = await read(10_000);
           if (counts.online > 0) {
-            await send(`show pon power onu-rx ${ifName}`);
-            const rxOut = await read(15_000);
+            await send(`show pon power onu-rx ${ifCli}`);
+            const rxOut = await read(12_000);
             avgSignal = parseAvgOnuRx(rxOut);
           }
-          const range = parseRangeFromConfig(cfg);
-          const maxOnus = defaultMaxOnus(family);
-          ports.push({
-            rack: card.rack,
-            shelf: card.shelf,
-            slot: card.slot,
-            port: String(p),
-            ifName,
-            boardType: card.realType || card.cfgType,
-            ponType: family,
-            adminEnabled: parseAdminShutdown(cfg),
-            status:
-              parseOpticalTxPower(optical) != null || counts.online > 0
-                ? 'Up'
-                : 'Down',
-            onuOnline: counts.online,
-            onuTotal: counts.total,
-            maxOnus,
-            avgSignalDbm: avgSignal,
-            description: parseDescription(cfg),
-            minRangeM: range.minRangeM,
-            maxRangeM: range.maxRangeM,
-            rogueDetectEnabled: rogue?.detect ?? false,
-            txPowerDbm: parseOpticalTxPower(optical),
-          });
+        }
+        txPowerDbm = parseOpticalTxPower(optical);
+        status = txPowerDbm != null || counts.online > 0 ? 'Up' : 'Down';
+      }
+
+      ports.push({
+        rack: card.rack,
+        shelf: card.shelf,
+        slot: card.slot,
+        port: portNum,
+        ifName,
+        boardType: card.realType || card.cfgType,
+        ponType: family,
+        adminEnabled,
+        status,
+        onuOnline,
+        onuTotal,
+        maxOnus,
+        avgSignalDbm: avgSignal,
+        description: parseDescription(cfgText),
+        minRangeM: range.minRangeM,
+        maxRangeM: range.maxRangeM,
+        rogueDetectEnabled: rogue?.detect ?? false,
+        txPowerDbm,
+      });
+    };
+
+    if (light) {
+      // Prefer ifNames from the dump (authoritative) — avoids inventing
+      // phantom ports when show card Port column is missing (defaulted to 16).
+      for (const rawName of dumpPonNames) {
+        const parsed = parsePonOltIfName(rawName);
+        if (!parsed) continue;
+        const ifName = normalizePonOltIfName(rawName);
+        const card =
+          cardBySlot.get(parsed.slot) ??
+          ({
+            rack: '1',
+            shelf: parsed.shelf,
+            slot: parsed.slot,
+            cfgType: parsed.family === 'epon' ? 'ETGO' : 'GTGO',
+            realType: parsed.family === 'epon' ? 'ETGO' : 'GTGO',
+          } as const);
+        const family =
+          isPonLineCard(card.cfgType, card.realType) ?? parsed.family;
+        const cfg =
+          blocks.get(ifName) ||
+          blocks.get(toZteCliOltIf(ifName, 'c6xx')) ||
+          blocks.get(toZteCliOltIf(ifName, 'c3xx')) ||
+          [...blocks.entries()].find(([n]) => {
+            const a = n.toLowerCase();
+            const b = ifName.toLowerCase();
+            return a === b || normalizePonOltIfName(n).toLowerCase() === b;
+          })?.[1] ||
+          '';
+        // Skip empty blocks — do not invent admin-enabled defaults
+        if (!cfg.trim()) continue;
+        try {
+          await pushPort(ifName, card, family, parsed.port, cfg);
         } catch (e) {
           this.logger.warn(
             `PON port ${ifName} skip: ${e instanceof Error ? e.message : e}`,
           );
         }
       }
+    } else {
+      for (const card of cards) {
+        const family = isPonLineCard(card.cfgType, card.realType);
+        if (!family) continue;
+        if (!/INSERVICE|OK|ACTIVE|ONLINE/i.test(card.status)) continue;
+        const nPorts = card.ports && card.ports > 0 ? card.ports : 16;
+        for (let p = 1; p <= nPorts; p++) {
+          const ifName = buildOltIfName(
+            family,
+            card.rack,
+            card.shelf,
+            card.slot,
+            p,
+          );
+          try {
+            const ifCli = this.cliOltIf(
+              ifName,
+              detectZteFwFamily({
+                cardTypes: [card.cfgType, card.realType],
+              }),
+            );
+            await send(`show running-config interface ${ifCli}`);
+            const cfg = await read(8_000);
+            await pushPort(ifName, card, family, String(p), cfg);
+          } catch (e) {
+            this.logger.warn(
+              `PON port ${ifName} skip: ${e instanceof Error ? e.message : e}`,
+            );
+          }
+        }
+      }
+    }
+
+    this.logger.log(
+      `PON collect ${light ? 'light' : 'full'}: ${ports.length} ports`,
+    );
+    if (light && !ports.length) {
+      throw new Error('No se pudieron parsear puertos PON del running-config');
     }
     return ports;
-  }
-
-  private async runPonPortsTelnet(params: {
-    host: string;
-    port: number;
-    username: string;
-    password: string;
-  }): Promise<ZtePonPortRaw[]> {
-    const session = await TelnetSession.connect(
-      params.host,
-      params.port,
-      15_000,
-    );
-    try {
-      await this.ensurePrivilegedTelnet(
-        session,
-        params.username,
-        params.password,
-      );
-      return await this.collectPonPortsFromSession(
-        async (line) => {
-          await session.sendLine(line);
-        },
-        (ms) => session.readUntil(/#\s*$/, ms ?? 20_000),
-      );
-    } finally {
-      try {
-        await session.sendLine('exit');
-      } catch {
-        /* ignore */
-      }
-      session.close();
-    }
-  }
-
-  private async runPonPortsSsh(params: {
-    host: string;
-    port: number;
-    username: string;
-    password: string;
-  }): Promise<ZtePonPortRaw[]> {
-    return this.withSshShell(params, (send, read) =>
-      this.collectPonPortsFromSession(send, read),
-    );
   }
 
   private async probeTelnet(params: {
@@ -3476,7 +4136,11 @@ export class ZteOltClient {
     username: string;
     password: string;
   }): Promise<ZteOltProbeResult> {
-    const session = await TelnetSession.connect(params.host, params.port, 15_000);
+    const session = await TelnetSession.connect(
+      params.host,
+      params.port,
+      15_000,
+    );
     try {
       await session.expect(/[Uu]sername\s*:/i, 10_000);
       await session.sendLine(params.username);
@@ -3494,7 +4158,7 @@ export class ZteOltClient {
           8_000,
         );
         if (/[Pp]assword\s*:/i.test(afterEnable)) {
-          await session.sendLine('zxr10');
+          await session.sendLine(params.password);
           buf = await session.readUntil(/#\s*$/, 10_000);
         } else {
           buf = afterEnable;
@@ -3537,6 +4201,7 @@ export class ZteOltClient {
 
       conn
         .on('ready', () => {
+          // eslint-disable-next-line @typescript-eslint/no-misused-promises
           conn.shell({ term: 'vt100' }, async (err, stream) => {
             if (err) {
               clearTimeout(timeout);
@@ -3565,7 +4230,7 @@ export class ZteOltClient {
                   8_000,
                 );
                 if (/[Pp]assword\s*:/i.test(after)) {
-                  stream.write('zxr10\n');
+                  stream.write(params.password + '\n');
                   await reader.readUntil(/#\s*$/, 10_000);
                 }
               }
@@ -3604,6 +4269,7 @@ export class ZteOltClient {
           resolve({ ok: false, error: e.message });
         })
         .connect({
+          ...sshHostVerification(params.host, params.port),
           host: params.host,
           port: params.port,
           username: params.username,
@@ -3617,7 +4283,10 @@ export class ZteOltClient {
   private async collectInventoryAndMetrics(io: {
     send: (line: string) => void | Promise<void>;
     readPrompt: (timeoutMs?: number) => Promise<string>;
-  }): Promise<{ cardOut: string; result: Omit<ZteOltProbeResult, 'ok' | 'error' | 'product' | 'hostname'> }> {
+  }): Promise<{
+    cardOut: string;
+    result: Omit<ZteOltProbeResult, 'ok' | 'error' | 'product' | 'hostname'>;
+  }> {
     await io.send('show card');
     const cardOut = await io.readPrompt(20_000);
     const cards = this.parseShowCard(cardOut);
@@ -3642,7 +4311,12 @@ export class ZteOltClient {
     await io.send('show system-group');
     const sysOut = await io.readPrompt(15_000);
 
-    const metrics = this.aggregateResourceMetrics(cards, procOut, tempOut, sysOut);
+    const metrics = this.aggregateResourceMetrics(
+      cards,
+      procOut,
+      tempOut,
+      sysOut,
+    );
 
     return {
       cardOut,
@@ -3659,7 +4333,7 @@ export class ZteOltClient {
   private extractProduct(text: string): string | undefined {
     const m =
       text.match(/ZXAN\s+product\s+(\S+)/i) ||
-      text.match(/\b(C320|C300|C350|C220)\b/i);
+      text.match(/\b(C680|C650|C620|C610|C600|C350|C320|C300|C220)\b/i);
     return m?.[1];
   }
 
@@ -3671,26 +4345,43 @@ export class ZteOltClient {
   private parseShowCard(text: string): ZteOltCard[] {
     const cards: ZteOltCard[] = [];
     for (const line of text.split(/\r?\n/)) {
-      // rack shelf slot CfgType RealType Port HardVer SoftVer Status
-      // 1    1     2    GTGH    GTGH     16   120700  V1.2.5P3 INSERVICE
-      const m = line.match(
+      // C3xx: rack shelf slot CfgType RealType Port HardVer SoftVer Status
+      const m9 = line.match(
         /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s*$/,
       );
-      if (!m) continue;
-      if (m[4].toLowerCase() === 'cfgtype') continue;
-      const portsRaw = m[6];
-      const ports = /^\d+$/.test(portsRaw) ? Number(portsRaw) : undefined;
-      const softRaw = m[8];
-      cards.push({
-        rack: m[1],
-        shelf: m[2],
-        slot: m[3],
-        cfgType: m[4],
-        realType: m[5],
-        ports,
-        softVer: /^V?\d/i.test(softRaw) ? softRaw : undefined,
-        status: m[9],
-      });
+      if (m9 && m9[4].toLowerCase() !== 'cfgtype') {
+        const portsRaw = m9[6];
+        const ports = /^\d+$/.test(portsRaw) ? Number(portsRaw) : undefined;
+        const softRaw = m9[8];
+        cards.push({
+          rack: m9[1],
+          shelf: m9[2],
+          slot: m9[3],
+          cfgType: m9[4],
+          realType: m9[5],
+          ports,
+          softVer: /^V?\d/i.test(softRaw) ? softRaw : undefined,
+          status: m9[9],
+        });
+        continue;
+      }
+      // C6xx Titan: Shelf Slot CfgType CardName Port HardVer Status
+      const m7 = line.match(
+        /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(\S+)\s+(\d+)\s+(\S+)\s+(\S+)\s*$/,
+      );
+      if (m7 && m7[3].toLowerCase() !== 'cfgtype') {
+        const hard = m7[6];
+        cards.push({
+          rack: '1',
+          shelf: m7[1],
+          slot: m7[2],
+          cfgType: m7[3],
+          realType: m7[4],
+          ports: Number(m7[5]),
+          softVer: /^V?\d/i.test(hard) ? hard : undefined,
+          status: m7[7],
+        });
+      }
     }
     return this.assignRoles(cards);
   }
@@ -3698,8 +4389,7 @@ export class ZteOltClient {
   private assignRoles(cards: ZteOltCard[]): ZteOltCard[] {
     const controls = cards
       .filter(
-        (c) =>
-          this.isControlCard(c.cfgType) || this.isControlCard(c.realType),
+        (c) => this.isControlCard(c.cfgType) || this.isControlCard(c.realType),
       )
       .filter((c) => /INSERVICE|OK|ACTIVE|ONLINE/i.test(c.status))
       .sort((a, b) => Number(a.slot) - Number(b.slot));
@@ -3741,14 +4431,8 @@ export class ZteOltClient {
         8_000,
       );
       if (/[Pp]assword\s*:/i.test(afterEnable)) {
-        // Prefer device password; fall back to common ZTE default.
         await session.sendLine(password);
-        try {
-          buf = await session.readUntilPrompt(10_000);
-        } catch {
-          await session.sendLine('zxr10');
-          buf = await session.readUntilPrompt(10_000);
-        }
+        buf = await session.readUntilPrompt(10_000);
       } else {
         buf = afterEnable;
       }
@@ -3775,7 +4459,11 @@ export class ZteOltClient {
     username: string;
     password: string;
   }): Promise<ZteOltCard[]> {
-    const session = await TelnetSession.connect(params.host, params.port, 15_000);
+    const session = await TelnetSession.connect(
+      params.host,
+      params.port,
+      15_000,
+    );
     try {
       await this.ensurePrivilegedTelnet(
         session,
@@ -3806,6 +4494,7 @@ export class ZteOltClient {
 
       conn
         .on('ready', () => {
+          // eslint-disable-next-line @typescript-eslint/no-misused-promises
           conn.shell({ term: 'vt100' }, async (err, stream) => {
             if (err) {
               clearTimeout(timeout);
@@ -3829,7 +4518,7 @@ export class ZteOltClient {
                   8_000,
                 );
                 if (/[Pp]assword\s*:/i.test(afterEnable)) {
-                  stream.write('zxr10\n');
+                  stream.write(params.password + '\n');
                   await reader.readUntil(/#\s*$/, 10_000);
                 }
               }
@@ -3844,7 +4533,7 @@ export class ZteOltClient {
             } catch (e) {
               clearTimeout(timeout);
               conn.end();
-              reject(e);
+              reject(e instanceof Error ? e : new Error(String(e)));
             }
           });
         })
@@ -3853,6 +4542,7 @@ export class ZteOltClient {
           reject(e);
         })
         .connect({
+          ...sshHostVerification(params.host, params.port),
           host: params.host,
           port: params.port,
           username: params.username,
@@ -3871,7 +4561,11 @@ export class ZteOltClient {
     shelf: string;
     slot: string;
   }): Promise<{ ok: boolean; error?: string; message?: string }> {
-    const session = await TelnetSession.connect(params.host, params.port, 15_000);
+    const session = await TelnetSession.connect(
+      params.host,
+      params.port,
+      15_000,
+    );
     try {
       await this.ensurePrivilegedTelnet(
         session,
@@ -3916,6 +4610,7 @@ export class ZteOltClient {
 
       conn
         .on('ready', () => {
+          // eslint-disable-next-line @typescript-eslint/no-misused-promises
           conn.shell({ term: 'vt100' }, async (err, stream) => {
             if (err) {
               clearTimeout(timeout);
@@ -3939,7 +4634,7 @@ export class ZteOltClient {
                   8_000,
                 );
                 if (/[Pp]assword\s*:/i.test(afterEnable)) {
-                  stream.write('zxr10\n');
+                  stream.write(params.password + '\n');
                   await reader.readUntil(/#\s*$/, 10_000);
                 }
               }
@@ -3977,6 +4672,7 @@ export class ZteOltClient {
           resolve({ ok: false, error: e.message });
         })
         .connect({
+          ...sshHostVerification(params.host, params.port),
           host: params.host,
           port: params.port,
           username: params.username,
@@ -3998,8 +4694,9 @@ export class ZteOltClient {
 
   private extractSoftVer(text: string): string | undefined {
     const m =
-      text.match(/Soft(?:ware)?\s*Ver(?:sion)?\s*[:=]?\s*(V?[\d.]+[A-Za-z0-9]*)/i) ||
-      text.match(/\b(V[12]\.\d(?:\.\d+)?[A-Za-z0-9]*)\b/);
+      text.match(
+        /Soft(?:ware)?\s*Ver(?:sion)?\s*[:=]?\s*(V?[\d.]+[A-Za-z0-9]*)/i,
+      ) || text.match(/\b(V[12]\.\d(?:\.\d+)?[A-Za-z0-9]*)\b/);
     return m?.[1];
   }
 
@@ -4012,7 +4709,7 @@ export class ZteOltClient {
   }
 
   private isControlCard(type: string): boolean {
-    return /^(SMX|SCX|SCTM)/i.test(type);
+    return /^(SMX|SCX|SCTM|SFU|FCSD|SPUF|PRSF)/i.test(type);
   }
 
   private parseProcessorRows(text: string): Array<{
@@ -4053,9 +4750,7 @@ export class ZteOltClient {
     const out: Array<{ slot: string; temp: number }> = [];
     for (const line of text.split(/\r?\n/)) {
       // 1 1 2 30 29 29 N/A.
-      const m1 = line.match(
-        /^\s*\d+\s+\d+\s+(\d+)\s+(\d+(?:\.\d+)?)\s+/,
-      );
+      const m1 = line.match(/^\s*\d+\s+\d+\s+(\d+)\s+(\d+(?:\.\d+)?)\s+/);
       if (m1) {
         out.push({ slot: m1[1], temp: Number(m1[2]) });
         continue;
@@ -4066,7 +4761,9 @@ export class ZteOltClient {
         out.push({ slot: m2[1], temp: Number(m2[2]) });
       }
     }
-    return out.filter((t) => Number.isFinite(t.temp) && t.temp > 0 && t.temp < 120);
+    return out.filter(
+      (t) => Number.isFinite(t.temp) && t.temp > 0 && t.temp < 120,
+    );
   }
 
   private extractUptime(text: string): string | undefined {
@@ -4074,7 +4771,10 @@ export class ZteOltClient {
       text.match(/Uptime\s*:\s*(.+)/i) ||
       text.match(/Started before\s*:\s*(.+)/i);
     if (!m?.[1]) return undefined;
-    return m[1].replace(/\s+/g, ' ').trim().replace(/\s*\.?\s*$/, '');
+    return m[1]
+      .replace(/\s+/g, ' ')
+      .trim()
+      .replace(/\s*\.?\s*$/, '');
   }
 
   private aggregateResourceMetrics(
@@ -4114,9 +4814,7 @@ export class ZteOltClient {
     if (primary) {
       cpuLoad = primary.cpu1m;
       totalMemory = primary.phyMemMb * 1024 * 1024;
-      freeMemory = Math.round(
-        totalMemory * ((100 - primary.memPct) / 100),
-      );
+      freeMemory = Math.round(totalMemory * ((100 - primary.memPct) / 100));
     }
 
     const temps = this.parseTemperatures(tempOut);
@@ -4264,7 +4962,7 @@ class TelnetSession {
    */
   async readUntilPrompt(timeoutMs: number): Promise<string> {
     let out = await this.readUntil(CLI_PROMPT_RE, timeoutMs);
-    out += await this.consumeTrailingPrompts(200);
+    out += await this.consumeTrailingPrompts(50);
     return out;
   }
 
@@ -4278,7 +4976,7 @@ class TelnetSession {
           acc += this.buffer;
           this.buffer = '';
           if (Date.now() - start < budgetMs) {
-            setTimeout(tick, 35);
+            setTimeout(tick, 20);
             return;
           }
           resolve(acc);
@@ -4292,16 +4990,17 @@ class TelnetSession {
           resolve(acc);
           return;
         }
-        setTimeout(tick, 25);
+        setTimeout(tick, 15);
       };
-      setTimeout(tick, 40);
+      setTimeout(tick, 20);
     });
   }
 
-  async sendLine(line: string) {
+  sendLine(line: string): Promise<void> {
     // LF only — CR+LF often submits the line twice on ZTE and leaves a stray `#`
     // that makes the next readUntil resolve empty (commands collide → Error 20202).
     this.socket.write(line + '\n');
+    return Promise.resolve();
   }
 
   close() {
@@ -4320,7 +5019,11 @@ class StreamReader {
     timer: NodeJS.Timeout;
   }> = [];
 
-  constructor(private readonly stream: NodeJS.ReadableStream & { write: (s: string) => void }) {
+  constructor(
+    private readonly stream: NodeJS.ReadableStream & {
+      write: (s: string) => void;
+    },
+  ) {
     stream.on('data', (chunk: Buffer | string) => {
       this.buffer += chunk.toString();
       this.flush();
@@ -4370,7 +5073,7 @@ class StreamReader {
 
   async readUntilPrompt(timeoutMs: number): Promise<string> {
     let out = await this.readUntil(CLI_PROMPT_RE, timeoutMs);
-    out += await this.consumeTrailingPrompts(200);
+    out += await this.consumeTrailingPrompts(50);
     return out;
   }
 
@@ -4384,7 +5087,7 @@ class StreamReader {
           acc += this.buffer;
           this.buffer = '';
           if (Date.now() - start < budgetMs) {
-            setTimeout(tick, 35);
+            setTimeout(tick, 20);
             return;
           }
           resolve(acc);
@@ -4398,9 +5101,9 @@ class StreamReader {
           resolve(acc);
           return;
         }
-        setTimeout(tick, 25);
+        setTimeout(tick, 15);
       };
-      setTimeout(tick, 40);
+      setTimeout(tick, 20);
     });
   }
 }

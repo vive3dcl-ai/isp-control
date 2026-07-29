@@ -3,7 +3,7 @@ import * as net from 'net';
 import * as tls from 'tls';
 
 export type RosReply = {
-  type: '!re' | '!done' | '!trap' | '!fatal' | string;
+  type: string;
   attrs: Record<string, string>;
   tag?: string;
 };
@@ -168,8 +168,8 @@ export class RouterOsApiClient {
     return replies.filter((r) => r.type === '!re').map((r) => r.attrs);
   }
 
-  async close(): Promise<void> {
-    if (!this.socket) return;
+  close(): Promise<void> {
+    if (!this.socket) return Promise.resolve();
     const sock = this.socket;
     this.socket = null;
     sock.removeAllListeners('data');
@@ -180,13 +180,16 @@ export class RouterOsApiClient {
     }
     this.pending.clear();
     sock.destroy();
+    return Promise.resolve();
   }
 
   private md5Challenge(password: string, challengeHex: string): string {
     const challenge = Buffer.from(challengeHex, 'hex');
     const hash = crypto
       .createHash('md5')
-      .update(Buffer.concat([Buffer.from([0]), Buffer.from(password), challenge]))
+      .update(
+        Buffer.concat([Buffer.from([0]), Buffer.from(password), challenge]),
+      )
       .digest('hex');
     return `00${hash}`;
   }

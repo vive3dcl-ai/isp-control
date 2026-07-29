@@ -12,6 +12,7 @@ import * as bcrypt from 'bcrypt';
 import { createHash, randomBytes } from 'crypto';
 import { In, Repository } from 'typeorm';
 import type { AuthUser, JwtPayload, LoginResponse } from '../auth/auth.types';
+import { credentialVersion } from '../auth/secure-compare';
 import { Tenant } from '../tenants/entities/tenant.entity';
 import { TenantConnectionService } from '../database/tenant-connection.service';
 import { TenantMailerService } from '../modules/tenant-mailer.service';
@@ -23,10 +24,7 @@ import {
   type ModuleId,
 } from '../modules/module-catalog';
 import { PlatformPublicUrlsService } from '../platform/platform-public-urls.service';
-import {
-  emailCtaButton,
-  escapeHtml,
-} from '../platform/platform-email-layout';
+import { emailCtaButton, escapeHtml } from '../platform/platform-email-layout';
 import { InvoicePdfService } from '../billing/invoice-pdf.service';
 import { Invoice } from '../billing/entities/invoice.entity';
 import {
@@ -105,7 +103,9 @@ export class ClientPortalService {
     isCompany?: boolean;
   }) {
     if (c.isCompany && c.companyName?.trim()) return c.companyName.trim();
-    return [c.firstName, c.lastName].filter(Boolean).join(' ').trim() || 'Cliente';
+    return (
+      [c.firstName, c.lastName].filter(Boolean).join(' ').trim() || 'Cliente'
+    );
   }
 
   private serializeUser(u: ClientPortalUser, tenant?: Tenant) {
@@ -268,7 +268,11 @@ export class ClientPortalService {
     } else {
       user.archivedAt = null;
     }
-    if (user.status !== 'active' && user.status !== 'invited' && user.status !== 'disabled') {
+    if (
+      user.status !== 'active' &&
+      user.status !== 'invited' &&
+      user.status !== 'disabled'
+    ) {
       user.status = 'stored';
     }
     await this.users.save(user);
@@ -288,6 +292,7 @@ export class ClientPortalService {
       tenantSlug: tenant.slug,
       schemaName: tenant.schemaName,
       clientId: u.clientId,
+      authVersion: credentialVersion(u.passwordHash),
     };
     return {
       accessToken: await this.jwt.signAsync(payload),
@@ -484,8 +489,9 @@ export class ClientPortalService {
       return { serviceId, onuId: null, hours, samples: [] };
     }
     const since = new Date(Date.now() - Math.max(1, hours) * 3600_000);
-    const samples =
-      await this.tenantConnections.getOnuMetricSampleRepository(ctx.schemaName);
+    const samples = await this.tenantConnections.getOnuMetricSampleRepository(
+      ctx.schemaName,
+    );
     const rows = await samples
       .createQueryBuilder('s')
       .where('s.onu_id = :id', { id: svc.onuId })
@@ -586,7 +592,10 @@ export class ClientPortalService {
     return this.serializeInvoice(inv);
   }
 
-  async getInvoicePdf(auth: AuthUser, id: string): Promise<{
+  async getInvoicePdf(
+    auth: AuthUser,
+    id: string,
+  ): Promise<{
     filename: string;
     buffer: Buffer;
   }> {
@@ -710,14 +719,17 @@ export class ClientPortalService {
       notification_url: `${apiBase}/public/client-portal/webhooks/mercadopago/${tenant.slug}`,
     };
 
-    const res = await fetch('https://api.mercadopago.com/checkout/preferences', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${cfg.accessToken}`,
-        'Content-Type': 'application/json',
+    const res = await fetch(
+      'https://api.mercadopago.com/checkout/preferences',
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${cfg.accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
       },
-      body: JSON.stringify(body),
-    });
+    );
     const data = (await res.json()) as {
       id?: string;
       init_point?: string;
@@ -730,7 +742,9 @@ export class ClientPortalService {
         `MP preference failed: ${JSON.stringify(data).slice(0, 300)}`,
       );
       throw new BadRequestException(
-        data.message || data.error || 'No se pudo crear el pago en Mercado Pago',
+        data.message ||
+          data.error ||
+          'No se pudo crear el pago en Mercado Pago',
       );
     }
     const checkoutUrl =

@@ -162,7 +162,12 @@ export class Tenant {
    * Ciclo de facturación prepago de la plataforma.
    * monthly | quarterly | semiannual | annual | null si aún no eligió.
    */
-  @Column({ name: 'billing_cycle', type: 'varchar', length: 20, nullable: true })
+  @Column({
+    name: 'billing_cycle',
+    type: 'varchar',
+    length: 20,
+    nullable: true,
+  })
   billingCycle: string | null;
 
   @Column({

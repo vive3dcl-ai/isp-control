@@ -180,6 +180,7 @@ export type OnuDiscoverResponse = {
 export type OnuMetricsResponse = {
   onuId: string
   hours: number
+  live?: boolean
   samples: Array<{
     kind: string
     value: number
@@ -305,6 +306,8 @@ export type UncfgOnu = {
   board: string
   port: string
   suggestedOnuId: number | null
+  /** SN also present in Conectadas (possible stale inventory row). */
+  inConnected?: boolean
 }
 
 export type UncfgResponse = {
@@ -313,6 +316,8 @@ export type UncfgResponse = {
   errors: Array<{ oltId: string; oltName: string; error: string }>
   total: number
   deniedCount?: number
+  rawUncfg?: number
+  alsoInConnected?: number
   probedAt: string
 }
 

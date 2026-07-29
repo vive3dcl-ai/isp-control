@@ -10,7 +10,10 @@ import {
 import { IsIn, IsString } from 'class-validator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
-import { PlatformAccess } from '../auth/decorators/roles.decorator';
+import {
+  PlatformAccess,
+  PlatformWriteAccess,
+} from '../auth/decorators/roles.decorator';
 import { ClientPortalService } from './client-portal.service';
 import {
   CLIENT_PORTAL_USER_STATUSES,
@@ -45,6 +48,7 @@ export class ClientPortalAdminController {
   }
 
   @Patch(':id/status')
+  @PlatformWriteAccess()
   setStatus(@Param('id') id: string, @Body() dto: AdminSetStatusDto) {
     return this.portal.adminSetStatus(id, dto.status);
   }

@@ -35,10 +35,7 @@ export class PlatformSubscriptionAppController {
   }
 
   @Get('subscription/quote')
-  quotePlan(
-    @CurrentUser() user: AuthUser,
-    @Query('cycle') cycle: string,
-  ) {
+  quotePlan(@CurrentUser() user: AuthUser, @Query('cycle') cycle: string) {
     return this.subscriptions.quotePlanChange(user.tenantId!, cycle);
   }
 

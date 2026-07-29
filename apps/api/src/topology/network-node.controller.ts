@@ -47,10 +47,7 @@ export class NetworkNodeController {
   }
 
   @Get(':id')
-  get(
-    @CurrentUser() user: AuthUser,
-    @Param('id', ParseUUIDPipe) id: string,
-  ) {
+  get(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string) {
     return this.nodes.get(user, id);
   }
 

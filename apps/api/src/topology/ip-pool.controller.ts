@@ -21,10 +21,7 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { TenantRolesGuard } from '../auth/guards/tenant-roles.guard';
 import type { AuthUser } from '../auth/auth.types';
 import { IpPoolService } from './ip-pool.service';
-import {
-  CreateIpPoolDto,
-  UpdateIpPoolDto,
-} from './dto/ip-pool.dto';
+import { CreateIpPoolDto, UpdateIpPoolDto } from './dto/ip-pool.dto';
 
 @Controller('app/settings/ip-pools')
 @UseGuards(JwtAuthGuard, RolesGuard, TenantRolesGuard)
@@ -42,10 +39,7 @@ export class IpPoolController {
   }
 
   @Get(':id')
-  get(
-    @CurrentUser() user: AuthUser,
-    @Param('id', ParseUUIDPipe) id: string,
-  ) {
+  get(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string) {
     return this.ipPools.get(user, id);
   }
 

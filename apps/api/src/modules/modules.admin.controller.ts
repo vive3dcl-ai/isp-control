@@ -9,7 +9,10 @@ import {
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
-import { PlatformAccess } from '../auth/decorators/roles.decorator';
+import {
+  PlatformAccess,
+  PlatformWriteAccess,
+} from '../auth/decorators/roles.decorator';
 import { ModulesService } from './modules.service';
 import { FxService } from './fx.service';
 import {
@@ -37,6 +40,7 @@ export class ModulesAdminController {
   }
 
   @Patch('modules/:moduleId/pricing')
+  @PlatformWriteAccess()
   updatePricing(
     @Param('moduleId') moduleId: string,
     @Body() dto: UpdateModulePricingDto,
@@ -50,6 +54,7 @@ export class ModulesAdminController {
   }
 
   @Patch('tenants/:id/modules')
+  @PlatformWriteAccess()
   updateTenantModules(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateTenantModulesDto,

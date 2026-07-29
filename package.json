@@ -26,6 +26,12 @@
     "docker:logs": "docker compose -f docker-compose.yml -f docker-compose.dev.yml logs -f"
   },
   "overrides": {
-    "typeorm": "0.3.27"
+    "typeorm": {
+      "glob": {
+        "minimatch": {
+          "brace-expansion": "2.1.3"
+        }
+      }
+    }
   }
 }

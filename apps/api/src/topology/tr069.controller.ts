@@ -44,19 +44,13 @@ export class Tr069Controller {
   }
 
   @Get('profiles/:id')
-  get(
-    @CurrentUser() user: AuthUser,
-    @Param('id', ParseUUIDPipe) id: string,
-  ) {
+  get(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string) {
     return this.tr069.get(user, id);
   }
 
   @Post('profiles')
   @TenantRoles(...CRM_WRITE_ROLES)
-  create(
-    @CurrentUser() user: AuthUser,
-    @Body() dto: CreateTr069ProfileDto,
-  ) {
+  create(@CurrentUser() user: AuthUser, @Body() dto: CreateTr069ProfileDto) {
     return this.tr069.create(user, dto);
   }
 

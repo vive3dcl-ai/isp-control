@@ -55,7 +55,12 @@ export class OnuCatalogItem {
    * Local image key under /onu/{key}.svg
    * zte-sfu | zte-hgu | huawei-sfu | huawei-hgu
    */
-  @Column({ name: 'image_key', type: 'varchar', length: 40, default: 'zte-hgu' })
+  @Column({
+    name: 'image_key',
+    type: 'varchar',
+    length: 40,
+    default: 'zte-hgu',
+  })
   imageKey: string;
 
   @Column({ type: 'text', default: '' })

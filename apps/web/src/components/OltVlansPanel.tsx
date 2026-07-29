@@ -3,6 +3,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '../lib/api'
 import type { OltVlanRow, OltVlansResponse } from '../lib/topology'
 import { ModalPortal } from './ModalPortal'
+import {
+  oltBtnPrimary,
+  oltBtnSecondary,
+  oltMetaClass,
+  oltToolbarClass,
+} from './oltPanelUi'
 
 
 const inputClass =
@@ -26,6 +32,7 @@ export function OltVlansPanel({
   const [deleteConfirm, setDeleteConfirm] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [msg, setMsg] = useState<string | null>(null)
+  const [syncing, setSyncing] = useState(false)
 
   const vlansQuery = useQuery({
     queryKey: ['app', 'topology', 'devices', deviceId, 'vlans'],
@@ -34,10 +41,19 @@ export function OltVlansPanel({
     retry: 1,
   })
 
-  function invalidate() {
-    void queryClient.invalidateQueries({
-      queryKey: ['app', 'topology', 'devices', deviceId, 'vlans'],
-    })
+  async function syncFromOlt() {
+    setSyncing(true)
+    try {
+      const data = await apiFetch<OltVlansResponse>(
+        `/app/topology/devices/${deviceId}/vlans?refresh=1`,
+      )
+      queryClient.setQueryData(
+        ['app', 'topology', 'devices', deviceId, 'vlans'],
+        data,
+      )
+    } finally {
+      setSyncing(false)
+    }
   }
 
   function openCreate() {
@@ -84,7 +100,7 @@ export function OltVlansPanel({
     onSuccess: (r: { message?: string }) => {
       setMsg(r.message ?? 'VLAN guardada')
       closeModal()
-      invalidate()
+      void syncFromOlt()
     },
     onError: (e: Error) => setError(e.message),
   })
@@ -100,7 +116,7 @@ export function OltVlansPanel({
     onSuccess: (r: { message?: string }) => {
       setMsg(r.message ?? 'VLAN eliminada')
       closeModal()
-      invalidate()
+      void syncFromOlt()
     },
     onError: (e: Error) => setError(e.message),
   })
@@ -116,28 +132,36 @@ export function OltVlansPanel({
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-2">
+      <div className={oltToolbarClass}>
+        <button
+          type="button"
+          disabled={vlansQuery.isFetching || syncing}
+          onClick={() => void syncFromOlt()}
+          className={oltBtnPrimary}
+        >
+          {vlansQuery.isFetching || syncing
+            ? 'Sincronizando…'
+            : 'Sincronizar'}
+        </button>
         {canWrite && (
           <button
             type="button"
             onClick={openCreate}
-            className="rounded-lg bg-[var(--accent)] px-3 py-2 text-sm font-medium text-white hover:bg-[var(--accent-hover)]"
+            className={oltBtnSecondary}
           >
             + Agregar VLAN
           </button>
         )}
-        <button
-          type="button"
-          disabled={vlansQuery.isFetching}
-          onClick={() => void vlansQuery.refetch()}
-          className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--bg)] disabled:opacity-60"
-        >
-          {vlansQuery.isFetching ? 'Actualizando…' : 'Refrescar'}
-        </button>
-        {vlansQuery.data?.summary && (
-          <span className="text-xs text-[var(--text-muted)]">
-            {vlansQuery.data.summary}
+        {(vlansQuery.data?.syncedAt || vlansQuery.data?.probedAt) && (
+          <span className={oltMetaClass}>
+            Última sincronización:{' '}
+            {new Date(
+              vlansQuery.data.syncedAt || vlansQuery.data.probedAt,
+            ).toLocaleString()}
           </span>
+        )}
+        {vlansQuery.data?.summary && (
+          <span className={oltMetaClass}>{vlansQuery.data.summary}</span>
         )}
       </div>
 
@@ -156,7 +180,7 @@ export function OltVlansPanel({
       )}
       {vlansQuery.isLoading && (
         <p className="text-sm text-[var(--text-muted)]">
-          Leyendo VLANs de la OLT…
+          Sincronizando VLANs…
         </p>
       )}
 
@@ -349,7 +373,7 @@ export function OltVlansPanel({
             <div className="flex justify-end gap-2 border-t border-[var(--border)] px-5 py-3">
               <button
                 type="button"
-                className="rounded-lg px-3 py-2 text-sm text-[var(--accent)] hover:underline"
+                className={oltBtnSecondary}
                 onClick={closeModal}
               >
                 Cancelar
@@ -358,7 +382,7 @@ export function OltVlansPanel({
                 <button
                   type="button"
                   disabled={saveMutation.isPending}
-                  className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-60"
+                  className={oltBtnPrimary}
                   onClick={() => saveMutation.mutate()}
                 >
                   {saveMutation.isPending ? 'Guardando…' : 'Guardar'}

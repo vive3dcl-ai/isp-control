@@ -36,6 +36,8 @@ export type MigrationScanResponse = {
   totalCandidates: number
   sourceVlans: number[]
   candidates: MigrationCandidate[]
+  source?: 'db' | 'olt' | 'mixed'
+  liveWarning?: string | null
 }
 
 export type MigrationSegmentConfig = {

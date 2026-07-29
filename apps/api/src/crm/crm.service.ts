@@ -13,7 +13,7 @@ import { TenantConnectionService } from '../database/tenant-connection.service';
 import { TopologyService } from '../topology/topology.service';
 import { OnuConnectedService } from '../topology/onu-connected.service';
 import { SuspensionPortalService } from '../topology/suspension-portal.service';
-import { isZteOltDevice } from '../topology/olt.constants';
+import { isManagedOltDevice } from '../topology/olt.constants';
 import { Tenant } from '../tenants/entities/tenant.entity';
 import { CreateClientDto, UpdateClientDto } from './dto/client.dto';
 import {
@@ -60,7 +60,9 @@ export class CrmService {
 
   private clientDisplayName(c: Client) {
     if (c.isCompany && c.companyName?.trim()) return c.companyName.trim();
-    return [c.firstName, c.lastName].filter(Boolean).join(' ').trim() || 'Cliente';
+    return (
+      [c.firstName, c.lastName].filter(Boolean).join(' ').trim() || 'Cliente'
+    );
   }
 
   private async maybeInvitePortal(user: AuthUser, client: Client) {
@@ -107,8 +109,7 @@ export class CrmService {
    */
   async listNetworkMapLocations(user: AuthUser) {
     const schema = this.requireSchema(user);
-    const clientRepo =
-      await this.tenantConnections.getClientRepository(schema);
+    const clientRepo = await this.tenantConnections.getClientRepository(schema);
     const serviceRepo =
       await this.tenantConnections.getClientServiceRepository(schema);
     const onuRepo = await this.tenantConnections.getOnuRepository(schema);
@@ -127,7 +128,10 @@ export class CrmService {
           Number.isFinite(c.longitude),
       )
       .map((c) => {
-        const person = [c.firstName, c.lastName].filter(Boolean).join(' ').trim();
+        const person = [c.firstName, c.lastName]
+          .filter(Boolean)
+          .join(' ')
+          .trim();
         const label =
           person && c.companyName
             ? `${person} (${c.companyName})`
@@ -185,19 +189,14 @@ export class CrmService {
         const person = client
           ? [client.firstName, client.lastName].filter(Boolean).join(' ').trim()
           : '';
-        const clientLabel =
-          person || client?.companyName || 'Cliente';
+        const clientLabel = person || client?.companyName || 'Cliente';
         return {
           id: s.id,
           kind: 'onu' as const,
           lat,
           lng,
           label: onu?.name || onu?.sn || s.name || 'ONU',
-          subtitle: [
-            clientLabel,
-            s.name,
-            onu?.sn ? `SN ${onu.sn}` : null,
-          ]
+          subtitle: [clientLabel, s.name, onu?.sn ? `SN ${onu.sn}` : null]
             .filter(Boolean)
             .join(' · '),
           clientId: s.clientId,
@@ -324,7 +323,11 @@ export class CrmService {
     if (becameActiveClient || (!saved.isLead && saved.isActive && dto.email)) {
       await this.maybeInvitePortal(user, saved);
     }
-    if ((!saved.isActive || saved.isLead) && user.tenantId && this.clientPortal) {
+    if (
+      (!saved.isActive || saved.isLead) &&
+      user.tenantId &&
+      this.clientPortal
+    ) {
       await this.clientPortal.onClientArchivedOrDeleted(
         user.tenantId,
         saved.id,
@@ -405,7 +408,9 @@ export class CrmService {
     if (dto.name !== undefined) {
       const name = dto.name.trim();
       if (name.length < 2) {
-        throw new BadRequestException('Zone name must be at least 2 characters');
+        throw new BadRequestException(
+          'Zone name must be at least 2 characters',
+        );
       }
       zone.name = name;
     }
@@ -631,17 +636,15 @@ export class CrmService {
     updatedAt: Date;
   }) {
     const sp = plan.speedProfile ?? null;
-    const serviceTypes =
-      plan.serviceTypes?.length
-        ? plan.serviceTypes
-        : this.legacyTypeToServiceTypes(plan.type);
+    const serviceTypes = plan.serviceTypes?.length
+      ? plan.serviceTypes
+      : this.legacyTypeToServiceTypes(plan.type);
     return {
       id: plan.id,
       name: plan.name,
       price: plan.price,
       installationFee: plan.installationFee ?? '0.00',
-      installationFeeOnFirstInvoice:
-        plan.installationFeeOnFirstInvoice ?? true,
+      installationFeeOnFirstInvoice: plan.installationFeeOnFirstInvoice ?? true,
       invoiceLabel: plan.invoiceLabel,
       downloadSpeed: sp?.downloadMbps ?? plan.downloadSpeed,
       uploadSpeed: sp?.uploadMbps ?? plan.uploadSpeed,
@@ -763,10 +766,7 @@ export class CrmService {
     const profile = await repo.findOne({ where: { id } });
     if (!profile) throw new NotFoundException('Speed profile not found');
     const oltById = await this.loadOltById(schema);
-    const presence = new Map<
-      string,
-      { names: Set<string>; error?: string }
-    >();
+    const presence = new Map<string, { names: Set<string>; error?: string }>();
     const shouldProbe = opts.probe !== false;
     if (shouldProbe) {
       const toProbe = (profile.oltIds ?? []).filter((oltId) => {
@@ -856,7 +856,7 @@ export class CrmService {
     const deviceRepo =
       await this.tenantConnections.getNetworkDeviceRepository(schema);
     const olts = (await deviceRepo.find({ order: { name: 'ASC' } })).filter(
-      (d) => isZteOltDevice(d.type, d.subtype),
+      (d) => isManagedOltDevice(d.type, d.subtype),
     );
     return new Map(olts.map((o) => [o.id, o]));
   }
@@ -868,7 +868,7 @@ export class CrmService {
       await this.tenantConnections.getNetworkDeviceRepository(schema);
     for (const id of unique) {
       const d = await deviceRepo.findOne({ where: { id } });
-      if (!d || !isZteOltDevice(d.type, d.subtype)) {
+      if (!d || !isManagedOltDevice(d.type, d.subtype)) {
         throw new BadRequestException(`OLT inválida: ${id}`);
       }
     }
@@ -1090,8 +1090,7 @@ export class CrmService {
 
     let routerId: string | null = null;
     if (onu.wanPoolId) {
-      const poolRepo =
-        await this.tenantConnections.getIpPoolRepository(schema);
+      const poolRepo = await this.tenantConnections.getIpPoolRepository(schema);
       const pool = await poolRepo.findOne({ where: { id: onu.wanPoolId } });
       routerId = pool?.routerId ?? null;
     }
@@ -1116,12 +1115,10 @@ export class CrmService {
   async dashboardStats(user: AuthUser) {
     const schema = this.requireSchema(user);
     const clients = await this.tenantConnections.getClientRepository(schema);
-    const plans =
-      await this.tenantConnections.getServicePlanRepository(schema);
+    const plans = await this.tenantConnections.getServicePlanRepository(schema);
     const services =
       await this.tenantConnections.getClientServiceRepository(schema);
-    const invoices =
-      await this.tenantConnections.getInvoiceRepository(schema);
+    const invoices = await this.tenantConnections.getInvoiceRepository(schema);
 
     const now = new Date();
     const monthStart = new Date(

@@ -76,10 +76,7 @@ export class ClientPortalAuthController {
   }
 
   @Patch('me')
-  updateMe(
-    @CurrentUser() user: AuthUser,
-    @Body() dto: PortalUpdateProfileDto,
-  ) {
+  updateMe(@CurrentUser() user: AuthUser, @Body() dto: PortalUpdateProfileDto) {
     return this.portal.updateProfile(user, dto);
   }
 
@@ -128,10 +125,7 @@ export class ClientPortalAuthController {
   ) {
     const { filename, buffer } = await this.portal.getInvoicePdf(user, id);
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader(
-      'Content-Disposition',
-      `inline; filename="${filename}"`,
-    );
+    res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
     res.send(buffer);
   }
 

@@ -128,18 +128,12 @@ export class BillingSettingsController {
 
   @Post('invoices')
   @TenantRoles(...CRM_WRITE_ROLES)
-  createInvoice(
-    @CurrentUser() user: AuthUser,
-    @Body() dto: CreateInvoiceDto,
-  ) {
+  createInvoice(@CurrentUser() user: AuthUser, @Body() dto: CreateInvoiceDto) {
     return this.billing.createManualInvoice(user, dto);
   }
 
   @Get('invoices/:id')
-  getInvoice(
-    @CurrentUser() user: AuthUser,
-    @Param('id') id: string,
-  ) {
+  getInvoice(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     return this.billing.getInvoice(user, id);
   }
 

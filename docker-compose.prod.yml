@@ -57,7 +57,7 @@ services:
       retries: 10
 
   acs-mongo:
-    image: mongo:6.0
+    image: mongo:7.0.39
     container_name: isp-control-acs-mongo
     restart: unless-stopped
     networks: [isp_net]
@@ -86,6 +86,8 @@ services:
       DATABASE_USER: ${POSTGRES_USER}
       DATABASE_PASSWORD: ${POSTGRES_PASSWORD}
       DATABASE_NAME: ${POSTGRES_DB}
+      # Activar solo para bootstrap/mantenimiento controlado; evita DDL implícito.
+      DATABASE_SYNCHRONIZE: ${DATABASE_SYNCHRONIZE:-false}
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       PORT: "3000"
@@ -111,11 +113,23 @@ services:
       TR069_NBI_URL: ${TR069_NBI_URL:-http://vpn-concentrator:7557}
       # Sondeo CWMP/NBI desde la API (misma netns que GenieACS).
       TR069_ACS_PROBE_HOST: ${TR069_ACS_PROBE_HOST:-vpn-concentrator}
+      OLT_SSH_HOST_KEYS: ${OLT_SSH_HOST_KEYS:-}
+      OLT_SSH_ALLOW_UNVERIFIED: ${OLT_SSH_ALLOW_UNVERIFIED:-false}
       WEB_PUSH_VAPID_PUBLIC_KEY: ${WEB_PUSH_VAPID_PUBLIC_KEY:-}
       WEB_PUSH_VAPID_PRIVATE_KEY: ${WEB_PUSH_VAPID_PRIVATE_KEY:-}
       WEB_PUSH_SUBJECT: ${WEB_PUSH_SUBJECT:-mailto:soporte@tudominio.com}
     ports:
-      - "${API_PORT}:3000"
+      - "127.0.0.1:${API_PORT}:3000"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -qO- http://127.0.0.1:3000/api/public/branding >/dev/null",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
     volumes:
       - vpn_runtime_data:/vpn-runtime:ro
     depends_on:
@@ -131,9 +145,15 @@ services:
     pull_policy: always
     networks: [isp_net]
     ports:
-      - "${WEB_PORT}:80"
+      - "127.0.0.1:${WEB_PORT}:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
     depends_on:
-      - api
+      api:
+        condition: service_healthy
 
   landing:
     image: vive3d/isp-control-landing:latest
@@ -142,9 +162,14 @@ services:
     pull_policy: always
     networks: [isp_net]
     ports:
-      - "${LANDING_PORT}:80"
+      - "127.0.0.1:${LANDING_PORT}:80"
     environment:
       PANEL_URL: ${PANEL_URL}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
 
   whatsapp-baileys:
     image: vive3d/isp-control-whatsapp-baileys:latest
@@ -159,8 +184,15 @@ services:
       API_INTERNAL_URL: http://api:3000/api
     volumes:
       - wa_sessions_data:/data/sessions
+    healthcheck:
+      test:
+        ["CMD-SHELL", "wget -qO- http://127.0.0.1:3101/health >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
     depends_on:
-      - api
+      api:
+        condition: service_healthy
 
   # GenieACS comparte netns con el concentrador (network_mode: service).
   # Por eso en aaPanel NO muestra puertos en isp-control-acs: los puertos
@@ -217,17 +249,19 @@ services:
       VPN_WIREGUARD_SERVER_PRIVATE_KEY: ${VPN_WIREGUARD_SERVER_PRIVATE_KEY:-}
       VPN_ACS_HOST: 127.0.0.1
       GENIEACS_CWMP_PORT: ${GENIEACS_CWMP_PORT:-14501}
+      GENIEACS_NBI_PORT: ${GENIEACS_NBI_PORT:-7557}
+      GENIEACS_FS_PORT: ${GENIEACS_FS_PORT:-7567}
     ports:
       - "${VPN_PORT_OPENVPN_TCP:-1194}:${VPN_PORT_OPENVPN_TCP:-1194}/tcp"
       - "${VPN_PORT_OPENVPN_UDP:-1195}:${VPN_PORT_OPENVPN_UDP:-1195}/udp"
       - "${VPN_PORT_WIREGUARD:-51820}:${VPN_PORT_WIREGUARD:-51820}/udp"
-      - "${ACS_UI_PORT}:3000"
+      - "127.0.0.1:${ACS_UI_PORT}:3000"
     volumes:
       - vpn_pki_data:/pki
       - vpn_runtime_data:/runtime
     depends_on:
       api:
-        condition: service_started
+        condition: service_healthy
       acs-mongo:
         condition: service_healthy
 
@@ -246,6 +280,7 @@ services:
       DATABASE_USER: ${POSTGRES_USER}
       DATABASE_PASSWORD: ${POSTGRES_PASSWORD}
       DATABASE_NAME: ${POSTGRES_DB}
+      DATABASE_SYNCHRONIZE: "true"
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       JWT_SECRET: ${JWT_SECRET}
@@ -256,6 +291,9 @@ services:
       VPN_PUBLIC_HOST: ${VPN_PUBLIC_HOST:-}
       VPN_SYNC_SECRET: ${VPN_SYNC_SECRET:-}
       WHATSAPP_BAILEYS_SECRET: ${WHATSAPP_BAILEYS_SECRET:-}
+      SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-admin@isp.local}
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-}
+      SEED_DEMO_DATA: ${SEED_DEMO_DATA:-false}
     working_dir: /app/apps/api
     entrypoint: ["node", "dist/seed/seed.js"]
     depends_on:

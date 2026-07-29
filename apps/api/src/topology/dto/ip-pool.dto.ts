@@ -151,7 +151,7 @@ export class SetOnuNetworkVlansDto {
    * Pass null explicitly to clear WAN assignment (JSON null).
    */
   @IsOptional()
-  @Transform(({ value }) =>
+  @Transform(({ value }: { value: unknown }) =>
     value === null || value === undefined || value === ''
       ? value === ''
         ? null

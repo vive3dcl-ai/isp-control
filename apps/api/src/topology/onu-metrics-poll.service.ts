@@ -9,8 +9,11 @@ import { Repository } from 'typeorm';
 import { Tenant } from '../tenants/entities/tenant.entity';
 import { OnuConnectedService } from './onu-connected.service';
 
-/** ONU signal + traffic refresh — target ~1 sample/minute per online ONU. */
+/** ONU signal + traffic refresh — SNMP RO primary (fleet ~1 min). */
 const ONU_POLL_INTERVAL_MS = 60_000;
+
+/** Retain metric samples this long (fleet 1/min + denser live while modal open). */
+export const ONU_METRIC_RETENTION_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Background poller for ONU optical signal + online state.

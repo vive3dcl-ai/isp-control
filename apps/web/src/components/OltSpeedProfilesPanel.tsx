@@ -8,6 +8,12 @@ import {
   type ProgressStep,
 } from './OperationProgressModal'
 import { ModalPortal } from './ModalPortal'
+import {
+  oltBtnPrimary,
+  oltBtnSecondary,
+  oltMetaClass,
+  oltToolbarClass,
+} from './oltPanelUi'
 
 const inputClass =
   'w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 outline-none ring-[var(--accent)] focus:ring-2'
@@ -25,6 +31,7 @@ export type OltSpeedProfileRow = {
 type OltSpeedProfilesResponse = {
   deviceId: string
   probedAt: string
+  syncedAt?: string | null
   profiles: OltSpeedProfileRow[]
 }
 
@@ -56,6 +63,8 @@ export function OltSpeedProfilesPanel({
     Record<string, () => Promise<string | void>>
   >({})
 
+  const [syncing, setSyncing] = useState(false)
+
   const query = useQuery({
     queryKey: ['app', 'topology', 'devices', deviceId, 'speed-profiles'],
     queryFn: () =>
@@ -65,11 +74,24 @@ export function OltSpeedProfilesPanel({
     retry: 1,
   })
 
+  async function syncFromOlt() {
+    setSyncing(true)
+    try {
+      const data = await apiFetch<OltSpeedProfilesResponse>(
+        `/app/topology/devices/${deviceId}/speed-profiles?refresh=1`,
+      )
+      queryClient.setQueryData(
+        ['app', 'topology', 'devices', deviceId, 'speed-profiles'],
+        data,
+      )
+      void queryClient.invalidateQueries({ queryKey: ['app', 'speed-profiles'] })
+    } finally {
+      setSyncing(false)
+    }
+  }
+
   function invalidate() {
-    void queryClient.invalidateQueries({
-      queryKey: ['app', 'topology', 'devices', deviceId, 'speed-profiles'],
-    })
-    void queryClient.invalidateQueries({ queryKey: ['app', 'speed-profiles'] })
+    void syncFromOlt()
   }
 
   function openCreate() {
@@ -157,7 +179,11 @@ export function OltSpeedProfilesPanel({
       },
       verify: async () => {
         const live = await apiFetch<OltSpeedProfilesResponse>(
-          `/app/topology/devices/${deviceId}/speed-profiles`,
+          `/app/topology/devices/${deviceId}/speed-profiles?refresh=1`,
+        )
+        queryClient.setQueryData(
+          ['app', 'topology', 'devices', deviceId, 'speed-profiles'],
+          live,
         )
         const still = (live.profiles ?? []).some(
           (x) => x.name.toLowerCase() === p.name.toLowerCase(),
@@ -198,38 +224,37 @@ export function OltSpeedProfilesPanel({
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <p className="text-sm text-[var(--text-muted)]">
-            Perfiles DBA de la OLT (tcont UP + traffic DOWN). Se leen y escriben
-            en vivo.
-          </p>
-          {query.data?.probedAt && (
-            <p className="mt-0.5 text-[var(--text-muted)] text-[11px]">
-              Actualizado {new Date(query.data.probedAt).toLocaleString()}
-            </p>
-          )}
-        </div>
-        <div className="flex gap-2">
+      <div className={oltToolbarClass}>
+        <button
+          type="button"
+          onClick={() => void syncFromOlt()}
+          disabled={query.isFetching || syncing}
+          className={oltBtnPrimary}
+        >
+          {query.isFetching || syncing ? 'Sincronizando…' : 'Sincronizar'}
+        </button>
+        {canWrite && (
           <button
             type="button"
-            onClick={() => void query.refetch()}
-            disabled={query.isFetching}
-            className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:border-[var(--accent)] disabled:opacity-50"
+            onClick={openCreate}
+            className={oltBtnSecondary}
           >
-            {query.isFetching ? 'Leyendo…' : 'Refrescar'}
+            Nuevo perfil
           </button>
-          {canWrite && (
-            <button
-              type="button"
-              onClick={openCreate}
-              className="rounded-lg bg-[var(--accent)] px-3 py-2 text-sm font-medium text-white hover:bg-[var(--accent-hover)]"
-            >
-              Nuevo perfil
-            </button>
-          )}
-        </div>
+        )}
+        {(query.data?.syncedAt || query.data?.probedAt) && (
+          <span className={oltMetaClass}>
+            Última sincronización:{' '}
+            {new Date(
+              query.data.syncedAt || query.data.probedAt,
+            ).toLocaleString()}
+          </span>
+        )}
       </div>
+
+      <p className="text-sm text-[var(--text-muted)]">
+        Perfiles DBA de la OLT (tcont UP + traffic DOWN).
+      </p>
 
       {msg && (
         <p className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">
@@ -257,7 +282,7 @@ export function OltSpeedProfilesPanel({
             {query.isLoading && (
               <tr>
                 <td colSpan={5} className="px-4 py-6 text-[var(--text-muted)]">
-                  Leyendo perfiles de la OLT…
+                  Sincronizando perfiles…
                 </td>
               </tr>
             )}
@@ -391,7 +416,7 @@ export function OltSpeedProfilesPanel({
               <button
                 type="button"
                 onClick={closeModal}
-                className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm"
+                className={oltBtnSecondary}
               >
                 Cancelar
               </button>
@@ -399,7 +424,7 @@ export function OltSpeedProfilesPanel({
                 type="button"
                 disabled={saveMutation.isPending}
                 onClick={() => saveMutation.mutate()}
-                className="rounded-lg bg-[var(--accent)] px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
+                className={oltBtnPrimary}
               >
                 {saveMutation.isPending ? 'Aplicando…' : 'Guardar en OLT'}
               </button>

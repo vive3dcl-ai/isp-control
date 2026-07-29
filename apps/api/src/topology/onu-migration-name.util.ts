@@ -122,7 +122,11 @@ export function splitPersonName(full: string): {
   // Heurística LATAM: 1er token = nombre; resto = apellidos.
   // Partículas (de/del/la) van con el apellido, no con el nombre.
   let firstCount = 1;
-  if (tokens.length >= 3 && looksLikeGivenName(tokens[1]) && !PARTICLES.has(tokens[1].toLowerCase())) {
+  if (
+    tokens.length >= 3 &&
+    looksLikeGivenName(tokens[1]) &&
+    !PARTICLES.has(tokens[1].toLowerCase())
+  ) {
     // «Juan Carlos Perez» → nombre compuesto
     firstCount = 2;
   }

@@ -43,11 +43,17 @@ export class WhatsAppBaileysClient {
   }
 
   async start(tenantId: string): Promise<BaileysSessionStatus> {
-    return this.request('POST', `/sessions/${encodeURIComponent(tenantId)}/start`);
+    return this.request(
+      'POST',
+      `/sessions/${encodeURIComponent(tenantId)}/start`,
+    );
   }
 
   async status(tenantId: string): Promise<BaileysSessionStatus> {
-    return this.request('GET', `/sessions/${encodeURIComponent(tenantId)}/status`);
+    return this.request(
+      'GET',
+      `/sessions/${encodeURIComponent(tenantId)}/status`,
+    );
   }
 
   async logout(tenantId: string): Promise<BaileysSessionStatus> {
@@ -109,9 +115,7 @@ export class WhatsAppBaileysClient {
     const text = await res.text();
     let responseBody: Record<string, unknown> = {};
     try {
-      responseBody = text
-        ? (JSON.parse(text) as Record<string, unknown>)
-        : {};
+      responseBody = text ? (JSON.parse(text) as Record<string, unknown>) : {};
     } catch {
       responseBody = { error: text };
     }

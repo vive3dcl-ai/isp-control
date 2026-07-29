@@ -21,10 +21,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { TenantRolesGuard } from '../auth/guards/tenant-roles.guard';
 import type { AuthUser } from '../auth/auth.types';
-import {
-  OnuConnectedService,
-  type OnuImportSnapshot,
-} from './onu-connected.service';
+import { OnuConnectedService } from './onu-connected.service';
 import { IpPoolService } from './ip-pool.service';
 import { SetOnuTr069Dto, SetOnuNetworkVlansDto } from './dto/ip-pool.dto';
 import { OnuTr069ConfigService } from './onu-tr069-config.service';
@@ -125,7 +122,7 @@ class UpdateOnuDescriptionDto {
 
 class UpdateOnuZoneDto {
   @IsOptional()
-  @Transform(({ value }) =>
+  @Transform(({ value }: { value: unknown }) =>
     value === null || value === undefined || value === '' ? null : value,
   )
   @ValidateIf((_, v) => v != null)
@@ -162,10 +159,7 @@ export class OnuConnectedController {
   }
 
   @Get('suggest-import')
-  suggestImport(
-    @CurrentUser() user: AuthUser,
-    @Query('oltId') oltId: string,
-  ) {
+  suggestImport(@CurrentUser() user: AuthUser, @Query('oltId') oltId: string) {
     return this.onus.suggestImport(user, oltId);
   }
 
@@ -174,8 +168,12 @@ export class OnuConnectedController {
     @CurrentUser() user: AuthUser,
     @Query('oltId') oltId: string,
     @Query('onuIf') onuIf: string,
+    /** live=1 → Telnet detail (slow). Default = DB (poller/SNMP keeps it fresh). */
+    @Query('live') live?: string,
   ) {
-    return this.onus.detail(user, oltId, onuIf);
+    return this.onus.detail(user, oltId, onuIf, {
+      live: live === '1' || live === 'true',
+    });
   }
 
   /** Live SmartOLT-style status (read-only; does not persist samples). */
@@ -229,9 +227,11 @@ export class OnuConnectedController {
     @CurrentUser() user: AuthUser,
     @Param('id', ParseUUIDPipe) id: string,
     @Query('hours') hours?: string,
+    @Query('live') live?: string,
   ) {
-    const n = hours != null ? Number(hours) : 6;
-    return this.onus.metrics(user, id, Number.isFinite(n) ? n : 6);
+    const n = hours != null ? Number(hours) : 24;
+    const liveOn = live === '1' || live === 'true' || live === 'yes';
+    return this.onus.metrics(user, id, Number.isFinite(n) ? n : 24, liveOn);
   }
 
   @Post('discover')
@@ -244,7 +244,7 @@ export class OnuConnectedController {
   @TenantRoles(...CRM_WRITE_ROLES)
   importOne(@CurrentUser() user: AuthUser, @Body() dto: OnuImportOneDto) {
     const { oltId, ...snap } = dto;
-    return this.onus.importOne(user, oltId, snap as OnuImportSnapshot);
+    return this.onus.importOne(user, oltId, snap);
   }
 
   @Post('import-skip')
@@ -347,7 +347,12 @@ export class OnuConnectedController {
       user,
       id,
       { mgmtVlanId: dto.mgmtVlanId, wanVlanId: dto.wanVlanId },
-      { wanVlanSpecified: Object.prototype.hasOwnProperty.call(dto, 'wanVlanId') },
+      {
+        wanVlanSpecified: Object.prototype.hasOwnProperty.call(
+          dto,
+          'wanVlanId',
+        ),
+      },
     );
   }
 
@@ -362,7 +367,12 @@ export class OnuConnectedController {
       user,
       id,
       { mgmtVlanId: dto.mgmtVlanId, wanVlanId: dto.wanVlanId },
-      { wanVlanSpecified: Object.prototype.hasOwnProperty.call(dto, 'wanVlanId') },
+      {
+        wanVlanSpecified: Object.prototype.hasOwnProperty.call(
+          dto,
+          'wanVlanId',
+        ),
+      },
     );
   }
 
@@ -381,7 +391,12 @@ export class OnuConnectedController {
         wanVlanId: dto.wanVlanId,
         tr069ProfileId: dto.tr069ProfileId,
       },
-      { wanVlanSpecified: Object.prototype.hasOwnProperty.call(dto, 'wanVlanId') },
+      {
+        wanVlanSpecified: Object.prototype.hasOwnProperty.call(
+          dto,
+          'wanVlanId',
+        ),
+      },
     );
   }
 
@@ -434,7 +449,12 @@ export class OnuConnectedController {
         wanVlanId: dto.wanVlanId,
         tr069ProfileId: dto.tr069ProfileId,
       },
-      { wanVlanSpecified: Object.prototype.hasOwnProperty.call(dto, 'wanVlanId') },
+      {
+        wanVlanSpecified: Object.prototype.hasOwnProperty.call(
+          dto,
+          'wanVlanId',
+        ),
+      },
     );
   }
 

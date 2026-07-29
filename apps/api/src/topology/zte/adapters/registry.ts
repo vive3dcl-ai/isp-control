@@ -1,22 +1,21 @@
 /**
  * Adapter registry for ZTE model × firmware combinations.
  * Phase 1: chassis profiles + capability lookup.
- * Later: SNMP ifIndex codecs and CLI provisioning per cell.
  */
 
 import {
   OLT_FIRMWARE_FAMILIES,
-  OLT_SELECTABLE_SUBTYPES,
   ZTE_CAPABILITY_MATRIX,
   ZTE_CHASSIS_PROFILES,
+  ZTE_SELECTABLE_SUBTYPES,
   type OltFirmwareFamily,
-  type OltSelectableSubtype,
   type ZteCapability,
   type ZteChassisProfile,
+  type ZteSelectableSubtype,
 } from '../../olt.constants';
 
 export interface ZteOltAdapter {
-  subtype: OltSelectableSubtype;
+  subtype: ZteSelectableSubtype;
   firmware: OltFirmwareFamily;
   chassis: ZteChassisProfile;
   capabilities: ZteCapability[];
@@ -26,7 +25,7 @@ export interface ZteOltAdapter {
 
 const adapters = new Map<string, ZteOltAdapter>();
 
-for (const subtype of OLT_SELECTABLE_SUBTYPES) {
+for (const subtype of ZTE_SELECTABLE_SUBTYPES) {
   for (const firmware of OLT_FIRMWARE_FAMILIES) {
     const key = `${subtype}@${firmware}`;
     adapters.set(key, {
@@ -40,7 +39,7 @@ for (const subtype of OLT_SELECTABLE_SUBTYPES) {
 }
 
 export function adapterKey(
-  subtype: OltSelectableSubtype,
+  subtype: ZteSelectableSubtype,
   firmware: OltFirmwareFamily,
 ): string {
   return `${subtype}@${firmware}`;
@@ -51,10 +50,12 @@ export function getZteAdapter(
   firmware?: OltFirmwareFamily | null,
 ): ZteOltAdapter | null {
   if (!subtype || !firmware) return null;
-  if (!(OLT_SELECTABLE_SUBTYPES as readonly string[]).includes(subtype)) {
+  if (!(ZTE_SELECTABLE_SUBTYPES as readonly string[]).includes(subtype)) {
     return null;
   }
-  return adapters.get(adapterKey(subtype as OltSelectableSubtype, firmware)) ?? null;
+  return (
+    adapters.get(adapterKey(subtype as ZteSelectableSubtype, firmware)) ?? null
+  );
 }
 
 export function listZteAdapters(): ZteOltAdapter[] {

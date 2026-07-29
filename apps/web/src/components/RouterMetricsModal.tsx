@@ -101,7 +101,9 @@ export function RouterMetricsModal({
     ? oltBoardImageUrl(device.subtype, board)
     : mikrotikBoardImageUrl(board) ?? '/mikrotik-generic.svg'
   const fallbackImg = isOlt
-    ? 'https://raio.smartolt.com/content/img/ZTE-C320.png'
+    ? device.subtype?.startsWith('huawei_')
+      ? '/olt/huawei-olt.svg'
+      : 'https://raio.smartolt.com/content/img/ZTE-C320.png'
     : '/mikrotik-generic.svg'
   const cur = historyQuery.data?.current
 

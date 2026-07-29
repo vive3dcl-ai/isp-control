@@ -254,10 +254,7 @@ export function isMercadoPagoConfigured(
 
 export type WhatsAppProvider = 'cloud_api' | 'baileys';
 export type WhatsAppBaileysStatus =
-  | 'disconnected'
-  | 'qr'
-  | 'connected'
-  | 'connecting';
+  'disconnected' | 'qr' | 'connected' | 'connecting';
 
 /**
  * Config módulo WhatsApp.
@@ -307,6 +304,37 @@ export function isWhatsAppConfigured(
     cfg.templateName?.trim() &&
     cfg.templateLanguage?.trim()
   );
+}
+
+/** Banner / modal: unexpected drop — not intentional logout or fresh QR pair. */
+export function baileysNeedsAttention(
+  cfg: Partial<WhatsAppModuleConfig> | null | undefined,
+): boolean {
+  if (!cfg || cfg.provider !== 'baileys') return false;
+  if (cfg.baileysStatus === 'connected' || cfg.baileysStatus === 'connecting') {
+    return false;
+  }
+  const reason = (cfg.lastDisconnectReason || '').toLowerCase();
+  if (
+    reason.includes('manualmente') ||
+    reason === 'sesión cerrada' ||
+    reason.includes('cerrada manualmente')
+  ) {
+    return false;
+  }
+  if (cfg.baileysStatus === 'qr') {
+    // User clicked “Conectar” → reason is just “Escanea el código QR”.
+    // Banner only if WhatsApp kicked the session and we need to pair again.
+    return (
+      reason.includes('teléfono') ||
+      reason.includes('conexión cerrada') ||
+      reason.includes('code=')
+    );
+  }
+  if (cfg.baileysStatus !== 'disconnected') return false;
+  // Fresh Baileys provider with no disconnect event yet.
+  if (!cfg.lastDisconnectAt || !cfg.lastDisconnectReason) return false;
+  return true;
 }
 
 /** Proveedores disponibles como método de pago de plataforma. */

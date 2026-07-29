@@ -105,12 +105,12 @@ export async function flushPendingPoles(
   savePendingPoles(tenantKey, left)
 
   // Asegurar que los locales siguen presentes
-  const local = loadMapDrafts(tenantKey)
+  const local = loadMapDrafts(tenantKey ?? undefined)
   const byId = new Map(local.map((d) => [d.id, d]))
   for (const p of pending) {
     if (!byId.has(p.id)) byId.set(p.id, p)
   }
-  saveMapDrafts(tenantKey, [...byId.values()])
+  saveMapDrafts(tenantKey ?? undefined, [...byId.values()])
 
   return { sent, left: left.length }
 }
@@ -119,7 +119,7 @@ export async function flushPendingPoles(
 export async function pullServerDrafts(
   tenantKey: string | null | undefined,
 ): Promise<MapDraftElement[]> {
-  const local = loadMapDrafts(tenantKey)
+  const local = loadMapDrafts(tenantKey ?? undefined)
   if (!isOnline()) return local
   try {
     const res = await apiFetch<{ elements: MapDraftElement[] }>(
@@ -134,7 +134,7 @@ export async function pullServerDrafts(
       byId.set(el.id, el)
     }
     const merged = [...byId.values()]
-    saveMapDrafts(tenantKey, merged)
+    saveMapDrafts(tenantKey ?? undefined, merged)
     return merged
   } catch {
     return local

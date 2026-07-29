@@ -9,15 +9,8 @@ import { TenantConnectionService } from '../database/tenant-connection.service';
 import type { IpPool } from './entities/ip-pool.entity';
 import type { NetworkDevice } from './entities/network-device.entity';
 import type { Onu } from './entities/onu.entity';
-import {
-  CreateIpPoolDto,
-  UpdateIpPoolDto,
-} from './dto/ip-pool.dto';
-import {
-  computeIpNetwork,
-  firstFreeIp,
-  isIpInUsable,
-} from './ip-pool.util';
+import { CreateIpPoolDto, UpdateIpPoolDto } from './dto/ip-pool.dto';
+import { computeIpNetwork, firstFreeIp, isIpInUsable } from './ip-pool.util';
 import { MikrotikClient } from './mikrotik.client';
 
 @Injectable()
@@ -81,8 +74,7 @@ export class IpPoolService {
     return {
       host: device.mgmtHost,
       port:
-        device.mgmtPort ??
-        (device.mgmtProtocol === 'rest_https' ? 443 : 8729),
+        device.mgmtPort ?? (device.mgmtProtocol === 'rest_https' ? 443 : 8729),
       username: device.mgmtUsername,
       password: device.mgmtPassword,
       protocol: device.mgmtProtocol ?? 'api_ssl',
@@ -109,9 +101,7 @@ export class IpPoolService {
     const iface = this.vlanIface(vlanId).toLowerCase();
     const found = ports.some((p) =>
       (p.vlans ?? []).some(
-        (v) =>
-          v.vlanId === vlanId ||
-          v.interfaceName?.toLowerCase() === iface,
+        (v) => v.vlanId === vlanId || v.interfaceName?.toLowerCase() === iface,
       ),
     );
     if (!found) {
@@ -134,11 +124,7 @@ export class IpPoolService {
       prefix: number;
     };
   }): Promise<string> {
-    await this.assertVlanOnRouter(
-      params.schema,
-      params.router,
-      params.vlanId,
-    );
+    await this.assertVlanOnRouter(params.schema, params.router, params.vlanId);
 
     const address = this.gatewayCidr(params.gateway, params.prefix);
     const iface = this.vlanIface(params.vlanId);
@@ -155,8 +141,7 @@ export class IpPoolService {
     // Moved to another router or VLAN: remove old gateway first.
     if (
       prev &&
-      (prev.router.id !== params.router.id ||
-        prev.vlanId !== params.vlanId)
+      (prev.router.id !== params.router.id || prev.vlanId !== params.vlanId)
     ) {
       const oldAddr = this.gatewayCidr(prev.gateway, prev.prefix);
       const oldIface = this.vlanIface(prev.vlanId);
@@ -238,10 +223,7 @@ export class IpPoolService {
     };
   }
 
-  async list(
-    user: AuthUser,
-    filters?: { purpose?: string; oltId?: string },
-  ) {
+  async list(user: AuthUser, filters?: { purpose?: string; oltId?: string }) {
     const schema = this.requireSchema(user);
     try {
       await this.reclaimOrphanAllocations(schema);
@@ -297,9 +279,7 @@ export class IpPoolService {
         const net = this.poolStatsSafe(p.gateway, p.prefix);
         return this.serialize(p, {
           oltName: nameById.get(p.oltId) ?? null,
-          routerName: p.routerId
-            ? (nameById.get(p.routerId) ?? null)
-            : null,
+          routerName: p.routerId ? (nameById.get(p.routerId) ?? null) : null,
           assigned: counts.get(p.id) ?? 0,
           total: net.totalUsable,
         });
@@ -465,9 +445,7 @@ export class IpPoolService {
       network: net.network,
       dns1: dto.purpose === 'internet' ? dto.dns1!.trim() : null,
       dns2:
-        dto.purpose === 'internet' && dto.dns2?.trim()
-          ? dto.dns2.trim()
-          : null,
+        dto.purpose === 'internet' && dto.dns2?.trim() ? dto.dns2.trim() : null,
     });
     const saved = await repo.save(p);
     return this.serialize(saved, {
@@ -719,7 +697,10 @@ export class IpPoolService {
     const joinRepo =
       await this.tenantConnections.getTr069ProfileOltRepository(schema);
     const attached = await joinRepo.find({ where: { deviceId: onu.oltId } });
-    if (attached.length > 0 && !attached.some((j) => j.profileId === profileId)) {
+    if (
+      attached.length > 0 &&
+      !attached.some((j) => j.profileId === profileId)
+    ) {
       throw new BadRequestException(
         `El perfil "${profile.name}" no está adjunto a esta OLT. Adjúntalo en Ajustes → TR069.`,
       );
@@ -753,9 +734,10 @@ export class IpPoolService {
       const r = await this.setOnuTr069(user, onuId, false);
       return { mgmtIp: r.mgmtIp, enabled: false };
     }
-    return this.setOnuTr069(user, onuId, true, undefined, vlanId).then(
-      (r) => ({ mgmtIp: r.mgmtIp, enabled: r.enabled }),
-    );
+    return this.setOnuTr069(user, onuId, true, undefined, vlanId).then((r) => ({
+      mgmtIp: r.mgmtIp,
+      enabled: r.enabled,
+    }));
   }
 
   /**
@@ -835,11 +817,7 @@ export class IpPoolService {
     return { mgmtIp: null as string | null, enabled: false };
   }
 
-  private async assignMgmtIp(
-    schema: string,
-    onu: Onu,
-    vlanId?: number,
-  ) {
+  private async assignMgmtIp(schema: string, onu: Onu, vlanId?: number) {
     const allocRepo =
       await this.tenantConnections.getIpPoolAllocationRepository(schema);
     const onuRepo = await this.tenantConnections.getOnuRepository(schema);
@@ -1031,8 +1009,7 @@ export class IpPoolService {
   }
 
   private wanAssignResult(pool: IpPool, wanIp: string) {
-    const mask =
-      pool.prefix === 0 ? 0 : (~0 << (32 - pool.prefix)) >>> 0;
+    const mask = pool.prefix === 0 ? 0 : (~0 << (32 - pool.prefix)) >>> 0;
     const wanMask = [
       (mask >>> 24) & 255,
       (mask >>> 16) & 255,

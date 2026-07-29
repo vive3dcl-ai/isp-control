@@ -381,6 +381,8 @@ const TOPOLOGY_ALTER = (schema: string) => `
   ALTER TABLE "${schema}"."network_devices"
     ADD COLUMN IF NOT EXISTS "olt_vlan_meta" jsonb NOT NULL DEFAULT '{}'::jsonb;
   ALTER TABLE "${schema}"."network_devices"
+    ADD COLUMN IF NOT EXISTS "olt_inventory_cache" jsonb NULL;
+  ALTER TABLE "${schema}"."network_devices"
     ADD COLUMN IF NOT EXISTS "onus_import_prompted_at" TIMESTAMPTZ NULL;
 
   CREATE TABLE IF NOT EXISTS "${schema}"."device_metric_samples" (
@@ -532,6 +534,12 @@ const TOPOLOGY_ALTER = (schema: string) => `
   );
   CREATE INDEX IF NOT EXISTS "idx_onus_olt" ON "${schema}"."onus" ("olt_id");
   CREATE INDEX IF NOT EXISTS "idx_onus_sn" ON "${schema}"."onus" ("sn");
+  ALTER TABLE "${schema}"."onus"
+    ADD COLUMN IF NOT EXISTS "online_since" TIMESTAMPTZ NULL;
+  ALTER TABLE "${schema}"."onus"
+    ADD COLUMN IF NOT EXISTS "if_index" int NULL;
+  ALTER TABLE "${schema}"."onus"
+    ALTER COLUMN "if_index" TYPE bigint USING "if_index"::bigint;
 
   CREATE TABLE IF NOT EXISTS "${schema}"."onu_metric_samples" (
     "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -734,7 +742,7 @@ const TOPOLOGY_ALTER = (schema: string) => `
 `;
 
 /** Bump when tenant DDL adds new tables/columns so existing processes re-apply. */
-const TENANT_SCHEMA_VERSION = 42;
+const TENANT_SCHEMA_VERSION = 45;
 
 @Injectable()
 export class TenantConnectionService implements OnModuleDestroy {
@@ -929,9 +937,7 @@ export class TenantConnectionService implements OnModuleDestroy {
     return ds.getRepository(OnuProfile);
   }
 
-  async getOnuTypeRepository(
-    schemaName: string,
-  ): Promise<Repository<OnuType>> {
+  async getOnuTypeRepository(schemaName: string): Promise<Repository<OnuType>> {
     await this.ensureTenantSchema(schemaName);
     const ds = await this.getDataSource(schemaName);
     return ds.getRepository(OnuType);
@@ -1005,9 +1011,7 @@ export class TenantConnectionService implements OnModuleDestroy {
     return ds.getRepository(InvoiceTemplate);
   }
 
-  async getInvoiceRepository(
-    schemaName: string,
-  ): Promise<Repository<Invoice>> {
+  async getInvoiceRepository(schemaName: string): Promise<Repository<Invoice>> {
     await this.ensureTenantSchema(schemaName);
     const ds = await this.getDataSource(schemaName);
     return ds.getRepository(Invoice);

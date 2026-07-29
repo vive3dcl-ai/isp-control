@@ -5,6 +5,14 @@ import type { OltPonPortRow, OltPonPortsResponse } from '../lib/topology'
 import { RogueOnuDetectModal } from './RogueOnuDetectModal'
 import { useNotify } from './NotifyProvider'
 import { ModalPortal } from './ModalPortal'
+import {
+  oltBtnDanger,
+  oltBtnPrimary,
+  oltBtnSecondary,
+  oltBtnWarn,
+  oltMetaClass,
+  oltToolbarClass,
+} from './oltPanelUi'
 
 
 const inputClass =
@@ -61,6 +69,8 @@ export function OltPonPortsPanel({
   const [rogueOpen, setRogueOpen] = useState(false)
   const [rogueSlot, setRogueSlot] = useState<string | null>(null)
 
+  const [syncing, setSyncing] = useState(false)
+
   const portsQuery = useQuery({
     queryKey: ['app', 'topology', 'devices', deviceId, 'pon-ports'],
     queryFn: () =>
@@ -70,10 +80,19 @@ export function OltPonPortsPanel({
     retry: 1,
   })
 
-  function invalidate() {
-    void queryClient.invalidateQueries({
-      queryKey: ['app', 'topology', 'devices', deviceId, 'pon-ports'],
-    })
+  async function syncFromOlt() {
+    setSyncing(true)
+    try {
+      const data = await apiFetch<OltPonPortsResponse>(
+        `/app/topology/devices/${deviceId}/pon-ports?refresh=1`,
+      )
+      queryClient.setQueryData(
+        ['app', 'topology', 'devices', deviceId, 'pon-ports'],
+        data,
+      )
+    } finally {
+      setSyncing(false)
+    }
   }
 
   const enableAllMutation = useMutation({
@@ -85,7 +104,7 @@ export function OltPonPortsPanel({
     onSuccess: (r: { message?: string }) => {
       setActionMsg(r.message ?? 'Puertos habilitados')
       setActionError(null)
-      invalidate()
+      void syncFromOlt()
     },
     onError: (e: Error) => setActionError(e.message),
   })
@@ -99,7 +118,7 @@ export function OltPonPortsPanel({
     onSuccess: (r: { message?: string }) => {
       setActionMsg(r.message ?? 'Reinicio enviado')
       setActionError(null)
-      invalidate()
+      void syncFromOlt()
     },
     onError: (e: Error) => setActionError(e.message),
   })
@@ -122,7 +141,7 @@ export function OltPonPortsPanel({
     onSuccess: () => {
       setConfigurePort(null)
       setActionMsg('Puerto guardado')
-      invalidate()
+      void syncFromOlt()
     },
     onError: (e: Error) => setActionError(e.message),
   })
@@ -163,16 +182,16 @@ export function OltPonPortsPanel({
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap gap-2">
+      <div className={oltToolbarClass}>
         <button
           type="button"
-          disabled={portsQuery.isFetching}
-          onClick={() => void portsQuery.refetch()}
-          className="rounded-lg bg-[var(--accent)] px-3 py-2 text-sm font-medium text-white hover:bg-[var(--accent-hover)] disabled:opacity-60"
+          disabled={portsQuery.isFetching || syncing}
+          onClick={() => void syncFromOlt()}
+          className={oltBtnPrimary}
         >
-          {portsQuery.isFetching
-            ? 'Actualizando…'
-            : 'Refrescar info de puertos PON'}
+          {portsQuery.isFetching || syncing
+            ? 'Sincronizando…'
+            : 'Sincronizar'}
         </button>
         {canWrite && (
           <>
@@ -190,7 +209,7 @@ export function OltPonPortsPanel({
                   if (ok) enableAllMutation.mutate()
                 })
               }}
-              className="rounded-lg bg-[var(--accent)] px-3 py-2 text-sm font-medium text-white disabled:opacity-60"
+              className={oltBtnSecondary}
             >
               Habilitar todos los puertos PON
             </button>
@@ -209,7 +228,7 @@ export function OltPonPortsPanel({
                   if (ok) rebootOnusMutation.mutate({ all: true })
                 })
               }}
-              className="rounded-lg bg-orange-600 px-3 py-2 text-sm font-medium text-white hover:bg-orange-500 disabled:opacity-60"
+              className={oltBtnWarn}
             >
               Reiniciar todas las ONUs
             </button>
@@ -219,11 +238,22 @@ export function OltPonPortsPanel({
                 setRogueSlot(null)
                 setRogueOpen(true)
               }}
-              className="rounded-lg bg-[var(--danger)] px-3 py-2 text-sm font-medium text-white hover:opacity-90"
+              className={oltBtnDanger}
             >
               Detección de ONU deshonesta
             </button>
           </>
+        )}
+        {(portsQuery.data?.syncedAt || portsQuery.data?.probedAt) && (
+          <span className={oltMetaClass}>
+            Última sincronización:{' '}
+            {new Date(
+              portsQuery.data.syncedAt || portsQuery.data.probedAt,
+            ).toLocaleString()}
+          </span>
+        )}
+        {portsQuery.data?.summary && (
+          <span className={oltMetaClass}>{portsQuery.data.summary}</span>
         )}
       </div>
 
@@ -243,18 +273,6 @@ export function OltPonPortsPanel({
             ))}
           </select>
         </label>
-        <span className="text-[var(--text-muted)]">
-          {portsQuery.isLoading
-            ? 'Cargando…'
-            : portsQuery.data
-              ? 'Todos cargados.'
-              : ''}
-        </span>
-        {portsQuery.data?.summary && (
-          <span className="text-xs text-[var(--text-muted)]">
-            {portsQuery.data.summary}
-          </span>
-        )}
       </div>
 
       {actionError && (
@@ -271,7 +289,7 @@ export function OltPonPortsPanel({
 
       {portsQuery.isLoading && (
         <p className="text-sm text-[var(--text-muted)]">
-          Consultando OLT (show card + estado ONU + óptico)… puede tardar.
+          Cargando puertos PON…
         </p>
       )}
 
@@ -571,7 +589,7 @@ export function OltPonPortsPanel({
             <div className="flex justify-end gap-2 border-t border-[var(--border)] px-5 py-3">
               <button
                 type="button"
-                className="rounded-lg px-3 py-2 text-sm text-[var(--text-muted)] hover:text-[var(--text)]"
+                className={oltBtnSecondary}
                 onClick={() => setConfigurePort(null)}
               >
                 Cerrar
@@ -580,7 +598,7 @@ export function OltPonPortsPanel({
                 <button
                   type="button"
                   disabled={saveConfigMutation.isPending}
-                  className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-60"
+                  className={oltBtnPrimary}
                   onClick={() => saveConfigMutation.mutate()}
                 >
                   {saveConfigMutation.isPending ? 'Guardando…' : 'Guardar'}

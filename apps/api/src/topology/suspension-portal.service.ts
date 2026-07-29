@@ -142,10 +142,7 @@ export class SuspensionPortalService {
     return this.buildPortalHtml(tenant, templateId);
   }
 
-  private buildPortalHtml(
-    tenant: Tenant,
-    templateIdOverride?: string,
-  ): string {
+  private buildPortalHtml(tenant: Tenant, templateIdOverride?: string): string {
     const brand = this.escapeHtml(tenant.name || 'ISP');
     const phone = this.escapeHtml(tenant.phone || '');
     const email = this.escapeHtml(tenant.email || '');
@@ -188,7 +185,9 @@ export class SuspensionPortalService {
         'Activa «Portal de suspensión» antes de configurar MikroTik',
       );
     }
-    const uniqueIds = [...new Set(routerIds.map((id) => id.trim()).filter(Boolean))];
+    const uniqueIds = [
+      ...new Set(routerIds.map((id) => id.trim()).filter(Boolean)),
+    ];
     if (uniqueIds.length === 0) {
       throw new BadRequestException('Selecciona al menos un MikroTik');
     }
@@ -350,9 +349,7 @@ export class SuspensionPortalService {
     // El portal usa API binaria (no REST). rest_https → intentar api_ssl en 8729.
     const useApiPlain = protocol === 'api_plain';
     const useTls = !useApiPlain;
-    const port =
-      device.mgmtPort ??
-      (useApiPlain ? 8728 : 8729);
+    const port = device.mgmtPort ?? (useApiPlain ? 8728 : 8729);
     if (protocol === 'rest_https' && device.mgmtPort === 443) {
       // Puerto REST no sirve para API binaria
       throw new BadRequestException(
@@ -468,10 +465,7 @@ export class SuspensionPortalService {
     const read = await this.runMany(conn, [
       ['/ip/firewall/nat/print'],
       ['/ip/firewall/filter/print'],
-      [
-        '/ip/firewall/address-list/print',
-        `?list=${SUSPENDED_ALLOW_LIST}`,
-      ],
+      ['/ip/firewall/address-list/print', `?list=${SUSPENDED_ALLOW_LIST}`],
     ]);
     const natRows = read[0]?.rows ?? [];
     const filterRows = read[1]?.rows ?? [];

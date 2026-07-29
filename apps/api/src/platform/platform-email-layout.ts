@@ -4,67 +4,67 @@
  */
 
 export type PlatformEmailBrand = {
-  productName: string
-  logoUrl: string
-  footerText: string
-  footerCopyright: string
-}
+  productName: string;
+  logoUrl: string;
+  footerText: string;
+  footerCopyright: string;
+};
 
-const ACCENT = '#2f9cff'
-const ACCENT_DARK = '#1f8aeb'
-const BG = '#eef2f7'
-const CARD = '#ffffff'
-const TEXT = '#0f172a'
-const MUTED = '#64748b'
-const BORDER = '#e2e8f0'
+const ACCENT = '#2f9cff';
+const ACCENT_DARK = '#1f8aeb';
+const BG = '#eef2f7';
+const CARD = '#ffffff';
+const TEXT = '#0f172a';
+const MUTED = '#64748b';
+const BORDER = '#e2e8f0';
 
 export function escapeHtml(s: string): string {
   return s
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
+    .replace(/"/g, '&quot;');
 }
 
 /** Convierte texto plano a párrafos HTML seguros. */
 export function textToEmailHtml(text: string): string {
-  const lines = text.replace(/\r\n/g, '\n').split('\n')
-  const blocks: string[] = []
-  let buf: string[] = []
+  const lines = text.replace(/\r\n/g, '\n').split('\n');
+  const blocks: string[] = [];
+  let buf: string[] = [];
   const flush = () => {
-    if (!buf.length) return
+    if (!buf.length) return;
     blocks.push(
       `<p style="margin:0 0 14px;color:${TEXT};font-size:15px;line-height:1.55">${escapeHtml(buf.join(' '))}</p>`,
-    )
-    buf = []
-  }
+    );
+    buf = [];
+  };
   for (const line of lines) {
     if (!line.trim()) {
-      flush()
-      continue
+      flush();
+      continue;
     }
-    buf.push(line.trim())
+    buf.push(line.trim());
   }
-  flush()
-  return blocks.join('') || `<p style="margin:0;color:${TEXT}">&nbsp;</p>`
+  flush();
+  return blocks.join('') || `<p style="margin:0;color:${TEXT}">&nbsp;</p>`;
 }
 
 export function emailCtaButton(url: string, label: string): string {
-  const safeUrl = escapeHtml(url)
-  const safeLabel = escapeHtml(label)
+  const safeUrl = escapeHtml(url);
+  const safeLabel = escapeHtml(label);
   return `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:24px 0">
   <tr>
     <td style="border-radius:10px;background:${ACCENT}">
       <a href="${safeUrl}" style="display:inline-block;padding:12px 22px;color:#ffffff;text-decoration:none;font-weight:600;font-size:15px;border-radius:10px">${safeLabel}</a>
     </td>
   </tr>
-</table>`
+</table>`;
 }
 
 function emailSafeLogoUrl(logoUrl: string): string {
-  const u = (logoUrl || '').trim()
-  if (/^https?:\/\//i.test(u)) return u
-  return ''
+  const u = (logoUrl || '').trim();
+  if (/^https?:\/\//i.test(u)) return u;
+  return '';
 }
 
 /**
@@ -72,20 +72,20 @@ function emailSafeLogoUrl(logoUrl: string): string {
  * @param skipOuter Si el cuerpo ya es un documento completo, aún se añade cabecera/pie de plataforma.
  */
 export function buildPlatformEmailHtml(opts: {
-  brand: PlatformEmailBrand
-  bodyHtml: string
-  title?: string
-  preheader?: string
+  brand: PlatformEmailBrand;
+  bodyHtml: string;
+  title?: string;
+  preheader?: string;
 }): string {
-  const product = escapeHtml(opts.brand.productName || 'ISP Control')
-  const footerText = escapeHtml(opts.brand.footerText || '')
-  const footerCopyright = escapeHtml(opts.brand.footerCopyright || '')
-  const title = opts.title ? escapeHtml(opts.title) : ''
-  const preheader = escapeHtml(opts.preheader || opts.title || '')
-  const logoSrc = emailSafeLogoUrl(opts.brand.logoUrl)
+  const product = escapeHtml(opts.brand.productName || 'ISP Control');
+  const footerText = escapeHtml(opts.brand.footerText || '');
+  const footerCopyright = escapeHtml(opts.brand.footerCopyright || '');
+  const title = opts.title ? escapeHtml(opts.title) : '';
+  const preheader = escapeHtml(opts.preheader || opts.title || '');
+  const logoSrc = emailSafeLogoUrl(opts.brand.logoUrl);
   const logoBlock = logoSrc
     ? `<img src="${escapeHtml(logoSrc)}" alt="${product}" width="140" style="display:block;max-width:140px;max-height:48px;height:auto;border:0;outline:none" />`
-    : `<div style="font-size:18px;font-weight:700;color:${ACCENT};letter-spacing:0.04em">${product}</div>`
+    : `<div style="font-size:18px;font-weight:700;color:${ACCENT};letter-spacing:0.04em">${product}</div>`;
 
   return `<!DOCTYPE html>
 <html lang="es">
@@ -145,5 +145,5 @@ export function buildPlatformEmailHtml(opts: {
     </tr>
   </table>
 </body>
-</html>`
+</html>`;
 }

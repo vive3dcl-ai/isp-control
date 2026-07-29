@@ -129,8 +129,10 @@ export class TopologyController {
   getDevicePonPorts(
     @CurrentUser() user: AuthUser,
     @Param('id', ParseUUIDPipe) id: string,
+    @Query('refresh') refresh?: string,
   ) {
-    return this.topology.getDevicePonPorts(user, id);
+    const force = refresh === '1' || refresh === 'true' || refresh === 'yes';
+    return this.topology.getDevicePonPorts(user, id, force);
   }
 
   @Patch('devices/:id/pon-ports/config')
@@ -207,8 +209,10 @@ export class TopologyController {
   getDeviceUplinks(
     @CurrentUser() user: AuthUser,
     @Param('id', ParseUUIDPipe) id: string,
+    @Query('refresh') refresh?: string,
   ) {
-    return this.topology.getDeviceUplinks(user, id);
+    const force = refresh === '1' || refresh === 'true' || refresh === 'yes';
+    return this.topology.getDeviceUplinks(user, id, force);
   }
 
   @Patch('devices/:id/uplinks/config')
@@ -233,8 +237,10 @@ export class TopologyController {
   getDeviceVlans(
     @CurrentUser() user: AuthUser,
     @Param('id', ParseUUIDPipe) id: string,
+    @Query('refresh') refresh?: string,
   ) {
-    return this.topology.getDeviceVlans(user, id);
+    const force = refresh === '1' || refresh === 'true' || refresh === 'yes';
+    return this.topology.getDeviceVlans(user, id, force);
   }
 
   @Put('devices/:id/vlans')
@@ -267,8 +273,10 @@ export class TopologyController {
   getDeviceSpeedProfiles(
     @CurrentUser() user: AuthUser,
     @Param('id', ParseUUIDPipe) id: string,
+    @Query('refresh') refresh?: string,
   ) {
-    return this.topology.getDeviceSpeedProfiles(user, id);
+    const force = refresh === '1' || refresh === 'true' || refresh === 'yes';
+    return this.topology.getDeviceSpeedProfiles(user, id, force);
   }
 
   @Put('devices/:id/speed-profiles')
@@ -326,10 +334,7 @@ export class TopologyController {
 
   @Post('ports')
   @TenantRoles(...CRM_WRITE_ROLES)
-  createPort(
-    @CurrentUser() user: AuthUser,
-    @Body() dto: CreateNetworkPortDto,
-  ) {
+  createPort(@CurrentUser() user: AuthUser, @Body() dto: CreateNetworkPortDto) {
     return this.topology.createPort(user, dto);
   }
 
@@ -408,10 +413,7 @@ export class TopologyController {
 
   @Post('links')
   @TenantRoles(...CRM_WRITE_ROLES)
-  createLink(
-    @CurrentUser() user: AuthUser,
-    @Body() dto: CreateNetworkLinkDto,
-  ) {
+  createLink(@CurrentUser() user: AuthUser, @Body() dto: CreateNetworkLinkDto) {
     return this.topology.createLink(user, dto);
   }
 

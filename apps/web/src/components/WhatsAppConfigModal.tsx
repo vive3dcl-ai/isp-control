@@ -53,7 +53,11 @@ function WhatsAppConfigForm({
     queryFn: () =>
       apiFetch<WhatsAppConfig>('/app/settings/modules/whatsapp/baileys/status'),
     enabled: provider === 'baileys',
-    refetchInterval: provider === 'baileys' ? 4000 : false,
+    refetchInterval: (q) => {
+      if (provider !== 'baileys') return false
+      const st = q.state.data?.baileysStatus
+      return st === 'connecting' || st === 'qr' ? 1500 : 4000
+    },
   })
 
   useEffect(() => {
@@ -69,11 +73,19 @@ function WhatsAppConfigForm({
   }, [query.data])
 
   useEffect(() => {
-    const data = statusQuery.data ?? query.data
+    const data = statusQuery.data
     if (!data) return
-    if (data.qrDataUrl) setQrDataUrl(data.qrDataUrl)
-    else if (data.baileysStatus === 'connected') setQrDataUrl(null)
-  }, [statusQuery.data, query.data])
+    if (data.qrDataUrl) {
+      setQrDataUrl(data.qrDataUrl)
+      return
+    }
+    if (
+      data.baileysStatus === 'connected' ||
+      data.baileysStatus === 'disconnected'
+    ) {
+      setQrDataUrl(null)
+    }
+  }, [statusQuery.data])
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -129,7 +141,9 @@ function WhatsAppConfigForm({
       setStatusMsg(
         data.baileysStatus === 'connected'
           ? 'WhatsApp conectado'
-          : 'Escanea el QR con WhatsApp',
+          : data.qrDataUrl
+            ? 'Escanea el QR con WhatsApp'
+            : 'Generando QR…',
       )
     },
   })
@@ -145,6 +159,12 @@ function WhatsAppConfigForm({
         ['app', 'settings', 'modules', 'whatsapp'],
         data,
       )
+      void queryClient.invalidateQueries({
+        queryKey: ['app', 'settings', 'modules'],
+      })
+      void queryClient.invalidateQueries({
+        queryKey: ['app', 'settings', 'modules', 'whatsapp', 'baileys-status'],
+      })
       setQrDataUrl(null)
       setStatusMsg('Sesión Baileys cerrada')
     },
@@ -333,6 +353,13 @@ function WhatsAppConfigForm({
                     />
                   </div>
                 )}
+                {!qrDataUrl &&
+                  (baileysStatus === 'connecting' ||
+                    startMutation.isPending) && (
+                    <p className="text-center text-xs text-[var(--text-muted)]">
+                      Generando código QR…
+                    </p>
+                  )}
                 {canWrite && (
                   <div className="flex flex-wrap gap-2">
                     <button

@@ -1,8 +1,4 @@
-export const ROUTER_SUBTYPES = [
-  'mikrotik',
-  'cisco',
-  'edge_router',
-] as const;
+export const ROUTER_SUBTYPES = ['mikrotik', 'cisco', 'edge_router'] as const;
 
 export type RouterSubtype = (typeof ROUTER_SUBTYPES)[number];
 

@@ -62,10 +62,7 @@ export class OnuSettingsController {
 
   @Post('types')
   @TenantRoles(...CRM_WRITE_ROLES)
-  createType(
-    @CurrentUser() user: AuthUser,
-    @Body() dto: CreateOnuTypeDto,
-  ) {
+  createType(@CurrentUser() user: AuthUser, @Body() dto: CreateOnuTypeDto) {
     return this.onuSettings.createType(user, dto);
   }
 

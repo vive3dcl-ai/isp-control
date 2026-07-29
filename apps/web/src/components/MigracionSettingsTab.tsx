@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '../lib/api'
 import type { TopologyDevice } from '../lib/topology'
 import type { IpPoolsResponse } from '../lib/ip-pools'
@@ -8,18 +8,17 @@ import {
   filterBySourceVlan,
   scanMigrationOlts,
   type MigrationCandidate,
-  type MigrationScanResponse,
   type MigrationSegmentConfig,
 } from '../lib/onu-migration'
 import { MigrationWizardModal } from './MigrationWizardModal'
 
 export function MigracionSettingsTab({ canWrite }: { canWrite: boolean }) {
+  const queryClient = useQueryClient()
   const [oltId, setOltId] = useState('')
   const [sourceVlan, setSourceVlan] = useState<string>('')
   const [mgmtVlanPick, setMgmtVlanPick] = useState('')
   const [wanVlanPick, setWanVlanPick] = useState('')
   const [tr069ProfilePick, setTr069ProfilePick] = useState('')
-  const [scan, setScan] = useState<MigrationScanResponse | null>(null)
   const [migratedIfs, setMigratedIfs] = useState<Set<string>>(new Set())
   const [wizardOpen, setWizardOpen] = useState(false)
   const [current, setCurrent] = useState<MigrationCandidate | null>(null)
@@ -39,6 +38,14 @@ export function MigracionSettingsTab({ canWrite }: { canWrite: boolean }) {
   )
 
   const selectedOlt = olts.find((o) => o.id === oltId)
+
+  const inventoryQuery = useQuery({
+    queryKey: ['app', 'onus', 'migration', 'scan', oltId],
+    queryFn: () => scanMigrationOlts(oltId),
+    enabled: !!oltId && canWrite,
+  })
+
+  const scan = inventoryQuery.data ?? null
 
   const mgmtPoolsQuery = useQuery({
     queryKey: ['app', 'settings', 'ip-pools', 'management', oltId],
@@ -71,15 +78,6 @@ export function MigracionSettingsTab({ canWrite }: { canWrite: boolean }) {
     return all.filter((p) => !p.oltIds?.length || p.oltIds.includes(oltId))
   }, [tr069Query.data?.profiles, oltId])
 
-  const scanMutation = useMutation({
-    mutationFn: () => scanMigrationOlts(oltId),
-    onSuccess: (data) => {
-      setScan(data)
-      setMigratedIfs(new Set())
-      setSourceVlan('')
-    },
-  })
-
   const sourceVlanNum = sourceVlan ? Number(sourceVlan) : null
 
   const pending = useMemo(() => {
@@ -95,13 +93,15 @@ export function MigracionSettingsTab({ canWrite }: { canWrite: boolean }) {
 
   const segmentDone = segmentTotal - pending.length
 
+  const busy = inventoryQuery.isFetching
+
   const canStart =
     canWrite &&
     !!oltId &&
     !!mgmtVlanPick &&
     !!wanVlanPick &&
     pending.length > 0 &&
-    !scanMutation.isPending
+    !busy
 
   const segmentConfig: MigrationSegmentConfig | null =
     selectedOlt && mgmtVlanPick && wanVlanPick
@@ -125,6 +125,9 @@ export function MigracionSettingsTab({ canWrite }: { canWrite: boolean }) {
   function handleMigrated(onuIf: string) {
     const nextSet = new Set(migratedIfs).add(onuIf)
     setMigratedIfs(nextSet)
+    void queryClient.invalidateQueries({
+      queryKey: ['app', 'onus', 'migration', 'scan', oltId],
+    })
     const nextPending = filterBySourceVlan(
       scan?.candidates ?? [],
       sourceVlanNum,
@@ -146,15 +149,14 @@ export function MigracionSettingsTab({ canWrite }: { canWrite: boolean }) {
       <div>
         <h2 className="text-base font-semibold">Migración de ONUs</h2>
         <p className="mt-1 text-sm text-[var(--text-muted)]">
-          Detecta ONUs autorizadas en la OLT sin cliente/servicio, migra por
-          VLAN de origen (una a una) creando cliente, plan y red nueva, y
-          verifica que queden online.
+          Al elegir la OLT se listan las ONUs del inventario sin
+          cliente/servicio. Elige VLAN destino y migra una a una.
         </p>
       </div>
 
       {!canWrite && (
         <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
-          Necesitás permiso de escritura CRM/topología para migrar.
+          Necesitas permiso de escritura CRM/topología para migrar.
         </p>
       )}
 
@@ -167,7 +169,6 @@ export function MigracionSettingsTab({ canWrite }: { canWrite: boolean }) {
             disabled={!canWrite}
             onChange={(e) => {
               setOltId(e.target.value)
-              setScan(null)
               setMigratedIfs(new Set())
               setMgmtVlanPick('')
               setWanVlanPick('')
@@ -183,17 +184,6 @@ export function MigracionSettingsTab({ canWrite }: { canWrite: boolean }) {
             ))}
           </select>
         </label>
-
-        <div className="flex items-end">
-          <button
-            type="button"
-            disabled={!canWrite || !oltId || scanMutation.isPending}
-            onClick={() => scanMutation.mutate()}
-            className="w-full rounded-lg bg-[var(--accent)] px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
-          >
-            {scanMutation.isPending ? 'Escaneando OLT…' : 'Escanear'}
-          </button>
-        </div>
 
         <label className="block text-sm">
           <span className="mb-1 block text-[var(--text-muted)]">
@@ -279,9 +269,15 @@ export function MigracionSettingsTab({ canWrite }: { canWrite: boolean }) {
         </label>
       </div>
 
-      {scanMutation.isError && (
+      {inventoryQuery.isError && (
         <p className="text-sm text-[var(--danger)]">
-          {(scanMutation.error as Error).message}
+          {(inventoryQuery.error as Error).message}
+        </p>
+      )}
+
+      {oltId && inventoryQuery.isLoading && (
+        <p className="text-sm text-[var(--text-muted)]">
+          Cargando inventario…
         </p>
       )}
 
@@ -290,8 +286,8 @@ export function MigracionSettingsTab({ canWrite }: { canWrite: boolean }) {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="text-sm text-[var(--text-muted)]">
               OLT <strong className="text-[var(--text)]">{scan.oltName}</strong>
-              : {scan.totalLive} en OLT · {scan.totalCandidates} sin
-              cliente/servicio · segmento {pending.length} pendientes
+              : {scan.totalCandidates} sin cliente/servicio · segmento{' '}
+              {pending.length} pendientes
             </div>
             <button
               type="button"
@@ -355,15 +351,19 @@ export function MigracionSettingsTab({ canWrite }: { canWrite: boolean }) {
                           </div>
                         </td>
                         <td className="px-3 py-2 text-xs">
-                          {(c.vlans.length ? c.vlans : c.vlan != null ? [c.vlan] : []).join(
-                            ', ',
-                          ) || '—'}
+                          {(c.vlans.length
+                            ? c.vlans
+                            : c.vlan != null
+                              ? [c.vlan]
+                              : []
+                          ).join(', ') || '—'}
                         </td>
                         <td className="px-3 py-2">
                           {c.suggestedClientName ? (
                             <div>
                               <div className="max-w-[14rem] truncate">
-                                {c.suggestedFirstName || c.suggestedClientName}
+                                {c.suggestedFirstName ||
+                                  c.suggestedClientName}
                                 {c.suggestedLastName
                                   ? ` ${c.suggestedLastName}`
                                   : ''}
@@ -375,7 +375,9 @@ export function MigracionSettingsTab({ canWrite }: { canWrite: boolean }) {
                               ) : null}
                             </div>
                           ) : (
-                            <span className="text-[var(--text-muted)]">—</span>
+                            <span className="text-[var(--text-muted)]">
+                              —
+                            </span>
                           )}
                         </td>
                         <td className="px-3 py-2 text-xs">
@@ -425,8 +427,7 @@ export function MigracionSettingsTab({ canWrite }: { canWrite: boolean }) {
 
           {pct === 100 && segmentTotal > 0 && (
             <p className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">
-              Segmento completo (100%). Elegir otra VLAN origen o volver a
-              escanear.
+              Segmento completo (100%). Elige otra VLAN origen.
             </p>
           )}
         </div>

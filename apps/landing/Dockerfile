@@ -1,5 +1,5 @@
 # Static marketing landing — nginx
-FROM nginx:1.27-alpine
+FROM nginx:1.30.4-alpine3.24
 RUN apk add --no-cache gettext
 COPY apps/landing/nginx.conf /etc/nginx/conf.d/default.conf
 COPY apps/landing/public /usr/share/nginx/html

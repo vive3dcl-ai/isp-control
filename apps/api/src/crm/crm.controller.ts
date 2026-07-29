@@ -180,10 +180,7 @@ export class CrmController {
 
   @Post('service-plans')
   @TenantRoles(...CRM_WRITE_ROLES)
-  createPlan(
-    @CurrentUser() user: AuthUser,
-    @Body() dto: CreateServicePlanDto,
-  ) {
+  createPlan(@CurrentUser() user: AuthUser, @Body() dto: CreateServicePlanDto) {
     return this.crm.createPlan(user, dto);
   }
 

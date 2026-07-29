@@ -10,9 +10,7 @@ import type { AuthUser } from '../auth/auth.types';
 import { TenantConnectionService } from '../database/tenant-connection.service';
 import { Tenant } from '../tenants/entities/tenant.entity';
 import { SupportService } from '../support/support.service';
-import type {
-  NetworkDeviceType,
-} from './entities/network-device.entity';
+import type { NetworkDeviceType } from './entities/network-device.entity';
 import {
   INTERNET_DEVICE_TYPE,
   INTERNET_LINKABLE_TYPES,
@@ -27,18 +25,33 @@ import {
 } from './dto/topology.dto';
 import { MikrotikClient } from './mikrotik.client';
 import { ZteOltClient } from './zte-olt.client';
+import { ZteOltSnmpClient } from './zte-olt-snmp.client';
+import { HuaweiOltClient } from './huawei-olt.client';
+import { HuaweiOltSnmpClient } from './huawei-olt-snmp.client';
 import type { NetworkDevice } from './entities/network-device.entity';
 import { DeviceMetricSample } from './entities/device-metric-sample.entity';
 import {
   DEFAULT_OLT_PORTS,
   detectFirmwareFamily,
   detectOltSubtypeFromProduct,
+  getChassisProfile,
+  detectHuaweiSubtypeFromProduct,
+  getHuaweiChassisProfile,
+  isHuaweiOltDevice,
+  isManagedOltDevice,
   isZteOltDevice,
   OLT_SELECTABLE_SUBTYPES,
   OLT_SUBTYPE_LABELS,
 } from './olt.constants';
 import { formatVlanList } from './zte-olt-uplink.util';
 import { OnuTypeOltSyncService } from './onu-type-olt-sync.service';
+import {
+  OLT_INVENTORY_CONFIG_TTL_MS,
+  type CachedOltPonPort,
+  type CachedOltUplink,
+  type CachedOltVlan,
+  type OltInventoryCache,
+} from './olt-inventory-cache';
 
 function formatUplinkVlans(vlans: number[]): string {
   return formatVlanList(vlans);
@@ -65,6 +78,9 @@ export class TopologyService {
     private readonly tenantConnections: TenantConnectionService,
     private readonly mikrotik: MikrotikClient,
     private readonly zteOlt: ZteOltClient,
+    private readonly zteSnmp: ZteOltSnmpClient,
+    private readonly huaweiOlt: HuaweiOltClient,
+    private readonly huaweiSnmp: HuaweiOltSnmpClient,
     private readonly onuTypeSync: OnuTypeOltSyncService,
     private readonly support: SupportService,
     @InjectRepository(Tenant)
@@ -75,6 +91,8 @@ export class TopologyService {
   private readonly probeFailStreak = new Map<string, number>();
   /** Skip overlapping probes (OLT CLI is slow; concurrent sessions collide). */
   private readonly probeInFlight = new Set<string>();
+  /** Coalesce concurrent CLI inventory refreshes. */
+  private readonly inventoryCliInFlight = new Map<string, Promise<void>>();
 
   private requireSchema(user: AuthUser): string {
     if (!user.schemaName) {
@@ -85,12 +103,16 @@ export class TopologyService {
 
   /** Natural order: ether1, ether2, … ether10, sfp1 */
   private comparePortNames(a: string, b: string) {
-    return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
+    return a.localeCompare(b, undefined, {
+      numeric: true,
+      sensitivity: 'base',
+    });
   }
 
   /** Never expose password; expose hasPassword instead. */
   private sanitizeDevice<T extends NetworkDevice>(device: T) {
-    const { mgmtPassword, mgmtEnablePassword: _enable, ...rest } = device;
+    const { mgmtPassword, mgmtEnablePassword, ...rest } = device;
+    void mgmtEnablePassword;
     return {
       ...rest,
       hasPassword: !!mgmtPassword,
@@ -115,8 +137,7 @@ export class TopologyService {
       }),
     );
 
-    const ports =
-      await this.tenantConnections.getNetworkPortRepository(schema);
+    const ports = await this.tenantConnections.getNetworkPortRepository(schema);
     const created = [];
     for (let i = 1; i <= INTERNET_PORT_COUNT; i++) {
       created.push(
@@ -208,11 +229,7 @@ export class TopologyService {
     if (dto.type === 'olt' && !dto.subtype) {
       throw new BadRequestException('OLT subtype is required');
     }
-    if (
-      dto.subtype &&
-      dto.type !== 'router' &&
-      dto.type !== 'olt'
-    ) {
+    if (dto.subtype && dto.type !== 'router' && dto.type !== 'olt') {
       throw new BadRequestException(
         'Subtype is only valid for routers and OLTs',
       );
@@ -221,8 +238,7 @@ export class TopologyService {
     const schema = this.requireSchema(user);
     const devices =
       await this.tenantConnections.getNetworkDeviceRepository(schema);
-    const ports =
-      await this.tenantConnections.getNetworkPortRepository(schema);
+    const ports = await this.tenantConnections.getNetworkPortRepository(schema);
 
     const device = await devices.save(
       devices.create({
@@ -334,8 +350,9 @@ export class TopologyService {
     const deviceName = new Map(graph.devices.map((d) => [d.id, d.name]));
 
     let suggestOnuImport = false;
+    let snmpMonitor: { ok: boolean; error?: string } | null = null;
     if (
-      isZteOltDevice(device.type, device.subtype) &&
+      isManagedOltDevice(device.type, device.subtype) &&
       device.connectionStatus === 'connected'
     ) {
       const devices =
@@ -343,17 +360,24 @@ export class TopologyService {
       const raw = await devices.findOne({ where: { id } });
       const onuRepo = await this.tenantConnections.getOnuRepository(schema);
       const onuCount = await onuRepo.count({ where: { oltId: id } });
-      suggestOnuImport =
-        onuCount === 0 && !raw?.onusImportPromptedAt;
+      suggestOnuImport = onuCount === 0 && !raw?.onusImportPromptedAt;
+      const summary = raw?.metricSummary ?? device.metricSummary ?? '';
+      if (/SNMP OK/i.test(summary)) {
+        snmpMonitor = { ok: true };
+      } else if (/SNMP fail/i.test(summary)) {
+        const m = summary.match(/SNMP fail:\s*([^·]+)/i);
+        snmpMonitor = { ok: false, error: m?.[1]?.trim() };
+      } else if (/SNMP sin community/i.test(summary)) {
+        snmpMonitor = { ok: false, error: 'community missing' };
+      }
     }
 
     return {
       ...device,
       suggestOnuImport,
+      snmpMonitor,
       ports: device.ports.map((p) => {
-        const linked = p.linkedPortId
-          ? portMap.get(p.linkedPortId)
-          : undefined;
+        const linked = p.linkedPortId ? portMap.get(p.linkedPortId) : undefined;
         return {
           ...p,
           linkedDeviceName: linked
@@ -367,7 +391,7 @@ export class TopologyService {
 
   /**
    * Re-probe managed devices if last check is older than maxAgeMs.
-   * OLTs need a longer window — full CLI probe is slower than MikroTik API.
+   * OLTs: SNMP RO only on auto-refresh (CLI stays for "Probar conexión").
    */
   private async refreshDeviceIfStale(
     schema: string,
@@ -378,26 +402,26 @@ export class TopologyService {
       await this.tenantConnections.getNetworkDeviceRepository(schema);
     const device = await devices.findOne({ where: { id: deviceId } });
     if (!device) return;
-    const probeable =
-      device.subtype === 'mikrotik' ||
-      isZteOltDevice(device.type, device.subtype);
+    const isManagedOlt = isManagedOltDevice(device.type, device.subtype);
+    const probeable = device.subtype === 'mikrotik' || isManagedOlt;
     if (!probeable) return;
-    if (!device.mgmtHost || !device.mgmtUsername || !device.mgmtPassword) {
-      return;
-    }
-    const age =
-      maxAgeMs ??
-      (isZteOltDevice(device.type, device.subtype) ? 30_000 : 12_000);
+    if (!device.mgmtHost) return;
+    if (!isManagedOlt && (!device.mgmtUsername || !device.mgmtPassword)) return;
+    const age = maxAgeMs ?? (isManagedOlt ? 30_000 : 12_000);
     if (
       device.lastCheckedAt &&
       Date.now() - device.lastCheckedAt.getTime() < age
     ) {
       return;
     }
+    if (isManagedOlt) {
+      await this.probeAndPersistOltSnmp(schema, device);
+      return;
+    }
     await this.probeAndPersist(schema, deviceId);
   }
 
-  /** Background poll: MikroTik routers + ZTE OLTs with credentials. */
+  /** Background poll: MikroTik via API; ZTE OLT health via SNMP RO (no CLI). */
   async pollMikrotikDevicesInSchema(schema: string) {
     const devices =
       await this.tenantConnections.getNetworkDeviceRepository(schema);
@@ -414,13 +438,17 @@ export class TopologyService {
     // Parallel so a slow OLT does not delay MikroTik (and vice versa).
     await Promise.allSettled(
       targets.map(async (device) => {
-        if (!device.mgmtHost || !device.mgmtUsername || !device.mgmtPassword) {
-          return;
-        }
+        if (!device.mgmtHost) return;
         try {
+          if (isManagedOltDevice(device.type, device.subtype)) {
+            // Never open Telnet/SSH on the 15s ticker — SNMP RO only.
+            await this.probeAndPersistOltSnmp(schema, device);
+            return;
+          }
+          if (!device.mgmtUsername || !device.mgmtPassword) return;
           await this.probeAndPersist(schema, device.id);
         } catch {
-          // Individual device failures are persisted in probeAndPersist
+          // Individual device failures are persisted in probe helpers
         }
       }),
     );
@@ -481,15 +509,17 @@ export class TopologyService {
     if (device.subtype === 'mikrotik') {
       if (!device.mgmtProtocol) device.mgmtProtocol = 'api_ssl';
       if (!device.mgmtPort) {
-        device.mgmtPort =
-          device.mgmtProtocol === 'rest_https' ? 443 : 8729;
+        device.mgmtPort = device.mgmtProtocol === 'rest_https' ? 443 : 8729;
       }
     }
 
     // Defaults for ZTE OLT
-    if (isZteOltDevice(device.type, device.subtype)) {
+    if (isManagedOltDevice(device.type, device.subtype)) {
       if (!device.mgmtConnectionMode) device.mgmtConnectionMode = 'public';
-      if (!device.mgmtProtocol || !['telnet', 'ssh'].includes(device.mgmtProtocol)) {
+      if (
+        !device.mgmtProtocol ||
+        !['telnet', 'ssh'].includes(device.mgmtProtocol)
+      ) {
         device.mgmtProtocol = 'telnet';
       }
       if (!device.mgmtPort) {
@@ -541,8 +571,8 @@ export class TopologyService {
       await this.tenantConnections.getNetworkDeviceRepository(schema);
     const device = await devices.findOne({ where: { id } });
     if (!device) throw new NotFoundException('Device not found');
-    if (!isZteOltDevice(device.type, device.subtype)) {
-      throw new BadRequestException('Device is not a ZTE OLT');
+    if (!isManagedOltDevice(device.type, device.subtype)) {
+      throw new BadRequestException('Device is not a managed OLT');
     }
     if (!device.mgmtHost || !device.mgmtUsername || !device.mgmtPassword) {
       throw new BadRequestException('Management credentials not configured');
@@ -555,7 +585,7 @@ export class TopologyService {
       (protocol === 'ssh' ? DEFAULT_OLT_PORTS.ssh : DEFAULT_OLT_PORTS.telnet);
 
     const result = await this.withTimeout(
-      this.zteOlt.listCards({
+      this.oltCli(device).listCards({
         host: device.mgmtHost,
         port,
         protocol,
@@ -584,9 +614,7 @@ export class TopologyService {
         cfgType: c.cfgType,
         realType: c.realType,
         ports: c.ports ?? null,
-        softVer: c.softVer
-          ? c.softVer.replace(/^V/i, '')
-          : null,
+        softVer: c.softVer ? c.softVer.replace(/^V/i, '') : null,
         status: /INSERVICE|OK|ACTIVE|ONLINE/i.test(c.status)
           ? 'Online'
           : c.status,
@@ -607,8 +635,8 @@ export class TopologyService {
       await this.tenantConnections.getNetworkDeviceRepository(schema);
     const device = await devices.findOne({ where: { id } });
     if (!device) throw new NotFoundException('Device not found');
-    if (!isZteOltDevice(device.type, device.subtype)) {
-      throw new BadRequestException('Device is not a ZTE OLT');
+    if (!isManagedOltDevice(device.type, device.subtype)) {
+      throw new BadRequestException('Device is not a managed OLT');
     }
     if (!device.mgmtHost || !device.mgmtUsername || !device.mgmtPassword) {
       throw new BadRequestException('Management credentials not configured');
@@ -620,11 +648,19 @@ export class TopologyService {
       device.mgmtPort ??
       (protocol === 'ssh' ? DEFAULT_OLT_PORTS.ssh : DEFAULT_OLT_PORTS.telnet);
 
-    const rack = opts?.rack ?? '1';
-    const shelf = opts?.shelf ?? '1';
+    const huaweiChassis = isHuaweiOltDevice(device.type, device.subtype)
+      ? getHuaweiChassisProfile(device.subtype)
+      : null;
+    const zteChassis = huaweiChassis ? null : getChassisProfile(device.subtype);
+    const rack =
+      opts?.rack ??
+      String(zteChassis?.defaultRackNo ?? huaweiChassis?.defaultFrame ?? 1);
+    const shelf =
+      opts?.shelf ??
+      String(zteChassis?.defaultShelfNo ?? huaweiChassis?.defaultFrame ?? 1);
 
     const result = await this.withTimeout(
-      this.zteOlt.rebootCard({
+      this.oltCli(device).rebootCard({
         host: device.mgmtHost,
         port,
         protocol,
@@ -677,44 +713,802 @@ export class TopologyService {
     };
   }
 
-  private async requireZteOlt(schema: string, id: string) {
+  private snmpConn(device: NetworkDevice): {
+    host: string;
+    snmpPort: number;
+    snmpCommunity: string;
+  } | null {
+    const community = device.snmpCommunity?.trim();
+    if (!device.mgmtHost?.trim() || !community) return null;
+    return {
+      host: device.mgmtHost.trim(),
+      snmpPort: device.snmpPort && device.snmpPort > 0 ? device.snmpPort : 161,
+      snmpCommunity: community,
+    };
+  }
+
+  private oltCli(device: NetworkDevice): ZteOltClient {
+    return (isHuaweiOltDevice(device.type, device.subtype)
+      ? this.huaweiOlt
+      : this.zteOlt) as unknown as ZteOltClient;
+  }
+
+  private oltSnmp(device: NetworkDevice): ZteOltSnmpClient {
+    return (isHuaweiOltDevice(device.type, device.subtype)
+      ? this.huaweiSnmp
+      : this.zteSnmp) as unknown as ZteOltSnmpClient;
+  }
+
+  private async requireManagedOlt(schema: string, id: string) {
     const devices =
       await this.tenantConnections.getNetworkDeviceRepository(schema);
     const device = await devices.findOne({ where: { id } });
     if (!device) throw new NotFoundException('Device not found');
-    if (!isZteOltDevice(device.type, device.subtype)) {
-      throw new BadRequestException('Device is not a ZTE OLT');
+    if (!isManagedOltDevice(device.type, device.subtype)) {
+      throw new BadRequestException('Device is not a managed OLT');
     }
     return device;
   }
 
-  async getDevicePonPorts(user: AuthUser, id: string) {
+  private inventoryCache(device: NetworkDevice): OltInventoryCache {
+    return { ...(device.oltInventoryCache ?? {}) };
+  }
+
+  private async saveInventoryCache(
+    schema: string,
+    device: NetworkDevice,
+    patch: OltInventoryCache,
+  ) {
+    const devices =
+      await this.tenantConnections.getNetworkDeviceRepository(schema);
+    // Always merge onto the DB row so concurrent SNMP/CLI writes don't wipe
+    // each other's fields (vlans / configProbedAt / CLI descriptions…).
+    const latest =
+      (await devices.findOne({ where: { id: device.id } })) ?? device;
+    const next: OltInventoryCache = {
+      ...this.inventoryCache(latest),
+      ...patch,
+    };
+    latest.oltInventoryCache = next;
+    device.oltInventoryCache = next;
+    await devices.save(latest);
+  }
+
+  /**
+   * Fast path: SNMP status (+ DB ONU counts for PON) merged with cached CLI config.
+   * `refresh=true`: CLI sync for that panel only (PON or uplinks), not both.
+   */
+  async getDevicePonPorts(user: AuthUser, id: string, refresh = false) {
     const schema = this.requireSchema(user);
-    const device = await this.requireZteOlt(schema, id);
-    const result = await this.withTimeout(
-      this.zteOlt.listPonPorts(this.zteConn(device)),
-      180_000,
-      'ZTE OLT PON ports',
-    );
-    if (!result.ok) {
-      throw new BadRequestException(
-        result.error || 'No se pudieron leer los puertos PON',
+    let device = await this.requireManagedOlt(schema, id);
+    const cache = this.inventoryCache(device);
+
+    if (refresh) {
+      await this.refreshPonUplinkConfigViaCli(
+        schema,
+        device,
+        'interactive',
+        'pon',
+      );
+      device = await this.requireManagedOlt(schema, id);
+    }
+
+    const built = await this.buildPonPortsView(schema, device, refresh);
+    if (!built.ports.length && !cache.ponPorts?.length) {
+      // Cold start without SNMP: one CLI pull (PON only)
+      await this.refreshPonUplinkConfigViaCli(
+        schema,
+        device,
+        'interactive',
+        'pon',
+      );
+      device = await this.requireManagedOlt(schema, id);
+      return this.buildPonPortsView(schema, device, true);
+    }
+    return built;
+  }
+
+  async getDeviceUplinks(user: AuthUser, id: string, refresh = false) {
+    const schema = this.requireSchema(user);
+    let device = await this.requireManagedOlt(schema, id);
+    const cache = this.inventoryCache(device);
+
+    if (refresh) {
+      await this.refreshPonUplinkConfigViaCli(
+        schema,
+        device,
+        'interactive',
+        'uplinks',
+      );
+      device = await this.requireManagedOlt(schema, id);
+    }
+
+    const built = await this.buildUplinksView(schema, device);
+    if (!built.uplinks.length && !cache.uplinks?.length) {
+      await this.refreshPonUplinkConfigViaCli(
+        schema,
+        device,
+        'interactive',
+        'uplinks',
+      );
+      device = await this.requireManagedOlt(schema, id);
+      return this.buildUplinksView(schema, device);
+    }
+    return built;
+  }
+
+  async getDeviceVlans(user: AuthUser, id: string, refresh = false) {
+    const schema = this.requireSchema(user);
+    let device = await this.requireManagedOlt(schema, id);
+    const cache = this.inventoryCache(device);
+    const probedAt = cache.vlansProbedAt ? Date.parse(cache.vlansProbedAt) : 0;
+    const stale =
+      !cache.vlans?.length ||
+      !Number.isFinite(probedAt) ||
+      Date.now() - probedAt > OLT_INVENTORY_CONFIG_TTL_MS;
+
+    if (refresh || !cache.vlans?.length) {
+      await this.refreshVlansViaCli(schema, device, 'interactive');
+      device = await this.requireManagedOlt(schema, id);
+    } else if (stale) {
+      void this.refreshVlansViaCli(schema, device, 'background').catch(
+        (err) => {
+          this.logger.warn(
+            `VLAN bg refresh ${device.name}: ${
+              err instanceof Error ? err.message : err
+            }`,
+          );
+        },
       );
     }
-    const probedAt = result.probedAt;
+
+    return this.buildVlansView(schema, device);
+  }
+
+  /** Background / poller: SNMP status + stale CLI config/VLANs. */
+  async refreshOltInventoryForSchema(schema: string) {
+    const devices =
+      await this.tenantConnections.getNetworkDeviceRepository(schema);
+    const olts = await devices.find({ where: { type: 'olt' } });
+    for (const olt of olts) {
+      if (!isManagedOltDevice(olt.type, olt.subtype)) continue;
+      try {
+        await this.refreshOltInventoryStatus(schema, olt);
+        const fresh = await this.requireManagedOlt(schema, olt.id);
+        const cache = this.inventoryCache(fresh);
+        const cfgAt = cache.configProbedAt
+          ? Date.parse(cache.configProbedAt)
+          : 0;
+        const vlanAt = cache.vlansProbedAt
+          ? Date.parse(cache.vlansProbedAt)
+          : 0;
+        const now = Date.now();
+        const upAt = cache.uplinksConfigProbedAt
+          ? Date.parse(cache.uplinksConfigProbedAt)
+          : cfgAt;
+        const ponAt = cache.ponConfigProbedAt
+          ? Date.parse(cache.ponConfigProbedAt)
+          : cfgAt;
+        if (
+          !cache.uplinks?.length ||
+          !Number.isFinite(upAt) ||
+          now - upAt > OLT_INVENTORY_CONFIG_TTL_MS
+        ) {
+          await this.refreshPonUplinkConfigViaCli(
+            schema,
+            fresh,
+            'background',
+            'uplinks',
+          );
+        }
+        if (
+          !cache.ponPorts?.length ||
+          !Number.isFinite(ponAt) ||
+          now - ponAt > OLT_INVENTORY_CONFIG_TTL_MS
+        ) {
+          await this.refreshPonUplinkConfigViaCli(
+            schema,
+            fresh,
+            'background',
+            'pon',
+          );
+        }
+        if (
+          !cache.vlans?.length ||
+          !Number.isFinite(vlanAt) ||
+          now - vlanAt > OLT_INVENTORY_CONFIG_TTL_MS
+        ) {
+          await this.refreshVlansViaCli(schema, fresh, 'background');
+        }
+        const speedAt = cache.speedProfilesProbedAt
+          ? Date.parse(cache.speedProfilesProbedAt)
+          : 0;
+        if (
+          !cache.speedProfiles?.length ||
+          !Number.isFinite(speedAt) ||
+          now - speedAt > OLT_INVENTORY_CONFIG_TTL_MS
+        ) {
+          await this.refreshSpeedProfilesViaCli(schema, fresh, 'background');
+        }
+      } catch (err) {
+        this.logger.warn(
+          `OLT inventory ${olt.name}: ${
+            err instanceof Error ? err.message : err
+          }`,
+        );
+      }
+    }
+  }
+
+  private async refreshOltInventoryStatus(
+    schema: string,
+    device: NetworkDevice,
+  ) {
+    const snmp = this.snmpConn(device);
+    if (!snmp) return;
+    // Merge onto latest DB cache (CLI may have just written config fields).
+    const latest = await this.requireManagedOlt(schema, device.id);
+    const ports = await this.withTimeout(
+      this.oltSnmp(latest).walkOltPorts(snmp),
+      45_000,
+      `SNMP ports ${latest.name}`,
+    );
+    if (!ports.ok) return;
+
+    const cache = this.inventoryCache(latest);
+    const byIf = new Map(
+      (cache.uplinks ?? []).map((u) => [u.ifName.toLowerCase(), u]),
+    );
+    const uplinks: CachedOltUplink[] = ports.uplinks.map((s) => {
+      const prev = byIf.get(s.ifName.toLowerCase());
+      return {
+        ifName: s.ifName,
+        description: prev?.description ?? null,
+        mediaType:
+          prev?.mediaType ??
+          (s.ifName.toLowerCase().startsWith('xgei_') ? 'fiber' : 'unknown'),
+        adminEnabled: s.adminEnabled,
+        status: s.status,
+        negotiation: prev?.negotiation ?? null,
+        mtu: prev?.mtu ?? null,
+        wavelengthNm: prev?.wavelengthNm ?? null,
+        signalDbm: prev?.signalDbm ?? null,
+        tempC: prev?.tempC ?? null,
+        pvidUntag: prev?.pvidUntag ?? null,
+        mode: prev?.mode ?? null,
+        taggedVlans: prev?.taggedVlans ?? [],
+      };
+    });
+
+    const byPon = new Map(
+      (cache.ponPorts ?? []).map((p) => [p.ifName.toLowerCase(), p]),
+    );
+    const onuStats = await this.ponOnuStatsFromDb(schema, latest.id);
+    const huaweiChassis = isHuaweiOltDevice(latest.type, latest.subtype)
+      ? getHuaweiChassisProfile(latest.subtype)
+      : null;
+    const zteChassis = huaweiChassis ? null : getChassisProfile(latest.subtype);
+    const defaultShelf = String(
+      zteChassis?.defaultShelfNo ?? huaweiChassis?.defaultFrame ?? 1,
+    );
+    const defaultRack = String(
+      zteChassis?.defaultRackNo ?? huaweiChassis?.defaultFrame ?? 1,
+    );
+    const ponPorts: CachedOltPonPort[] = ports.ponPorts.map((s) => {
+      const prev = byPon.get(s.ifName.toLowerCase());
+      const key = `${s.slot}/${s.port}`.toLowerCase();
+      const stats = onuStats.get(key);
+      const operUp = s.operUp;
+      return {
+        rack: prev?.rack ?? defaultRack,
+        shelf: s.shelf ?? prev?.shelf ?? defaultShelf,
+        slot: s.slot ?? prev?.slot ?? '',
+        port: s.port ?? prev?.port ?? '',
+        ifName: s.ifName,
+        boardType: prev?.boardType ?? '',
+        ponType: s.family ?? prev?.ponType ?? 'gpon',
+        adminEnabled: s.adminEnabled,
+        status: operUp ? 'Up' : 'Down',
+        onuOnline: stats?.online ?? prev?.onuOnline ?? 0,
+        onuTotal: stats?.total ?? prev?.onuTotal ?? 0,
+        maxOnus: prev?.maxOnus && prev.maxOnus > 0 ? prev.maxOnus : 128,
+        avgSignalDbm: stats?.avgSignal ?? prev?.avgSignalDbm ?? null,
+        description: prev?.description ?? null,
+        minRangeM: prev?.minRangeM ?? 0,
+        maxRangeM: prev?.maxRangeM ?? 20000,
+        rogueDetectEnabled: prev?.rogueDetectEnabled ?? null,
+        txPowerDbm: prev?.txPowerDbm ?? null,
+      };
+    });
+
+    // Keep CLI-only rows SNMP did not list (partial IF-MIB / naming quirks).
+    const snmpUplinkKeys = new Set(uplinks.map((u) => u.ifName.toLowerCase()));
+    const mergedUplinks = [
+      ...uplinks,
+      ...(cache.uplinks ?? []).filter(
+        (u) => !snmpUplinkKeys.has(u.ifName.toLowerCase()),
+      ),
+    ];
+
+    const snmpPonKeys = new Set(ponPorts.map((p) => p.ifName.toLowerCase()));
+    const mergedPon =
+      ponPorts.length > 0
+        ? [
+            ...ponPorts,
+            ...(cache.ponPorts ?? []).filter(
+              (p) => !snmpPonKeys.has(p.ifName.toLowerCase()),
+            ),
+          ]
+        : (cache.ponPorts ?? []).map((p) => {
+            const live = ports.ponPorts.find(
+              (s) => s.ifName.toLowerCase() === p.ifName.toLowerCase(),
+            );
+            if (!live) return p;
+            return {
+              ...p,
+              adminEnabled: live.adminEnabled,
+              status: live.operUp ? ('Up' as const) : ('Down' as const),
+            };
+          });
+
+    await this.saveInventoryCache(schema, latest, {
+      uplinks: mergedUplinks,
+      ponPorts: mergedPon,
+      statusProbedAt: ports.probedAt,
+    });
+    device.oltInventoryCache = latest.oltInventoryCache;
+  }
+
+  private async refreshPonUplinkConfigViaCli(
+    schema: string,
+    device: NetworkDevice,
+    priority: 'interactive' | 'background' = 'background',
+    scope: 'uplinks' | 'pon' | 'both' = 'both',
+  ) {
+    const key = `${schema}:${device.id}:ports-cli:${scope}`;
+    if (this.inventoryCliInFlight.has(key)) {
+      await this.inventoryCliInFlight.get(key);
+      return;
+    }
+    const run = (async () => {
+      const wantUplinks = scope === 'uplinks' || scope === 'both';
+      const wantPon = scope === 'pon' || scope === 'both';
+
+      const uplinksRes = wantUplinks
+        ? await this.withTimeout(
+            this.oltCli(device).listUplinks({
+              ...this.zteConn(device),
+              priority,
+            }),
+            150_000,
+            'ZTE OLT uplinks CLI',
+          )
+        : null;
+      const ponsRes = wantPon
+        ? await this.withTimeout(
+            this.oltCli(device).listPonPorts({
+              ...this.zteConn(device),
+              priority,
+              light: true,
+            }),
+            150_000,
+            'ZTE OLT PON CLI',
+          )
+        : null;
+
+      // Re-read device for latest SNMP status overlay
+      const fresh = await this.requireManagedOlt(schema, device.id);
+      const cache = this.inventoryCache(fresh);
+      const statusByIf = new Map([
+        ...(cache.uplinks ?? []).map((u) => [u.ifName.toLowerCase(), u.status]),
+        ...(cache.ponPorts ?? []).map((p) => [
+          p.ifName.toLowerCase(),
+          p.status,
+        ]),
+      ] as Array<[string, string]>);
+      const prevUplinkByIf = new Map(
+        (cache.uplinks ?? []).map((u) => [u.ifName.toLowerCase(), u]),
+      );
+      const prevPonByIf = new Map(
+        (cache.ponPorts ?? []).map((p) => [p.ifName.toLowerCase(), p]),
+      );
+
+      const nowIso = new Date().toISOString();
+      const patch: OltInventoryCache = {};
+
+      if (wantUplinks && uplinksRes) {
+        if (!uplinksRes.ok && wantPon && ponsRes && !ponsRes.ok) {
+          throw new BadRequestException(
+            uplinksRes.error ||
+              ponsRes.error ||
+              'No se pudo refrescar inventario CLI',
+          );
+        }
+        if (!uplinksRes.ok && scope === 'uplinks') {
+          throw new BadRequestException(
+            uplinksRes.error || 'No se pudieron leer los uplinks',
+          );
+        }
+        if (uplinksRes.ok) {
+          // Do not wipe a good cache with an empty/truncated CLI result.
+          if (!uplinksRes.uplinks.length && (cache.uplinks?.length ?? 0) > 0) {
+            throw new BadRequestException(
+              'Sincronización de uplinks vacía; se conserva la caché anterior',
+            );
+          }
+          patch.uplinks = uplinksRes.uplinks.map((u) => {
+            const prev = prevUplinkByIf.get(u.ifName.toLowerCase());
+            return {
+              ifName: u.ifName,
+              description: u.description,
+              mediaType:
+                u.mediaType !== 'unknown'
+                  ? u.mediaType
+                  : (prev?.mediaType ?? u.mediaType),
+              // CLI config is source of truth for admin on sync
+              adminEnabled: u.adminEnabled,
+              // Oper status prefers live SNMP when available
+              status: statusByIf.get(u.ifName.toLowerCase()) ?? u.status,
+              // Bulk CLI skips optics/negotiation — keep last known values
+              negotiation: u.negotiation ?? prev?.negotiation ?? null,
+              mtu: u.mtu ?? prev?.mtu ?? null,
+              wavelengthNm: u.wavelengthNm ?? prev?.wavelengthNm ?? null,
+              signalDbm: u.signalDbm ?? prev?.signalDbm ?? null,
+              tempC: u.tempC ?? prev?.tempC ?? null,
+              pvidUntag: u.pvidUntag,
+              mode: u.mode,
+              taggedVlans: u.taggedVlans,
+            };
+          });
+          patch.uplinksConfigProbedAt = nowIso;
+        }
+      }
+
+      if (wantPon && ponsRes) {
+        if (!ponsRes.ok && scope === 'pon') {
+          throw new BadRequestException(
+            ponsRes.error || 'No se pudieron leer los puertos PON',
+          );
+        }
+        if (!ponsRes.ok && scope === 'both' && !patch.uplinks) {
+          throw new BadRequestException(
+            ponsRes.error ||
+              uplinksRes?.error ||
+              'No se pudo refrescar inventario CLI',
+          );
+        }
+        if (ponsRes.ok) {
+          if (!ponsRes.ports.length && (cache.ponPorts?.length ?? 0) > 0) {
+            throw new BadRequestException(
+              'Sincronización PON vacía; se conserva la caché anterior',
+            );
+          }
+          patch.ponPorts = ponsRes.ports.map((p) => {
+            const prev = prevPonByIf.get(p.ifName.toLowerCase());
+            const liveStatus = statusByIf.get(p.ifName.toLowerCase());
+            let status: 'Up' | 'Down' = p.status;
+            if (liveStatus) {
+              status =
+                liveStatus === 'Down' || /^down$/i.test(liveStatus)
+                  ? 'Down'
+                  : 'Up';
+            } else if (prev?.status) {
+              status = prev.status;
+            }
+            return {
+              rack: p.rack,
+              shelf: p.shelf,
+              slot: p.slot,
+              port: p.port,
+              ifName: p.ifName,
+              boardType: p.boardType,
+              ponType: p.ponType,
+              // CLI config is source of truth for admin on sync
+              adminEnabled: p.adminEnabled,
+              status,
+              // Light CLI leaves counts at 0 — keep previous / DB overlay fills later
+              onuOnline: p.onuOnline || prev?.onuOnline || 0,
+              onuTotal: p.onuTotal || prev?.onuTotal || 0,
+              maxOnus: p.maxOnus,
+              avgSignalDbm: p.avgSignalDbm ?? prev?.avgSignalDbm ?? null,
+              description: p.description,
+              minRangeM: p.minRangeM,
+              maxRangeM: p.maxRangeM,
+              rogueDetectEnabled: p.rogueDetectEnabled,
+              txPowerDbm: p.txPowerDbm ?? prev?.txPowerDbm ?? null,
+            };
+          });
+          patch.ponConfigProbedAt = nowIso;
+        }
+      }
+
+      if (!patch.uplinks && !patch.ponPorts) {
+        throw new BadRequestException('No se pudo refrescar inventario CLI');
+      }
+
+      patch.configProbedAt = nowIso;
+      await this.saveInventoryCache(schema, fresh, patch);
+    })().finally(() => this.inventoryCliInFlight.delete(key));
+
+    this.inventoryCliInFlight.set(key, run);
+    await run;
+  }
+
+  private async refreshSpeedProfilesViaCli(
+    schema: string,
+    device: NetworkDevice,
+    priority: 'interactive' | 'background' = 'background',
+  ) {
+    const key = `${schema}:${device.id}:speed-cli`;
+    if (this.inventoryCliInFlight.has(key)) {
+      await this.inventoryCliInFlight.get(key);
+      return;
+    }
+    const run = (async () => {
+      const result = await this.withTimeout(
+        this.oltCli(device).listSpeedProfiles({
+          ...this.zteConn(device),
+          priority,
+        }),
+        90_000,
+        'ZTE OLT speed profiles',
+      );
+      if (!result.ok) {
+        throw new BadRequestException(
+          result.error || 'No se pudieron leer los perfiles de velocidad',
+        );
+      }
+      const fresh = await this.requireManagedOlt(schema, device.id);
+      const prev = this.inventoryCache(fresh);
+      if (!result.profiles.length && (prev.speedProfiles?.length ?? 0) > 0) {
+        throw new BadRequestException(
+          'Lista de perfiles vacía; se conserva la caché anterior',
+        );
+      }
+      await this.saveInventoryCache(schema, fresh, {
+        speedProfiles: result.profiles,
+        speedProfilesProbedAt: result.probedAt,
+      });
+    })().finally(() => this.inventoryCliInFlight.delete(key));
+    this.inventoryCliInFlight.set(key, run);
+    await run;
+  }
+
+  private async refreshVlansViaCli(
+    schema: string,
+    device: NetworkDevice,
+    priority: 'interactive' | 'background' = 'background',
+  ) {
+    const key = `${schema}:${device.id}:vlans-cli`;
+    if (this.inventoryCliInFlight.has(key)) {
+      await this.inventoryCliInFlight.get(key);
+      return;
+    }
+    const run = (async () => {
+      const result = await this.withTimeout(
+        this.oltCli(device).listVlans({
+          ...this.zteConn(device),
+          priority,
+        }),
+        180_000,
+        'ZTE OLT vlans CLI',
+      );
+      if (!result.ok) {
+        throw new BadRequestException(
+          result.error || 'No se pudieron leer las VLANs',
+        );
+      }
+      const fresh = await this.requireManagedOlt(schema, device.id);
+      const prev = this.inventoryCache(fresh);
+      // Degenerate "solo VLAN 1" must not overwrite a richer cache.
+      if (result.vlans.length <= 1 && (prev.vlans?.length ?? 0) > 1) {
+        throw new BadRequestException(
+          'Catálogo VLAN incompleto; se conserva la caché anterior',
+        );
+      }
+      const vlans: CachedOltVlan[] = result.vlans.map((v) => ({
+        vlanId: v.vlanId,
+        description: v.description,
+        isolated: v.isolated,
+        usedForIptv: !!v.usedForIptv,
+        onuCount: v.onuCount,
+        isSystem: v.isSystem || v.vlanId === 1,
+      }));
+      await this.saveInventoryCache(schema, fresh, {
+        vlans,
+        vlansProbedAt: result.probedAt,
+      });
+    })().finally(() => this.inventoryCliInFlight.delete(key));
+    this.inventoryCliInFlight.set(key, run);
+    await run;
+  }
+
+  private async ponOnuStatsFromDb(
+    schema: string,
+    oltId: string,
+  ): Promise<
+    Map<string, { online: number; total: number; avgSignal: number | null }>
+  > {
+    const onuRepo = await this.tenantConnections.getOnuRepository(schema);
+    const rows = await onuRepo.find({
+      where: { oltId },
+      select: ['board', 'port', 'online', 'signalDbm'],
+    });
+    const map = new Map<
+      string,
+      { online: number; total: number; signals: number[] }
+    >();
+    for (const r of rows) {
+      const key = `${r.board}/${r.port}`.toLowerCase();
+      let bucket = map.get(key);
+      if (!bucket) {
+        bucket = { online: 0, total: 0, signals: [] };
+        map.set(key, bucket);
+      }
+      bucket.total += 1;
+      if (r.online) bucket.online += 1;
+      if (r.signalDbm != null && Number.isFinite(r.signalDbm)) {
+        bucket.signals.push(r.signalDbm);
+      }
+    }
+    const out = new Map<
+      string,
+      { online: number; total: number; avgSignal: number | null }
+    >();
+    for (const [k, v] of map) {
+      out.set(k, {
+        online: v.online,
+        total: v.total,
+        avgSignal: v.signals.length
+          ? Math.round(
+              (v.signals.reduce((a, b) => a + b, 0) / v.signals.length) * 10,
+            ) / 10
+          : null,
+      });
+    }
+    return out;
+  }
+
+  private async buildUplinksView(schema: string, device: NetworkDevice) {
+    // Prefer live SNMP overlay when available — always on latest DB cache.
+    let latest = await this.requireManagedOlt(schema, device.id);
+    try {
+      await this.refreshOltInventoryStatus(schema, latest);
+    } catch {
+      /* keep cache */
+    }
+    latest = await this.requireManagedOlt(schema, device.id);
+    const cache = this.inventoryCache(latest);
+    const uplinks = cache.uplinks ?? [];
+    const syncedAt =
+      cache.uplinksConfigProbedAt || cache.configProbedAt || null;
+    const probedAt =
+      syncedAt || cache.statusProbedAt || new Date().toISOString();
+    const up = uplinks.filter((u) => u.status !== 'Down').length;
     return {
-      deviceId: device.id,
+      deviceId: latest.id,
       probedAt,
-      summary: result.summary,
-      ports: result.ports.map((p) => ({
+      syncedAt,
+      source: cache.statusProbedAt ? 'snmp+cache' : 'cache',
+      summary: `${up}/${uplinks.length} uplinks Up`,
+      uplinks: uplinks.map((u) => ({
+        ...u,
+        adminState: u.adminEnabled ? 'Enabled' : 'Disabled',
+        mediaTypeLabel:
+          u.mediaType === 'fiber'
+            ? 'Fibra'
+            : u.mediaType === 'copper'
+              ? 'Cobre'
+              : '—',
+        taggedVlansLabel: u.taggedVlans.length
+          ? formatUplinkVlans(u.taggedVlans)
+          : '',
+        modeVlansLabel: u.mode
+          ? `${u.mode}${u.taggedVlans.length ? `: ${formatUplinkVlans(u.taggedVlans)}` : ''}`
+          : u.taggedVlans.length
+            ? formatUplinkVlans(u.taggedVlans)
+            : '—',
+        infoUpdated: probedAt,
+      })),
+    };
+  }
+
+  private async buildPonPortsView(
+    schema: string,
+    device: NetworkDevice,
+    _refresh: boolean,
+  ) {
+    void _refresh;
+    let latest = await this.requireManagedOlt(schema, device.id);
+    try {
+      await this.refreshOltInventoryStatus(schema, latest);
+    } catch {
+      /* keep cache */
+    }
+    latest = await this.requireManagedOlt(schema, device.id);
+    const cache = this.inventoryCache(latest);
+    let ports = cache.ponPorts ?? [];
+
+    // Overlay fresh ONU counts from DB even if SNMP skipped
+    const onuStats = await this.ponOnuStatsFromDb(schema, latest.id);
+    ports = ports.map((p) => {
+      const stats = onuStats.get(`${p.slot}/${p.port}`.toLowerCase());
+      if (!stats) return p;
+      return {
+        ...p,
+        onuOnline: stats.online,
+        onuTotal: stats.total,
+        avgSignalDbm: stats.avgSignal ?? p.avgSignalDbm,
+      };
+    });
+
+    const probedAt =
+      cache.ponConfigProbedAt ||
+      cache.configProbedAt ||
+      cache.statusProbedAt ||
+      new Date().toISOString();
+    const syncedAt = cache.ponConfigProbedAt || cache.configProbedAt || null;
+    const up = ports.filter((p) => p.status === 'Up').length;
+    const onuOnline = ports.reduce((s, p) => s + p.onuOnline, 0);
+    return {
+      deviceId: latest.id,
+      probedAt,
+      syncedAt,
+      source: cache.statusProbedAt ? 'snmp+cache' : 'cache',
+      summary: `${up}/${ports.length} puertos Up · ${onuOnline} ONUs en línea`,
+      ports: ports.map((p) => ({
         ...p,
         adminState: p.adminEnabled ? 'Enabled' : 'Disabled',
         loadPct:
-          p.maxOnus > 0
-            ? Math.round((p.onuOnline / p.maxOnus) * 1000) / 10
-            : 0,
+          p.maxOnus > 0 ? Math.round((p.onuOnline / p.maxOnus) * 1000) / 10 : 0,
         infoUpdated: probedAt,
       })),
+    };
+  }
+
+  private async buildVlansView(schema: string, device: NetworkDevice) {
+    const cache = this.inventoryCache(device);
+    const vlans = cache.vlans ?? [];
+    const meta = (device.oltVlanMeta ?? {}) as Record<
+      string,
+      { isolated?: boolean }
+    >;
+    const poolRepo = await this.tenantConnections.getIpPoolRepository(schema);
+    const pools = await poolRepo.find({ where: { oltId: device.id } });
+    const mgmtVlans = new Set<number>();
+    const internetVlans = new Set<number>();
+    for (const p of pools) {
+      if (p.purpose === 'management') mgmtVlans.add(p.vlanId);
+      if (p.purpose === 'internet') internetVlans.add(p.vlanId);
+    }
+    const probedAt = cache.vlansProbedAt || new Date().toISOString();
+    return {
+      deviceId: device.id,
+      probedAt,
+      syncedAt: cache.vlansProbedAt || null,
+      source: 'cache',
+      summary: `${vlans.length} VLAN${vlans.length === 1 ? '' : 's'}`,
+      vlans: vlans.map((v) => {
+        const m = meta[String(v.vlanId)] ?? {};
+        const usedForMgmt = mgmtVlans.has(v.vlanId);
+        const usedForInternet = internetVlans.has(v.vlanId);
+        const usedForIptv = !!v.usedForIptv;
+        const parts: string[] = [];
+        if (usedForMgmt) parts.push('Mgmt');
+        if (usedForInternet) parts.push('Internet');
+        if (usedForIptv) parts.push('IPTV');
+        return {
+          vlanId: v.vlanId,
+          description: v.description,
+          typeLabel: parts.length ? parts.join(' · ') : '—',
+          usedForMgmt,
+          usedForInternet,
+          usedForIptv,
+          isolated: typeof m.isolated === 'boolean' ? m.isolated : v.isolated,
+          onuCount: v.onuCount,
+          isSystem: v.isSystem || v.vlanId === 1,
+        };
+      }),
     };
   }
 
@@ -731,12 +1525,12 @@ export class TopologyService {
     },
   ) {
     const schema = this.requireSchema(user);
-    const device = await this.requireZteOlt(schema, id);
+    const device = await this.requireManagedOlt(schema, id);
     if (!dto.ifName?.trim()) {
       throw new BadRequestException('ifName required');
     }
     const result = await this.withTimeout(
-      this.zteOlt.configurePonPort({
+      this.oltCli(device).configurePonPort({
         ...this.zteConn(device),
         ifName: dto.ifName.trim(),
         adminEnabled: dto.adminEnabled,
@@ -751,14 +1545,24 @@ export class TopologyService {
     if (!result.ok) {
       throw new BadRequestException(result.error || 'No se pudo configurar');
     }
+    try {
+      await this.refreshPonUplinkConfigViaCli(
+        schema,
+        device,
+        'interactive',
+        'pon',
+      );
+    } catch {
+      /* ignore */
+    }
     return result;
   }
 
   async enableAllDevicePonPorts(user: AuthUser, id: string) {
     const schema = this.requireSchema(user);
-    const device = await this.requireZteOlt(schema, id);
+    const device = await this.requireManagedOlt(schema, id);
     const result = await this.withTimeout(
-      this.zteOlt.enableAllPonPorts(this.zteConn(device)),
+      this.oltCli(device).enableAllPonPorts(this.zteConn(device)),
       180_000,
       'ZTE OLT enable all PON',
     );
@@ -774,23 +1578,26 @@ export class TopologyService {
     opts: { ifName?: string; slot?: string; all?: boolean },
   ) {
     const schema = this.requireSchema(user);
-    const device = await this.requireZteOlt(schema, id);
+    const device = await this.requireManagedOlt(schema, id);
     const conn = this.zteConn(device);
+    const cli = this.oltCli(device);
     if (opts.ifName) {
       const result = await this.withTimeout(
-        this.zteOlt.rebootOnusOnIf({ ...conn, ifName: opts.ifName }),
+        cli.rebootOnusOnIf({ ...conn, ifName: opts.ifName }),
         180_000,
-        'ZTE OLT reboot ONUs on port',
+        'OLT reboot ONUs on port',
       );
       if (!result.ok) {
-        throw new BadRequestException(result.error || 'Fallo al reiniciar ONUs');
+        throw new BadRequestException(
+          result.error || 'Fallo al reiniciar ONUs',
+        );
       }
       return result;
     }
     const result = await this.withTimeout(
-      this.zteOlt.rebootAllOnus({ ...conn, slot: opts.slot }),
+      cli.rebootAllOnus({ ...conn, slot: opts.slot }),
       300_000,
-      'ZTE OLT reboot all ONUs',
+      'OLT reboot all ONUs',
     );
     if (!result.ok) {
       throw new BadRequestException(result.error || 'Fallo al reiniciar ONUs');
@@ -800,11 +1607,11 @@ export class TopologyService {
 
   async getRogueDetect(user: AuthUser, id: string) {
     const schema = this.requireSchema(user);
-    const device = await this.requireZteOlt(schema, id);
+    const device = await this.requireManagedOlt(schema, id);
     const result = await this.withTimeout(
-      this.zteOlt.getRogueDetect(this.zteConn(device)),
+      this.oltCli(device).getRogueDetect(this.zteConn(device)),
       90_000,
-      'ZTE OLT rogue detect status',
+      'OLT rogue detect status',
     );
     if (!result.ok) {
       throw new BadRequestException(
@@ -825,12 +1632,12 @@ export class TopologyService {
     },
   ) {
     const schema = this.requireSchema(user);
-    const device = await this.requireZteOlt(schema, id);
+    const device = await this.requireManagedOlt(schema, id);
     if (!dto.slots?.length) {
       throw new BadRequestException('Selecciona al menos una ranura');
     }
     const result = await this.withTimeout(
-      this.zteOlt.setRogueDetect({
+      this.oltCli(device).setRogueDetect({
         ...this.zteConn(device),
         slots: dto.slots,
         enable: dto.enable,
@@ -838,7 +1645,7 @@ export class TopologyService {
         autoShutdown: dto.autoShutdown,
       }),
       60_000,
-      'ZTE OLT set rogue detect',
+      'OLT set rogue detect',
     );
     if (!result.ok) {
       throw new BadRequestException(result.error || 'No se pudo aplicar');
@@ -848,55 +1655,16 @@ export class TopologyService {
 
   async checkRogueOnus(user: AuthUser, id: string) {
     const schema = this.requireSchema(user);
-    const device = await this.requireZteOlt(schema, id);
+    const device = await this.requireManagedOlt(schema, id);
     const result = await this.withTimeout(
-      this.zteOlt.checkRogueOnus(this.zteConn(device)),
+      this.oltCli(device).checkRogueOnus(this.zteConn(device)),
       45_000,
-      'ZTE OLT check rogue',
+      'OLT check rogue',
     );
     if (!result.ok) {
       throw new BadRequestException(result.error || 'No se pudo consultar');
     }
     return result;
-  }
-
-  async getDeviceUplinks(user: AuthUser, id: string) {
-    const schema = this.requireSchema(user);
-    const device = await this.requireZteOlt(schema, id);
-    const result = await this.withTimeout(
-      this.zteOlt.listUplinks(this.zteConn(device)),
-      120_000,
-      'ZTE OLT uplinks',
-    );
-    if (!result.ok) {
-      throw new BadRequestException(
-        result.error || 'No se pudieron leer los uplinks',
-      );
-    }
-    return {
-      deviceId: device.id,
-      probedAt: result.probedAt,
-      summary: result.summary,
-      uplinks: result.uplinks.map((u) => ({
-        ...u,
-        adminState: u.adminEnabled ? 'Enabled' : 'Disabled',
-        mediaTypeLabel:
-          u.mediaType === 'fiber'
-            ? 'Fibra'
-            : u.mediaType === 'copper'
-              ? 'Cobre'
-              : '—',
-        taggedVlansLabel: u.taggedVlans.length
-          ? formatUplinkVlans(u.taggedVlans)
-          : '',
-        modeVlansLabel: u.mode
-          ? `${u.mode}${u.taggedVlans.length ? `: ${formatUplinkVlans(u.taggedVlans)}` : ''}`
-          : u.taggedVlans.length
-            ? formatUplinkVlans(u.taggedVlans)
-            : '—',
-        infoUpdated: result.probedAt,
-      })),
-    };
   }
 
   async configureDeviceUplink(
@@ -912,12 +1680,12 @@ export class TopologyService {
     },
   ) {
     const schema = this.requireSchema(user);
-    const device = await this.requireZteOlt(schema, id);
+    const device = await this.requireManagedOlt(schema, id);
     if (!dto.ifName?.trim()) {
       throw new BadRequestException('ifName required');
     }
     const result = await this.withTimeout(
-      this.zteOlt.configureUplink({
+      this.oltCli(device).configureUplink({
         ...this.zteConn(device),
         ifName: dto.ifName.trim(),
         description: dto.description,
@@ -932,65 +1700,17 @@ export class TopologyService {
     if (!result.ok) {
       throw new BadRequestException(result.error || 'No se pudo configurar');
     }
-    return result;
-  }
-
-  async getDeviceVlans(user: AuthUser, id: string) {
-    const schema = this.requireSchema(user);
-    const device = await this.requireZteOlt(schema, id);
-    const result = await this.withTimeout(
-      this.zteOlt.listVlans(this.zteConn(device)),
-      120_000,
-      'ZTE OLT vlans',
-    );
-    if (!result.ok) {
-      throw new BadRequestException(
-        result.error || 'No se pudieron leer las VLANs',
+    try {
+      await this.refreshPonUplinkConfigViaCli(
+        schema,
+        device,
+        'interactive',
+        'uplinks',
       );
+    } catch {
+      /* cache will refresh on next poll / manual */
     }
-    const meta = (device.oltVlanMeta ?? {}) as Record<
-      string,
-      {
-        isolated?: boolean;
-      }
-    >;
-    // Tipo = pools (fuente de verdad). IPTV solo informativo desde la OLT.
-    const poolRepo =
-      await this.tenantConnections.getIpPoolRepository(schema);
-    const pools = await poolRepo.find({ where: { oltId: device.id } });
-    const mgmtVlans = new Set<number>();
-    const internetVlans = new Set<number>();
-    for (const p of pools) {
-      if (p.purpose === 'management') mgmtVlans.add(p.vlanId);
-      if (p.purpose === 'internet') internetVlans.add(p.vlanId);
-    }
-    return {
-      deviceId: device.id,
-      probedAt: result.probedAt,
-      summary: result.summary,
-      vlans: result.vlans.map((v) => {
-        const m = meta[String(v.vlanId)] ?? {};
-        const usedForMgmt = mgmtVlans.has(v.vlanId);
-        const usedForInternet = internetVlans.has(v.vlanId);
-        const usedForIptv = !!v.usedForIptv;
-        const parts: string[] = [];
-        if (usedForMgmt) parts.push('Mgmt');
-        if (usedForInternet) parts.push('Internet');
-        if (usedForIptv) parts.push('IPTV');
-        return {
-          vlanId: v.vlanId,
-          description: v.description,
-          typeLabel: parts.length ? parts.join(' · ') : '—',
-          usedForMgmt,
-          usedForInternet,
-          usedForIptv,
-          isolated:
-            typeof m.isolated === 'boolean' ? m.isolated : v.isolated,
-          onuCount: v.onuCount,
-          isSystem: v.isSystem || v.vlanId === 1,
-        };
-      }),
-    };
+    return result;
   }
 
   async upsertDeviceVlan(
@@ -1006,26 +1726,28 @@ export class TopologyService {
     const schema = this.requireSchema(user);
     const deviceRepo =
       await this.tenantConnections.getNetworkDeviceRepository(schema);
-    const device = await this.requireZteOlt(schema, id);
+    const device = await this.requireManagedOlt(schema, id);
     const vlanId = Number(dto.vlanId);
     if (!Number.isInteger(vlanId) || vlanId < 1 || vlanId > 4094) {
       throw new BadRequestException('VLAN ID inválido (1–4094)');
     }
 
     const live = await this.withTimeout(
-      this.zteOlt.listVlans(this.zteConn(device)),
+      this.oltCli(device).listVlans(this.zteConn(device)),
       120_000,
       'ZTE OLT vlans before upsert',
     );
-    const existsOnOlt =
-      live.ok && live.vlans.some((v) => v.vlanId === vlanId);
+    const existsOnOlt = live.ok && live.vlans.some((v) => v.vlanId === vlanId);
 
     // New VLANs are always isolated; edits may toggle.
-    const isolated =
-      !existsOnOlt ? true : dto.isolated !== undefined ? !!dto.isolated : true;
+    const isolated = !existsOnOlt
+      ? true
+      : dto.isolated !== undefined
+        ? !!dto.isolated
+        : true;
 
     const result = await this.withTimeout(
-      this.zteOlt.upsertVlan({
+      this.oltCli(device).upsertVlan({
         ...this.zteConn(device),
         vlanId,
         description: dto.description,
@@ -1035,7 +1757,9 @@ export class TopologyService {
       'ZTE OLT upsert vlan',
     );
     if (!result.ok) {
-      throw new BadRequestException(result.error || 'No se pudo guardar la VLAN');
+      throw new BadRequestException(
+        result.error || 'No se pudo guardar la VLAN',
+      );
     }
 
     const meta = {
@@ -1054,6 +1778,12 @@ export class TopologyService {
     device.oltVlanMeta = meta;
     await deviceRepo.save(device);
 
+    try {
+      await this.refreshVlansViaCli(schema, device, 'interactive');
+    } catch {
+      /* ignore */
+    }
+
     return result;
   }
 
@@ -1061,7 +1791,7 @@ export class TopologyService {
     const schema = this.requireSchema(user);
     const deviceRepo =
       await this.tenantConnections.getNetworkDeviceRepository(schema);
-    const device = await this.requireZteOlt(schema, id);
+    const device = await this.requireManagedOlt(schema, id);
     if (!Number.isInteger(vlanId) || vlanId < 1 || vlanId > 4094) {
       throw new BadRequestException('VLAN ID inválido (1–4094)');
     }
@@ -1071,7 +1801,7 @@ export class TopologyService {
       );
     }
     const result = await this.withTimeout(
-      this.zteOlt.deleteVlan({
+      this.oltCli(device).deleteVlan({
         ...this.zteConn(device),
         vlanId,
       }),
@@ -1089,26 +1819,48 @@ export class TopologyService {
     delete meta[String(vlanId)];
     device.oltVlanMeta = meta as NetworkDevice['oltVlanMeta'];
     await deviceRepo.save(device);
+    try {
+      await this.refreshVlansViaCli(schema, device, 'interactive');
+    } catch {
+      /* ignore */
+    }
     return result;
   }
 
-  async getDeviceSpeedProfiles(user: AuthUser, id: string) {
+  async getDeviceSpeedProfiles(user: AuthUser, id: string, refresh = false) {
     const schema = this.requireSchema(user);
-    const device = await this.requireZteOlt(schema, id);
-    const result = await this.withTimeout(
-      this.zteOlt.listSpeedProfiles(this.zteConn(device)),
-      120_000,
-      'ZTE OLT speed profiles',
-    );
-    if (!result.ok) {
-      throw new BadRequestException(
-        result.error || 'No se pudieron leer los perfiles de velocidad',
+    let device = await this.requireManagedOlt(schema, id);
+    const cache = this.inventoryCache(device);
+    const probedMs = cache.speedProfilesProbedAt
+      ? Date.parse(cache.speedProfilesProbedAt)
+      : 0;
+    const stale =
+      !cache.speedProfiles?.length ||
+      !Number.isFinite(probedMs) ||
+      Date.now() - probedMs > OLT_INVENTORY_CONFIG_TTL_MS;
+
+    if (refresh || !cache.speedProfiles?.length) {
+      await this.refreshSpeedProfilesViaCli(schema, device, 'interactive');
+      device = await this.requireManagedOlt(schema, id);
+    } else if (stale) {
+      void this.refreshSpeedProfilesViaCli(schema, device, 'background').catch(
+        (err) => {
+          this.logger.warn(
+            `Speed profiles bg refresh ${device.name}: ${
+              err instanceof Error ? err.message : err
+            }`,
+          );
+        },
       );
     }
+
+    const latest = this.inventoryCache(device);
     return {
       deviceId: device.id,
-      probedAt: result.probedAt,
-      profiles: result.profiles,
+      probedAt: latest.speedProfilesProbedAt || new Date().toISOString(),
+      syncedAt: latest.speedProfilesProbedAt || null,
+      source: latest.speedProfiles?.length ? 'cache' : 'live',
+      profiles: latest.speedProfiles ?? [],
     };
   }
 
@@ -1118,9 +1870,9 @@ export class TopologyService {
     dto: { name: string; downloadMbps: number; uploadMbps: number },
   ) {
     const schema = this.requireSchema(user);
-    const device = await this.requireZteOlt(schema, id);
+    const device = await this.requireManagedOlt(schema, id);
     const result = await this.withTimeout(
-      this.zteOlt.upsertSpeedProfile({
+      this.oltCli(device).upsertSpeedProfile({
         ...this.zteConn(device),
         name: dto.name,
         downloadMbps: Number(dto.downloadMbps),
@@ -1134,27 +1886,40 @@ export class TopologyService {
         result.error || 'No se pudo guardar el perfil de velocidad',
       );
     }
+    try {
+      await this.refreshSpeedProfilesViaCli(schema, device, 'interactive');
+    } catch {
+      /* next sync will refresh */
+    }
     return result;
   }
 
   async deleteDeviceSpeedProfile(user: AuthUser, id: string, name: string) {
     const schema = this.requireSchema(user);
-    const device = await this.requireZteOlt(schema, id);
-    // Resolve exact UP/DOWN names from live list when possible
-    const live = await this.withTimeout(
-      this.zteOlt.listSpeedProfiles(this.zteConn(device)),
-      90_000,
-      'ZTE OLT speed profiles before delete',
+    const device = await this.requireManagedOlt(schema, id);
+    const cache = this.inventoryCache(device);
+    const decoded = decodeURIComponent(name);
+    const cachedMatch = (cache.speedProfiles ?? []).find(
+      (p) => p.name.toLowerCase() === decoded.toLowerCase(),
     );
-    const match = live.ok
-      ? live.profiles.find(
-          (p) => p.name.toLowerCase() === decodeURIComponent(name).toLowerCase(),
-        )
-      : null;
+    // Prefer cache names; only hit OLT list if cache miss
+    let match = cachedMatch ?? null;
+    if (!match) {
+      const live = await this.withTimeout(
+        this.oltCli(device).listSpeedProfiles(this.zteConn(device)),
+        90_000,
+        'ZTE OLT speed profiles before delete',
+      );
+      match = live.ok
+        ? (live.profiles.find(
+            (p) => p.name.toLowerCase() === decoded.toLowerCase(),
+          ) ?? null)
+        : null;
+    }
     const result = await this.withTimeout(
-      this.zteOlt.deleteSpeedProfile({
+      this.oltCli(device).deleteSpeedProfile({
         ...this.zteConn(device),
-        name: decodeURIComponent(name),
+        name: decoded,
         uploadProfile: match?.uploadProfile,
         downloadProfile: match?.downloadProfile,
       }),
@@ -1165,6 +1930,11 @@ export class TopologyService {
       throw new BadRequestException(
         result.error || 'No se pudo eliminar el perfil de velocidad',
       );
+    }
+    try {
+      await this.refreshSpeedProfilesViaCli(schema, device, 'interactive');
+    } catch {
+      /* next sync will refresh */
     }
     return result;
   }
@@ -1197,8 +1967,7 @@ export class TopologyService {
       );
     }
 
-    const port =
-      device.mgmtPort ?? (protocol === 'api_plain' ? 8728 : 8729);
+    const port = device.mgmtPort ?? (protocol === 'api_plain' ? 8728 : 8729);
     const useTls = protocol === 'api_ssl';
 
     if (dto.words?.length) {
@@ -1251,13 +2020,17 @@ export class TopologyService {
     }
 
     if (device.type === 'olt' && !device.subtype) {
-      // Seed / datos viejos: OLT sin modelo → bucket genérico (se afina al probe)
+      // Seed / datos viejos: OLT sin modelo → bucket genérico ZTE (se afina al probe)
+      // Huawei always picks an explicit subtype in the create form.
       device.subtype = 'zte_c3xx';
       await devices.save(device);
     }
 
     if (isZteOltDevice(device.type, device.subtype)) {
       return this.probeAndPersistZteOlt(schema, device);
+    }
+    if (isHuaweiOltDevice(device.type, device.subtype)) {
+      return this.probeAndPersistHuaweiOlt(schema, device);
     }
 
     // Routers sin subtype (p.ej. seed antiguo): asumir MikroTik
@@ -1277,8 +2050,7 @@ export class TopologyService {
     const probeParams = {
       host: device.mgmtHost,
       port:
-        device.mgmtPort ??
-        (device.mgmtProtocol === 'rest_https' ? 443 : 8729),
+        device.mgmtPort ?? (device.mgmtProtocol === 'rest_https' ? 443 : 8729),
       username: device.mgmtUsername,
       password: device.mgmtPassword,
       protocol: device.mgmtProtocol ?? 'api_ssl',
@@ -1338,10 +2110,7 @@ export class TopologyService {
       // Need 3 consecutive failures before marking disconnected if we were live
       const failThreshold = 3;
       let becameDown = false;
-      if (
-        device.connectionStatus === 'connected' &&
-        streak < failThreshold
-      ) {
+      if (device.connectionStatus === 'connected' && streak < failThreshold) {
         device.lastError = `Inestable (${streak}/${failThreshold}): ${errMsg}`;
         // Keep connected + last metrics so the dashboard doesn't flap
       } else {
@@ -1355,6 +2124,173 @@ export class TopologyService {
       }
     }
 
+    return device;
+  }
+
+  /**
+   * Lightweight OLT liveness via SNMP RO (sysUpTime).
+   * Used by background pollers — never opens Telnet/SSH.
+   */
+  private async probeAndPersistOltSnmp(schema: string, device: NetworkDevice) {
+    if (this.probeInFlight.has(device.id)) return;
+    this.probeInFlight.add(device.id);
+    try {
+      const devices =
+        await this.tenantConnections.getNetworkDeviceRepository(schema);
+      const community = device.snmpCommunity?.trim();
+      device.lastCheckedAt = new Date();
+
+      if (!device.mgmtHost || !community) {
+        // Keep previous status; mark summary so UI can hint to configure SNMP.
+        const summary = device.metricSummary ?? '';
+        if (!/SNMP sin community/i.test(summary)) {
+          device.metricSummary = summary
+            ? `${summary} · SNMP sin community RO`
+            : 'SNMP sin community RO';
+        }
+        await devices.save(device);
+        return;
+      }
+
+      const snmp = await this.oltSnmp(device).probeSnmp({
+        host: device.mgmtHost,
+        snmpPort: device.snmpPort,
+        snmpCommunity: community,
+      });
+
+      if (snmp.ok) {
+        this.probeFailStreak.delete(device.id);
+        device.connectionStatus = 'connected';
+        device.lastError = null;
+        const summary = (device.metricSummary ?? '')
+          .replace(/\s*·\s*SNMP fail:[^·]*/gi, '')
+          .replace(/\s*·\s*SNMP sin community RO/gi, '')
+          .replace(/\s*·\s*SNMP OK \(monitoreo\)/gi, '')
+          .trim();
+        device.metricSummary = summary
+          ? `${summary} · SNMP OK (monitoreo)`
+          : 'SNMP OK (monitoreo)';
+        if (
+          snmp.sysUpTimeTicks != null &&
+          Number.isFinite(snmp.sysUpTimeTicks)
+        ) {
+          const sec = Math.floor(snmp.sysUpTimeTicks / 100);
+          const d = Math.floor(sec / 86400);
+          const h = Math.floor((sec % 86400) / 3600);
+          const m = Math.floor((sec % 3600) / 60);
+          const s = sec % 60;
+          device.metricUptime = `${d} Days, ${h} Hours, ${m} Minutes, ${s} Seconds`;
+        }
+        await devices.save(device);
+        return;
+      }
+
+      const streak = (this.probeFailStreak.get(device.id) ?? 0) + 1;
+      this.probeFailStreak.set(device.id, streak);
+      const errMsg = snmp.error ?? 'SNMP unreachable';
+      const failThreshold = 3;
+      let becameDown = false;
+      if (device.connectionStatus === 'connected' && streak < failThreshold) {
+        device.lastError = `SNMP inestable (${streak}/${failThreshold}): ${errMsg}`;
+      } else {
+        becameDown = device.connectionStatus === 'connected';
+        device.connectionStatus = 'disconnected';
+        device.lastError = `SNMP: ${errMsg}`;
+      }
+      const summary = (device.metricSummary ?? '')
+        .replace(/\s*·\s*SNMP OK \(monitoreo\)/gi, '')
+        .replace(/\s*·\s*SNMP fail:[^·]*/gi, '')
+        .trim();
+      device.metricSummary = summary
+        ? `${summary} · SNMP fail: ${errMsg.slice(0, 80)}`
+        : `SNMP fail: ${errMsg.slice(0, 80)}`;
+      await devices.save(device);
+      if (becameDown) {
+        void this.notifyTenantAdminsDeviceDown(schema, device);
+      }
+    } finally {
+      this.probeInFlight.delete(device.id);
+    }
+  }
+
+  private async probeAndPersistHuaweiOlt(
+    schema: string,
+    device: NetworkDevice,
+  ) {
+    const devices =
+      await this.tenantConnections.getNetworkDeviceRepository(schema);
+    const result = await this.withTimeout(
+      this.huaweiOlt.probe({
+        ...this.zteConn(device),
+        subtypeHint: device.subtype,
+      }),
+      55_000,
+      'Huawei OLT probe',
+    ).catch((err) => ({
+      ok: false as const,
+      error: err instanceof Error ? err.message : String(err),
+    }));
+    device.lastCheckedAt = new Date();
+    if (!result.ok) {
+      device.connectionStatus = 'disconnected';
+      device.lastError = result.error ?? 'Connection failed';
+      await devices.save(device);
+      return device;
+    }
+    this.probeFailStreak.delete(device.id);
+    device.connectionStatus = 'connected';
+    device.lastError = null;
+    const detectedSubtype = detectHuaweiSubtypeFromProduct(result.product);
+    if (detectedSubtype) device.subtype = detectedSubtype;
+    device.metricBoardName =
+      result.product ?? device.metricBoardName ?? 'Huawei OLT';
+    device.metricIdentity = result.hostname ?? device.metricIdentity;
+    const cleanSoftRaw =
+      result.softVer
+        ?.replace(/\s*[·|]\s*(ma5600t|ma5800|unknown)\s*$/i, '')
+        .trim() || null;
+    const cleanSoft =
+      cleanSoftRaw && !/^(ma5600t|ma5800|unknown)$/i.test(cleanSoftRaw)
+        ? cleanSoftRaw
+        : null;
+    device.metricVersion = cleanSoft || device.metricVersion;
+    device.ponType = result.ponType ?? device.ponType;
+    const dialect =
+      result.firmwareFamily && result.firmwareFamily !== 'unknown'
+        ? `dialect ${result.firmwareFamily}`
+        : null;
+    const parts = [result.rawCardSummary ?? null, cleanSoft, dialect];
+    const community = device.snmpCommunity?.trim();
+    if (community && device.mgmtHost) {
+      const snmp = await this.huaweiSnmp.probeSnmp({
+        host: device.mgmtHost,
+        snmpPort: device.snmpPort,
+        snmpCommunity: community,
+      });
+      parts.push(
+        snmp.ok
+          ? 'SNMP OK (monitoreo)'
+          : `SNMP fail: ${(snmp.error ?? 'error').slice(0, 80)}`,
+      );
+    } else {
+      parts.push('SNMP sin community RO');
+    }
+    device.metricSummary = parts.filter(Boolean).join(' · ') || null;
+    await devices.save(device);
+    try {
+      await this.recordMetricSample(schema, device, result);
+    } catch {
+      /* history is best effort */
+    }
+    try {
+      await this.onuTypeSync.syncTypesForConnectedOlt(schema, device);
+    } catch (err) {
+      this.logger.warn(
+        `Huawei ONU-type sync after probe: ${
+          err instanceof Error ? err.message : err
+        }`,
+      );
+    }
     return device;
   }
 
@@ -1375,6 +2311,7 @@ export class TopologyService {
           protocol,
           username: device.mgmtUsername!,
           password: device.mgmtPassword!,
+          subtypeHint: device.subtype,
         }),
         55_000,
         'ZTE OLT probe',
@@ -1406,7 +2343,17 @@ export class TopologyService {
       device.metricIdentity = result.hostname ?? device.metricIdentity;
       const softVer = result.softVer?.trim() || null;
       if (softVer) device.metricVersion = softVer;
-      const family = detectFirmwareFamily(softVer);
+      const family =
+        detectFirmwareFamily(softVer, detectedSubtype ?? device.subtype) ??
+        (result.firmwareFamily === 'c6xx'
+          ? 'titan'
+          : result.firmwareFamily === 'c3xx'
+            ? detectFirmwareFamily(softVer)
+            : null);
+      const dialectNote =
+        result.firmwareFamily && result.firmwareFamily !== 'unknown'
+          ? `dialect ${result.firmwareFamily}`
+          : null;
       const detectedPon = result.ponType;
       if (detectedPon) {
         device.ponType = detectedPon;
@@ -1416,7 +2363,9 @@ export class TopologyService {
           ? Math.round(result.cpuLoad)
           : device.metricCpuLoad;
       device.metricFreeMemory =
-        result.freeMemory != null ? String(result.freeMemory) : device.metricFreeMemory;
+        result.freeMemory != null
+          ? String(result.freeMemory)
+          : device.metricFreeMemory;
       device.metricTotalMemory =
         result.totalMemory != null
           ? String(result.totalMemory)
@@ -1428,7 +2377,8 @@ export class TopologyService {
           : device.metricTemperature;
       const parts = [
         result.rawCardSummary ?? null,
-        family ? `FW ${family}.x` : softVer,
+        family ? (family === 'titan' ? 'FW Titan' : `FW ${family}.x`) : softVer,
+        dialectNote,
         detectedPon
           ? `PON ${detectedPon === 'gpon_epon' ? 'GPON+EPON' : detectedPon.toUpperCase()}`
           : null,
@@ -1439,10 +2389,49 @@ export class TopologyService {
           ? `Detectado ${OLT_SUBTYPE_LABELS[detectedSubtype]}`
           : null,
       ].filter(Boolean);
+
+      // SNMP RO health — does not block CLI success; never uses RW community.
+      const community = device.snmpCommunity?.trim();
+      let snmpMonitor: { ok: boolean; error?: string } | null = null;
+      if (community && device.mgmtHost) {
+        const snmp = await this.zteSnmp.probeSnmp({
+          host: device.mgmtHost,
+          snmpPort: device.snmpPort,
+          snmpCommunity: community,
+        });
+        snmpMonitor = snmp.ok
+          ? { ok: true }
+          : { ok: false, error: snmp.error ?? 'fail' };
+        parts.push(
+          snmp.ok
+            ? 'SNMP OK (monitoreo)'
+            : `SNMP fail: ${(snmp.error ?? 'error').slice(0, 80)}`,
+        );
+      } else {
+        parts.push('SNMP sin community RO');
+        snmpMonitor = { ok: false, error: 'community missing' };
+      }
+
       device.metricSummary = parts.length ? parts.join(' · ') : null;
-      // Migrate legacy bucket only when product is clear
-      if (device.subtype === 'zte_c3xx' && detectedSubtype) {
-        device.subtype = detectedSubtype;
+      // Migrate legacy bucket or auto-set C6xx/C3xx when product is clear
+      if (detectedSubtype) {
+        if (
+          !device.subtype ||
+          device.subtype === 'zte_c3xx' ||
+          (device.subtype.startsWith('zte_') &&
+            detectedSubtype !== device.subtype &&
+            (device.subtype.startsWith('zte_c6') ||
+              detectedSubtype.startsWith('zte_c6')))
+        ) {
+          // Always adopt clear C6xx detection; migrate legacy; keep explicit C3xx unless C6xx detected
+          if (
+            device.subtype === 'zte_c3xx' ||
+            !device.subtype ||
+            detectedSubtype.startsWith('zte_c6')
+          ) {
+            device.subtype = detectedSubtype;
+          }
+        }
       }
       await devices.save(device);
 
@@ -1466,16 +2455,18 @@ export class TopologyService {
       } catch {
         // Type sync is best-effort; connection itself succeeded
       }
+
+      // Attach ephemeral SNMP status for the caller (test connection UI).
+      (
+        device as NetworkDevice & { snmpMonitor?: typeof snmpMonitor }
+      ).snmpMonitor = snmpMonitor;
     } else {
       const streak = (this.probeFailStreak.get(device.id) ?? 0) + 1;
       this.probeFailStreak.set(device.id, streak);
       const errMsg = result.error ?? 'Connection failed';
       const failThreshold = 3;
       let becameDown = false;
-      if (
-        device.connectionStatus === 'connected' &&
-        streak < failThreshold
-      ) {
+      if (device.connectionStatus === 'connected' && streak < failThreshold) {
         device.lastError = `Inestable (${streak}/${failThreshold}): ${errMsg}`;
       } else {
         becameDown = device.connectionStatus === 'connected';
@@ -1501,8 +2492,7 @@ export class TopologyService {
       });
       if (!tenant) return;
 
-      const usersRepo =
-        await this.tenantConnections.getUserRepository(schema);
+      const usersRepo = await this.tenantConnections.getUserRepository(schema);
       const admins = await usersRepo.find({
         where: [
           { role: 'owner', isActive: true },
@@ -1613,8 +2603,7 @@ export class TopologyService {
           result.temperature != null && Number.isFinite(result.temperature)
             ? result.temperature
             : null,
-        uptimeSeconds:
-          uptimeSeconds != null ? String(uptimeSeconds) : null,
+        uptimeSeconds: uptimeSeconds != null ? String(uptimeSeconds) : null,
       }),
     );
 
@@ -1644,9 +2633,9 @@ export class TopologyService {
       (verbose[1] || verbose[2] || verbose[3] || verbose[4])
     ) {
       return (
-        (Number(verbose[1] || 0) * 86400) +
-        (Number(verbose[2] || 0) * 3600) +
-        (Number(verbose[3] || 0) * 60) +
+        Number(verbose[1] || 0) * 86400 +
+        Number(verbose[2] || 0) * 3600 +
+        Number(verbose[3] || 0) * 60 +
         Number(verbose[4] || 0)
       );
     }
@@ -1668,11 +2657,7 @@ export class TopologyService {
     return matched ? total : null;
   }
 
-  async getDeviceMetricHistory(
-    user: AuthUser,
-    deviceId: string,
-    hours = 6,
-  ) {
+  async getDeviceMetricHistory(user: AuthUser, deviceId: string, hours = 6) {
     const schema = this.requireSchema(user);
     await this.refreshDeviceIfStale(schema, deviceId);
 
@@ -1710,8 +2695,7 @@ export class TopologyService {
         cpuLoad: r.cpuLoad,
         memoryUsedPct: r.memoryUsedPct,
         temperature: r.temperature,
-        uptimeSeconds:
-          r.uptimeSeconds != null ? Number(r.uptimeSeconds) : null,
+        uptimeSeconds: r.uptimeSeconds != null ? Number(r.uptimeSeconds) : null,
       })),
     };
   }
@@ -1741,16 +2725,13 @@ export class TopologyService {
       }>;
     }>,
   ) {
-    const ports =
-      await this.tenantConnections.getNetworkPortRepository(schema);
+    const ports = await this.tenantConnections.getNetworkPortRepository(schema);
     const existing = await ports.find({
       where: { deviceId },
       order: { sortOrder: 'ASC' },
     });
 
-    const byName = new Map(
-      existing.map((p) => [p.name.toLowerCase(), p]),
-    );
+    const byName = new Map(existing.map((p) => [p.name.toLowerCase(), p]));
     const byDefaultName = new Map(
       existing
         .filter((p) => p.defaultName)
@@ -1924,8 +2905,7 @@ export class TopologyService {
       );
     }
 
-    const ports =
-      await this.tenantConnections.getNetworkPortRepository(schema);
+    const ports = await this.tenantConnections.getNetworkPortRepository(schema);
     const maxOrder = await ports
       .createQueryBuilder('p')
       .select('MAX(p.sortOrder)', 'max')
@@ -1959,8 +2939,7 @@ export class TopologyService {
     interfaceName?: string,
   ) {
     const schema = this.requireSchema(user);
-    const ports =
-      await this.tenantConnections.getNetworkPortRepository(schema);
+    const ports = await this.tenantConnections.getNetworkPortRepository(schema);
     let port = await ports.findOne({ where: { id: portId } });
     if (!port) throw new NotFoundException('Port not found');
 
@@ -2010,18 +2989,14 @@ export class TopologyService {
       }
 
       if (iface && iface !== port.name) {
-        const vlan = (port.vlans ?? []).find(
-          (v) => v.interfaceName === iface,
-        );
+        const vlan = (port.vlans ?? []).find((v) => v.interfaceName === iface);
         return {
           portId: port.id,
           portName: targetLabel,
           interfaceName: iface,
           source: 'device' as const,
           addresses: toRows(
-            vlan?.ipAddresses?.length
-              ? vlan.ipAddresses
-              : undefined,
+            vlan?.ipAddresses?.length ? vlan.ipAddresses : undefined,
           ),
         };
       }
@@ -2072,9 +3047,8 @@ export class TopologyService {
     interfaceName?: string,
   ) {
     const schema = this.requireSchema(user);
-    const ports =
-      await this.tenantConnections.getNetworkPortRepository(schema);
-    let port = await ports.findOne({ where: { id: portId } });
+    const ports = await this.tenantConnections.getNetworkPortRepository(schema);
+    const port = await ports.findOne({ where: { id: portId } });
     if (!port) throw new NotFoundException('Port not found');
 
     const devices =
@@ -2174,8 +3148,7 @@ export class TopologyService {
     comment?: string,
   ) {
     const schema = this.requireSchema(user);
-    const ports =
-      await this.tenantConnections.getNetworkPortRepository(schema);
+    const ports = await this.tenantConnections.getNetworkPortRepository(schema);
     const port = await ports.findOne({ where: { id: portId } });
     if (!port) throw new NotFoundException('Port not found');
 
@@ -2214,8 +3187,7 @@ export class TopologyService {
     const result = await this.mikrotik.createVlanInterface({
       host: device.mgmtHost,
       port:
-        device.mgmtPort ??
-        (device.mgmtProtocol === 'rest_https' ? 443 : 8729),
+        device.mgmtPort ?? (device.mgmtProtocol === 'rest_https' ? 443 : 8729),
       username: device.mgmtUsername,
       password: device.mgmtPassword,
       protocol: device.mgmtProtocol ?? 'api_ssl',
@@ -2244,8 +3216,7 @@ export class TopologyService {
     interfaceName?: string,
   ) {
     const schema = this.requireSchema(user);
-    const ports =
-      await this.tenantConnections.getNetworkPortRepository(schema);
+    const ports = await this.tenantConnections.getNetworkPortRepository(schema);
     const port = await ports.findOne({ where: { id: portId } });
     if (!port) throw new NotFoundException('Port not found');
 
@@ -2256,7 +3227,8 @@ export class TopologyService {
 
     const next = comment.trim();
     const iface = interfaceName?.trim() || port.name;
-    const isVlan = !!interfaceName?.trim() && interfaceName.trim() !== port.name;
+    const isVlan =
+      !!interfaceName?.trim() && interfaceName.trim() !== port.name;
 
     if (isVlan) {
       const vlan = (port.vlans ?? []).find((v) => v.interfaceName === iface);
@@ -2311,8 +3283,7 @@ export class TopologyService {
 
   async updatePort(user: AuthUser, id: string, dto: UpdateNetworkPortDto) {
     const schema = this.requireSchema(user);
-    const ports =
-      await this.tenantConnections.getNetworkPortRepository(schema);
+    const ports = await this.tenantConnections.getNetworkPortRepository(schema);
     const port = await ports.findOne({ where: { id } });
     if (!port) throw new NotFoundException('Port not found');
     if (port.isSynced) {
@@ -2332,8 +3303,7 @@ export class TopologyService {
 
   async deletePort(user: AuthUser, id: string) {
     const schema = this.requireSchema(user);
-    const ports =
-      await this.tenantConnections.getNetworkPortRepository(schema);
+    const ports = await this.tenantConnections.getNetworkPortRepository(schema);
     const port = await ports.findOne({ where: { id } });
     if (!port) throw new NotFoundException('Port not found');
     if (port.isSynced) {
@@ -2351,8 +3321,7 @@ export class TopologyService {
       throw new BadRequestException('Cannot link a port to itself');
     }
 
-    const ports =
-      await this.tenantConnections.getNetworkPortRepository(schema);
+    const ports = await this.tenantConnections.getNetworkPortRepository(schema);
     const [portA, portB] = await Promise.all([
       ports.findOne({ where: { id: dto.portAId } }),
       ports.findOne({ where: { id: dto.portBId } }),
@@ -2385,8 +3354,7 @@ export class TopologyService {
       );
     }
 
-    const links =
-      await this.tenantConnections.getNetworkLinkRepository(schema);
+    const links = await this.tenantConnections.getNetworkLinkRepository(schema);
     const busy = await links.findOne({
       where: [
         { portAId: dto.portAId },
@@ -2410,8 +3378,7 @@ export class TopologyService {
 
   async deleteLink(user: AuthUser, id: string) {
     const schema = this.requireSchema(user);
-    const links =
-      await this.tenantConnections.getNetworkLinkRepository(schema);
+    const links = await this.tenantConnections.getNetworkLinkRepository(schema);
     const link = await links.findOne({ where: { id } });
     if (!link) throw new NotFoundException('Link not found');
     await links.delete({ id });
@@ -2422,8 +3389,7 @@ export class TopologyService {
     const schema = this.requireSchema(user);
     await this.ensureInternetDevice(schema);
 
-    const ports =
-      await this.tenantConnections.getNetworkPortRepository(schema);
+    const ports = await this.tenantConnections.getNetworkPortRepository(schema);
     const port = await ports.findOne({ where: { id: portId } });
     if (!port) throw new NotFoundException('Port not found');
 
@@ -2434,8 +3400,7 @@ export class TopologyService {
     });
     if (!sourceDevice) throw new NotFoundException('Device not found');
 
-    const links =
-      await this.tenantConnections.getNetworkLinkRepository(schema);
+    const links = await this.tenantConnections.getNetworkLinkRepository(schema);
     const allLinks = await links.find();
     const usedPortIds = new Set<string>();
     for (const l of allLinks) {

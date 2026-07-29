@@ -7,6 +7,7 @@ import {
   OneToMany,
 } from 'typeorm';
 import { NetworkPort } from './network-port.entity';
+import type { OltInventoryCache } from '../olt-inventory-cache';
 
 export const NETWORK_DEVICE_TYPES = [
   'internet',
@@ -63,7 +64,12 @@ export class NetworkDevice {
   @Column({ name: 'mgmt_port', type: 'int', nullable: true })
   mgmtPort: number | null;
 
-  @Column({ name: 'mgmt_username', type: 'varchar', length: 120, nullable: true })
+  @Column({
+    name: 'mgmt_username',
+    type: 'varchar',
+    length: 120,
+    nullable: true,
+  })
   mgmtUsername: string | null;
 
   @Column({ name: 'mgmt_password', type: 'text', nullable: true })
@@ -102,17 +108,37 @@ export class NetworkDevice {
   @Column({ name: 'metric_total_memory', type: 'bigint', nullable: true })
   metricTotalMemory: string | null;
 
-  @Column({ name: 'metric_uptime', type: 'varchar', length: 80, nullable: true })
+  @Column({
+    name: 'metric_uptime',
+    type: 'varchar',
+    length: 80,
+    nullable: true,
+  })
   metricUptime: string | null;
 
-  @Column({ name: 'metric_identity', type: 'varchar', length: 120, nullable: true })
+  @Column({
+    name: 'metric_identity',
+    type: 'varchar',
+    length: 120,
+    nullable: true,
+  })
   metricIdentity: string | null;
 
-  @Column({ name: 'metric_version', type: 'varchar', length: 80, nullable: true })
+  @Column({
+    name: 'metric_version',
+    type: 'varchar',
+    length: 80,
+    nullable: true,
+  })
   metricVersion: string | null;
 
   /** RouterOS board-name (hardware model), e.g. RB3011UiAS */
-  @Column({ name: 'metric_board_name', type: 'varchar', length: 120, nullable: true })
+  @Column({
+    name: 'metric_board_name',
+    type: 'varchar',
+    length: 120,
+    nullable: true,
+  })
   metricBoardName: string | null;
 
   /** Preferred temperature °C from /system/health */
@@ -172,7 +198,12 @@ export class NetworkDevice {
   ponType: string | null;
 
   /** Free-form probe summary (e.g. OLT card counts) */
-  @Column({ name: 'metric_summary', type: 'varchar', length: 255, nullable: true })
+  @Column({
+    name: 'metric_summary',
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+  })
   metricSummary: string | null;
 
   /**
@@ -189,9 +220,20 @@ export class NetworkDevice {
     string,
     {
       /** ONUs cannot reach each other in this VLAN. */
-      isolated?: boolean
+      isolated?: boolean;
     }
   >;
+
+  /**
+   * Cached OLT inventory (uplinks / PON / VLANs) for fast UI.
+   * Status refreshed via SNMP; config/VLAN list via CLI every ~30m or manual.
+   */
+  @Column({
+    name: 'olt_inventory_cache',
+    type: 'jsonb',
+    nullable: true,
+  })
+  oltInventoryCache: OltInventoryCache | null;
 
   /** When set, skip first-connect ONU import modal for this OLT */
   @Column({

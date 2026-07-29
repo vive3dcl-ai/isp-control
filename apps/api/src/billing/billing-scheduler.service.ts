@@ -13,7 +13,10 @@ import { QUEUE_BILLING } from '../queues/queue.constants';
 import { TenantConnectionService } from '../database/tenant-connection.service';
 import { BillingService } from './billing.service';
 import { alreadyRanThisMinute, cronMatches } from './cron.util';
-import type { BillingJobName, BillingJobPayload } from '../queues/queue.constants';
+import type {
+  BillingJobName,
+  BillingJobPayload,
+} from '../queues/queue.constants';
 
 const TICK_MS = 60_000;
 
@@ -69,10 +72,9 @@ export class BillingSchedulerService implements OnModuleInit, OnModuleDestroy {
     try {
       await this.tenantConnections.ensureTenantSchema(tenant.schemaName);
       const settings = await this.billing.ensureSettings(tenant.schemaName);
-      const repo =
-        await this.tenantConnections.getBillingSettingsRepository(
-          tenant.schemaName,
-        );
+      const repo = await this.tenantConnections.getBillingSettingsRepository(
+        tenant.schemaName,
+      );
 
       const jobs: Array<{
         name: BillingJobName;
@@ -148,7 +150,7 @@ export class BillingSchedulerService implements OnModuleInit, OnModuleDestroy {
     schemaName: string,
     job: 'periods' | 'generate' | 'send',
   ) {
-    const name = (`billing.${job}` as BillingJobName);
+    const name = `billing.${job}` as BillingJobName;
     const payload: BillingJobPayload = {
       tenantId,
       schemaName,

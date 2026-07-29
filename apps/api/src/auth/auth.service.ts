@@ -20,17 +20,19 @@ import { TenantConnectionService } from '../database/tenant-connection.service';
 import { PlatformMailerService } from '../platform/platform-mailer.service';
 import { PlatformPublicUrlsService } from '../platform/platform-public-urls.service';
 import { PlatformBrandingService } from '../platform/platform-branding.service';
-import {
-  emailCtaButton,
-  escapeHtml,
-} from '../platform/platform-email-layout';
+import { emailCtaButton, escapeHtml } from '../platform/platform-email-layout';
+import { credentialVersion } from './secure-compare';
 import { LoginDto } from './dto/login.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { AuthUser, JwtPayload, LoginResponse } from './auth.types';
-import { isPlatformRole, type PlatformRole, type TenantUserRole } from './roles';
+import {
+  isPlatformRole,
+  type PlatformRole,
+  type TenantUserRole,
+} from './roles';
 
 const RESET_TTL_MS = 60 * 60 * 1000;
 
@@ -78,6 +80,7 @@ export class AuthService {
         email: admin.email,
         name: admin.name,
         role,
+        authVersion: credentialVersion(admin.passwordHash),
       };
 
       return {
@@ -129,6 +132,7 @@ export class AuthService {
       tenantSlug: tenant.slug,
       schemaName: tenant.schemaName,
       tenantRole: tenantUser.role,
+      authVersion: credentialVersion(tenantUser.passwordHash),
     };
 
     return {
@@ -203,12 +207,9 @@ export class AuthService {
   ): Promise<LoginResponse> {
     this.assertNotImpersonating(user);
 
-    const name =
-      dto.name !== undefined ? dto.name.trim() : undefined;
+    const name = dto.name !== undefined ? dto.name.trim() : undefined;
     const email =
-      dto.email !== undefined
-        ? dto.email.toLowerCase().trim()
-        : undefined;
+      dto.email !== undefined ? dto.email.toLowerCase().trim() : undefined;
 
     if (name === undefined && email === undefined) {
       throw new BadRequestException('No hay cambios para guardar');
@@ -238,6 +239,7 @@ export class AuthService {
         email: admin.email,
         name: admin.name,
         role,
+        authVersion: credentialVersion(admin.passwordHash),
       };
       return {
         accessToken: await this.jwt.signAsync(payload),
@@ -301,6 +303,7 @@ export class AuthService {
       tenantSlug: tenant?.slug,
       schemaName: user.schemaName,
       tenantRole,
+      authVersion: credentialVersion(tenantUser.passwordHash),
     };
 
     return {
@@ -601,6 +604,14 @@ export class AuthService {
       tenantRole: 'owner',
       impersonatedBy: admin.sub,
       impersonatorEmail: admin.email,
+      authVersion: credentialVersion(tenantUser.passwordHash),
+      impersonatorAuthVersion: credentialVersion(
+        (
+          await this.platformAdmins.findOne({
+            where: { id: admin.sub },
+          })
+        )?.passwordHash,
+      ),
     };
 
     return {
@@ -624,8 +635,8 @@ export class AuthService {
     if (role && isPlatformRole(role)) {
       return role;
     }
-    // Legacy rows / missing column → treat as superadmin
-    return 'superadmin';
+    // Unknown/legacy values must never grant elevated privileges.
+    return 'user';
   }
 
   private assertNotImpersonating(user: AuthUser) {

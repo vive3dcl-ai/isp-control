@@ -1,12 +1,12 @@
 import { Controller, Get, Header, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
-import { PlatformAccess } from '../auth/decorators/roles.decorator';
+import { Roles } from '../auth/decorators/roles.decorator';
 import { VpnService } from './vpn.service';
 
 @Controller('admin/vpn')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@PlatformAccess()
+@Roles('superadmin')
 export class VpnAdminController {
   constructor(private readonly vpn: VpnService) {}
 

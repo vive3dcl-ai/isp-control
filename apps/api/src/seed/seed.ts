@@ -17,8 +17,16 @@ async function seed() {
   const tenants = app.get(TenantsService);
   const tenantConnections = app.get(TenantConnectionService);
 
-  const adminEmail = 'admin@isp.local';
-  const adminPassword = 'Admin123!';
+  const isProduction = process.env.NODE_ENV === 'production';
+  const adminEmail =
+    process.env.SEED_ADMIN_EMAIL?.trim().toLowerCase() || 'admin@isp.local';
+  const adminPassword =
+    process.env.SEED_ADMIN_PASSWORD || (isProduction ? '' : 'Admin123!');
+  if (!adminPassword || adminPassword.length < 12) {
+    throw new Error(
+      'SEED_ADMIN_PASSWORD debe tener al menos 12 caracteres en producción',
+    );
+  }
   let admin = await adminRepo.findOne({ where: { email: adminEmail } });
   if (!admin) {
     admin = adminRepo.create({
@@ -28,9 +36,7 @@ async function seed() {
       passwordHash: await bcrypt.hash(adminPassword, 10),
     });
     await adminRepo.save(admin);
-    console.log(
-      `Created platform superadmin: ${adminEmail} / ${adminPassword}`,
-    );
+    console.log(`Created platform superadmin: ${adminEmail}`);
   } else {
     if (admin.role !== 'superadmin') {
       admin.role = 'superadmin';
@@ -42,29 +48,35 @@ async function seed() {
     }
   }
 
-  const existing = (await tenants.list()).find((t) => t.slug === 'demo');
-  if (!existing) {
-    const result = await provisioning.provision({
-      name: 'Demo ISP',
-      legalName: 'Demo ISP S.A.',
-      phone: '+58 212 0000000',
-      address: 'Av. Principal, Caracas',
-      slug: 'demo',
-      ownerName: 'Demo User',
-      ownerEmail: 'user@demo.local',
-      ownerPassword: 'User123!',
-    });
-    console.log(
-      `Created tenant: ${result.tenant.slug} / owner ${result.owner.email}`,
-    );
-  } else {
-    console.log('Tenant already exists: demo');
-  }
+  const seedDemo =
+    process.env.SEED_DEMO_DATA !== undefined
+      ? process.env.SEED_DEMO_DATA === 'true'
+      : !isProduction;
+  if (seedDemo) {
+    const existing = (await tenants.list()).find((t) => t.slug === 'demo');
+    if (!existing) {
+      const result = await provisioning.provision({
+        name: 'Demo ISP',
+        legalName: 'Demo ISP S.A.',
+        phone: '+58 212 0000000',
+        address: 'Av. Principal, Caracas',
+        slug: 'demo',
+        ownerName: 'Demo User',
+        ownerEmail: 'user@demo.local',
+        ownerPassword: 'User123!',
+      });
+      console.log(
+        `Created tenant: ${result.tenant.slug} / owner ${result.owner.email}`,
+      );
+    } else {
+      console.log('Tenant already exists: demo');
+    }
 
-  const demo = (await tenants.list()).find((t) => t.slug === 'demo');
-  if (demo) {
-    await seedCrmDemo(tenantConnections, demo.schemaName);
-    await seedTopologyDemo(tenantConnections, demo.schemaName);
+    const demo = (await tenants.list()).find((t) => t.slug === 'demo');
+    if (demo) {
+      await seedCrmDemo(tenantConnections, demo.schemaName);
+      await seedTopologyDemo(tenantConnections, demo.schemaName);
+    }
   }
 
   await app.close();
@@ -77,8 +89,7 @@ async function seedCrmDemo(
 ) {
   await tenantConnections.ensureTenantSchema(schemaName);
 
-  const plans =
-    await tenantConnections.getServicePlanRepository(schemaName);
+  const plans = await tenantConnections.getServicePlanRepository(schemaName);
   const profiles =
     await tenantConnections.getSpeedProfileRepository(schemaName);
   const clients = await tenantConnections.getClientRepository(schemaName);
@@ -381,7 +392,7 @@ async function seedTopologyDemo(
   }
 }
 
-seed().catch(async (err) => {
+seed().catch((err: unknown) => {
   console.error(err);
   process.exit(1);
 });

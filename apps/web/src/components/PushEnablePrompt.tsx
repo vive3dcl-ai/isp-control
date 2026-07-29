@@ -78,14 +78,14 @@ export function PushEnablePrompt() {
 
   // Cada login vuelve a pedir (aunque en esta pestaña hubieran dicho "ahora no").
   useEffect(() => {
-    if (!user?.sub) return
+    if (!user?.id) return
     try {
       sessionStorage.removeItem(SESSION_DISMISS_KEY)
     } catch {
       // ignore
     }
     setInstallTick((n) => n + 1)
-  }, [user?.sub])
+  }, [user?.id])
 
   useEffect(() => {
     if (loading || !user) {

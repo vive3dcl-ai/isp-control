@@ -17,7 +17,11 @@ import {
 import { Type } from 'class-transformer';
 import { CREATABLE_DEVICE_TYPES } from '../entities/network-device.entity';
 import { ROUTER_SUBTYPES } from '../router.constants';
-import { OLT_SUBTYPES, OLT_CONNECTION_MODES, OLT_PON_TYPES } from '../olt.constants';
+import {
+  OLT_SUBTYPES,
+  OLT_CONNECTION_MODES,
+  OLT_PON_TYPES,
+} from '../olt.constants';
 
 export class CreateNetworkDeviceDto {
   @IsString()

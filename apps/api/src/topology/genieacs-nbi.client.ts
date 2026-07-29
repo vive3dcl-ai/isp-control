@@ -5,6 +5,18 @@ export type GenieParamValue = {
   type?: string;
 };
 
+function primitiveString(value: unknown): string | null {
+  if (
+    typeof value === 'string' ||
+    typeof value === 'number' ||
+    typeof value === 'boolean' ||
+    typeof value === 'bigint'
+  ) {
+    return String(value);
+  }
+  return null;
+}
+
 /**
  * Minimal GenieACS NBI HTTP client (REST on :7557).
  * @see https://docs.genieacs.com/en/latest/api-reference.html
@@ -67,7 +79,9 @@ export class GenieAcsNbiClient {
     // Last resort: scan devices and match _id token locally (cheap for lab sizes).
     try {
       const all = await this.findDevices({});
-      const hit = all.find((d) => deviceIdMatchesSerial(String(d._id ?? ''), sn));
+      const hit = all.find((d) =>
+        deviceIdMatchesSerial(primitiveString(d._id) ?? '', sn),
+      );
       if (hit) return hit;
     } catch (e) {
       this.logger.debug(
@@ -166,7 +180,7 @@ export function genieChildIndices(obj: unknown, path: string): number[] {
     cur = (cur as Record<string, unknown>)[p];
   }
   if (!cur || typeof cur !== 'object') return [];
-  return Object.keys(cur as object)
+  return Object.keys(cur)
     .filter((k) => /^\d+$/.test(k))
     .map(Number)
     .sort((a, b) => a - b);
@@ -205,7 +219,10 @@ export function serialIdTokens(serial: string): string[] {
   return [...out].filter(Boolean);
 }
 
-export function deviceIdMatchesSerial(deviceId: string, serial: string): boolean {
+export function deviceIdMatchesSerial(
+  deviceId: string,
+  serial: string,
+): boolean {
   const id = deviceId.trim();
   if (!id || !serial.trim()) return false;
   const upper = id.toUpperCase();
@@ -217,13 +234,13 @@ export function deviceIdMatchesSerial(deviceId: string, serial: string): boolean
 
 export function strVal(v: GenieParamValue | null): string | null {
   if (!v || v.value == null) return null;
-  return String(v.value);
+  return primitiveString(v.value);
 }
 
 export function boolVal(v: GenieParamValue | null): boolean | null {
   if (!v || v.value == null) return null;
   if (typeof v.value === 'boolean') return v.value;
-  const s = String(v.value).toLowerCase();
+  const s = primitiveString(v.value)?.toLowerCase();
   if (s === 'true' || s === '1') return true;
   if (s === 'false' || s === '0') return false;
   return null;

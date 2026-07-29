@@ -40,8 +40,7 @@ const GENERIC_SEEDS: Array<{
   {
     code: 'generic_2',
     name: 'Generic_2',
-    description:
-      'Bridge/SFU: VLAN sin etiqueta (untag) en eth_0/1 (acceso).',
+    description: 'Bridge/SFU: VLAN sin etiqueta (untag) en eth_0/1 (acceso).',
     vlanCli: 'vlan port eth_0/1 mode untag',
     portKind: 'eth',
     sortOrder: 2,
@@ -49,8 +48,7 @@ const GENERIC_SEEDS: Array<{
   {
     code: 'generic_3',
     name: 'Generic_3',
-    description:
-      'Multi-ETH: etiqueta VLAN en eth_0/2 (segundo puerto LAN).',
+    description: 'Multi-ETH: etiqueta VLAN en eth_0/2 (segundo puerto LAN).',
     vlanCli: 'vlan port eth_0/2 mode tag',
     portKind: 'eth',
     sortOrder: 3,
@@ -66,8 +64,7 @@ const GENERIC_SEEDS: Array<{
   {
     code: 'generic_5',
     name: 'Generic_5',
-    description:
-      'HGU/router: VLAN untag vía interfaz virtual VEIP (veip_1).',
+    description: 'HGU/router: VLAN untag vía interfaz virtual VEIP (veip_1).',
     vlanCli: 'vlan port veip_1 mode untag',
     portKind: 'veip',
     sortOrder: 5,
@@ -98,8 +95,7 @@ export class OnuSettingsService {
   }
 
   private async ensureGenericProfiles(schema: string): Promise<OnuProfile[]> {
-    const repo =
-      await this.tenantConnections.getOnuProfileRepository(schema);
+    const repo = await this.tenantConnections.getOnuProfileRepository(schema);
     const existing = await repo.find({ order: { sortOrder: 'ASC' } });
     const byCode = new Map(existing.map((p) => [p.code, p]));
     let created = false;
@@ -131,8 +127,7 @@ export class OnuSettingsService {
 
   async updateProfile(user: AuthUser, id: string, dto: UpdateOnuProfileDto) {
     const schema = this.requireSchema(user);
-    const repo =
-      await this.tenantConnections.getOnuProfileRepository(schema);
+    const repo = await this.tenantConnections.getOnuProfileRepository(schema);
     const row = await repo.findOne({ where: { id } });
     if (!row) throw new NotFoundException('Perfil no encontrado');
     if (dto.name !== undefined) row.name = dto.name.trim();
@@ -149,8 +144,7 @@ export class OnuSettingsService {
     await this.onuCatalog.dedupeTenantModelNames(schema);
     await this.onuCatalog.pruneUndetectedCatalogTypes(schema);
     await this.onuCatalog.enrichTenantExistingTypes(schema);
-    const typeRepo =
-      await this.tenantConnections.getOnuTypeRepository(schema);
+    const typeRepo = await this.tenantConnections.getOnuTypeRepository(schema);
     const profileRepo =
       await this.tenantConnections.getOnuProfileRepository(schema);
     const types = await typeRepo.find({
@@ -173,8 +167,7 @@ export class OnuSettingsService {
 
   async getType(user: AuthUser, id: string) {
     const schema = this.requireSchema(user);
-    const typeRepo =
-      await this.tenantConnections.getOnuTypeRepository(schema);
+    const typeRepo = await this.tenantConnections.getOnuTypeRepository(schema);
     const profileRepo =
       await this.tenantConnections.getOnuProfileRepository(schema);
     const row = await typeRepo.findOne({ where: { id } });
@@ -193,8 +186,7 @@ export class OnuSettingsService {
   async createType(user: AuthUser, dto: CreateOnuTypeDto) {
     const schema = this.requireSchema(user);
     await this.ensureGenericProfiles(schema);
-    const typeRepo =
-      await this.tenantConnections.getOnuTypeRepository(schema);
+    const typeRepo = await this.tenantConnections.getOnuTypeRepository(schema);
     const name = normalizeOnuModelName(dto.name);
     if (!name) throw new BadRequestException('Nombre requerido');
     const dup = await typeRepo.findOne({ where: { name } });
@@ -236,8 +228,7 @@ export class OnuSettingsService {
       }
     }
 
-    const channel =
-      dto.channel?.trim() || (dto.ponType === 'epon' ? 'E' : 'G');
+    const channel = dto.channel?.trim() || (dto.ponType === 'epon' ? 'E' : 'G');
     const imageUrl =
       dto.imageUrl ??
       resolveOnuImageUrl(
@@ -272,8 +263,7 @@ export class OnuSettingsService {
 
   async updateType(user: AuthUser, id: string, dto: UpdateOnuTypeDto) {
     const schema = this.requireSchema(user);
-    const typeRepo =
-      await this.tenantConnections.getOnuTypeRepository(schema);
+    const typeRepo = await this.tenantConnections.getOnuTypeRepository(schema);
     const row = await typeRepo.findOne({ where: { id } });
     if (!row) throw new NotFoundException('Tipo de ONU no encontrado');
     if (dto.name !== undefined) {
@@ -317,8 +307,7 @@ export class OnuSettingsService {
   /** Removes from this tenant only — catalog / other tenants untouched. */
   async removeType(user: AuthUser, id: string) {
     const schema = this.requireSchema(user);
-    const typeRepo =
-      await this.tenantConnections.getOnuTypeRepository(schema);
+    const typeRepo = await this.tenantConnections.getOnuTypeRepository(schema);
     const row = await typeRepo.findOne({ where: { id } });
     if (!row) throw new NotFoundException('Tipo de ONU no encontrado');
     await typeRepo.remove(row);
@@ -326,8 +315,7 @@ export class OnuSettingsService {
   }
 
   private async requireProfile(schema: string, id: string) {
-    const repo =
-      await this.tenantConnections.getOnuProfileRepository(schema);
+    const repo = await this.tenantConnections.getOnuProfileRepository(schema);
     const p = await repo.findOne({ where: { id } });
     if (!p) throw new BadRequestException('Perfil personalizado no válido');
     return p;
@@ -356,9 +344,7 @@ export class OnuSettingsService {
       imageKeyForVendorCapability(t.vendor, t.capability),
     );
     const imageDisplayUrl =
-      t.imageUrl && t.imageUrl.startsWith('/onu/')
-        ? t.imageUrl
-        : localFallback;
+      t.imageUrl && t.imageUrl.startsWith('/onu/') ? t.imageUrl : localFallback;
     return {
       id: t.id,
       ponType: t.ponType,

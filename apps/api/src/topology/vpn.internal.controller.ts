@@ -6,6 +6,7 @@ import {
   Headers,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { secureSecretEquals } from '../auth/secure-compare';
 import { VpnService } from './vpn.service';
 
 /**
@@ -25,7 +26,7 @@ export class VpnInternalController {
     @Headers('x-vpn-sync-secret') secret: string | undefined,
   ) {
     const expected = this.config.get<string>('VPN_SYNC_SECRET')?.trim();
-    if (!expected || !secret || secret !== expected) {
+    if (!secureSecretEquals(secret, expected)) {
       throw new UnauthorizedException('Invalid VPN sync secret');
     }
     return this.vpn.getConcentratorSyncState();

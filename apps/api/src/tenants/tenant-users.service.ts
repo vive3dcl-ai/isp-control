@@ -83,10 +83,7 @@ export class TenantUsersService {
     }
   }
 
-  private async countOwners(
-    repo: Repository<TenantUser>,
-    excludeId?: string,
-  ) {
+  private async countOwners(repo: Repository<TenantUser>, excludeId?: string) {
     const qb = repo
       .createQueryBuilder('u')
       .where('u.role = :role', { role: 'owner' })
@@ -244,10 +241,7 @@ export class TenantUsersService {
     if (row.id === user.sub) {
       throw new BadRequestException('No puedes eliminar tu propio usuario');
     }
-    if (
-      row.role === 'owner' &&
-      (await this.countOwners(repo, row.id)) < 1
-    ) {
+    if (row.role === 'owner' && (await this.countOwners(repo, row.id)) < 1) {
       throw new BadRequestException(
         'No se puede eliminar al único dueño activo',
       );

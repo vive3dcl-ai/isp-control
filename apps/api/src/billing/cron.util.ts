@@ -75,7 +75,12 @@ function fieldMatches(field: string, value: number): boolean {
     }
     if (piece.includes('-')) {
       const [a, b] = piece.split('-').map(Number);
-      if (Number.isFinite(a) && Number.isFinite(b) && value >= a && value <= b) {
+      if (
+        Number.isFinite(a) &&
+        Number.isFinite(b) &&
+        value >= a &&
+        value <= b
+      ) {
         return true;
       }
       continue;

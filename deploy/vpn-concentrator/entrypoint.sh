@@ -32,6 +32,8 @@ SERVER_IPS_FILE="$RUNTIME/server-ips.txt"
 # Con network_mode:service, GenieACS escucha en este netns (no hay DNS "acs").
 ACS_HOST="${VPN_ACS_HOST:-127.0.0.1}"
 ACS_CWMP_PORT="${GENIEACS_CWMP_PORT:-14501}"
+ACS_NBI_PORT="${GENIEACS_NBI_PORT:-7557}"
+ACS_FS_PORT="${GENIEACS_FS_PORT:-7567}"
 
 setup_docker_forwarding() {
   # Docker (api/acs) ↔ túnel OpenVPN/WG
@@ -45,6 +47,18 @@ setup_docker_forwarding() {
   iptables -t nat -C POSTROUTING -s 10.69.0.0/16 ! -o tun0 -j MASQUERADE 2>/dev/null \
     || iptables -t nat -A POSTROUTING -s 10.69.0.0/16 ! -o tun0 -j MASQUERADE
   echo "vpn-concentrator: forwarding Docker↔túnel OK"
+}
+
+isolate_acs_admin_ports() {
+  # GenieACS 1.2.13 no autentica NBI/FS. Al compartir netns con la VPN,
+  # impedir que los peers alcancen esos listeners; API entra por eth0.
+  for dev in tun+ wg0; do
+    for port in "$ACS_NBI_PORT" "$ACS_FS_PORT"; do
+      iptables -C INPUT -i "$dev" -p tcp --dport "$port" -j DROP 2>/dev/null \
+        || iptables -A INPUT -i "$dev" -p tcp --dport "$port" -j DROP
+    done
+  done
+  echo "vpn-concentrator: GenieACS NBI/FS aislados de peers VPN"
 }
 
 sync_tunnel_gateway_ips() {
@@ -469,6 +483,7 @@ openvpn --writepid /var/run/openvpn-tcp.pid --config "$RUNTIME/server-tcp.conf" 
   || echo "ERROR: OpenVPN TCP no arrancó"
 sleep 1
 setup_docker_forwarding
+isolate_acs_admin_ports
 wg_reload
 sync_tunnel_gateway_ips
 dump_wg_peers

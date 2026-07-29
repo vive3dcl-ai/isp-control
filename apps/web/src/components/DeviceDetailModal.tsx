@@ -6,7 +6,7 @@ import {
   deviceTypeLabel,
   formatBytes,
   INTERNET_DEVICE_TYPE,
-  isZteOltDevice,
+  isManagedOltDevice,
   oltConnectionModeLabel,
   oltPonTypeLabel,
   oltSubtypeLabel,
@@ -35,6 +35,11 @@ import { OltSpeedProfilesPanel } from './OltSpeedProfilesPanel'
 import { OnuImportModal } from './OnuImportModal'
 import { useNotify } from './NotifyProvider'
 import { ModalPortal } from './ModalPortal'
+import {
+  oltBtnPrimary,
+  oltMetaClass,
+  oltToolbarClass,
+} from './oltPanelUi'
 
 const inputClass =
   'w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 outline-none ring-[var(--accent)] focus:ring-2'
@@ -120,8 +125,8 @@ export function DeviceDetailModal({
       const d = q.state.data
       if (!open || !d?.mgmtHost) return false
       if (d.subtype === 'mikrotik') return 10_000
-      // OLT CLI probe is slower; align with backend stale window (~30s)
-      if (isZteOltDevice(d.type, d.subtype)) return 30_000
+      // OLT detail refresh uses SNMP health (~30s); full CLI only on "Probar"
+      if (isManagedOltDevice(d.type, d.subtype)) return 30_000
       return false
     },
   })
@@ -313,7 +318,7 @@ export function DeviceDetailModal({
   const hasConnectionTab = isRouter || isOlt
   const isMikrotikLive =
     device?.subtype === 'mikrotik' && !!device.mgmtHost
-  const isZteOlt = isZteOltDevice(device?.type, device?.subtype)
+  const isManagedOlt = isManagedOltDevice(device?.type, device?.subtype)
   const status = (device?.connectionStatus ??
     'unknown') as ConnectionStatus
   const subtypeLabel = device?.subtype
@@ -396,7 +401,7 @@ export function DeviceDetailModal({
                   Conexión
                 </button>
               )}
-              {isZteOlt && (
+              {isManagedOlt && (
                 <button
                   type="button"
                   onClick={() => setTab('tarjetas')}
@@ -410,7 +415,7 @@ export function DeviceDetailModal({
                   Tarjetas
                 </button>
               )}
-              {isZteOlt && (
+              {isManagedOlt && (
                 <button
                   type="button"
                   onClick={() => setTab('pon')}
@@ -424,7 +429,7 @@ export function DeviceDetailModal({
                   Puertos PON
                 </button>
               )}
-              {isZteOlt && (
+              {isManagedOlt && (
                 <button
                   type="button"
                   onClick={() => setTab('uplinks')}
@@ -438,7 +443,7 @@ export function DeviceDetailModal({
                   Uplinks
                 </button>
               )}
-              {isZteOlt && (
+              {isManagedOlt && (
                 <button
                   type="button"
                   onClick={() => setTab('vlans')}
@@ -452,7 +457,7 @@ export function DeviceDetailModal({
                   VLANs
                 </button>
               )}
-              {isZteOlt && (
+              {isManagedOlt && (
                 <button
                   type="button"
                   onClick={() => setTab('speed_profiles')}
@@ -970,9 +975,24 @@ export function DeviceDetailModal({
                   </p>
                 ) : isOlt ? (
                   <p className="text-xs text-[var(--text-muted)]">
-                    Usamos nuestro conector ZTE (CLI) en solo lectura. Elige
+                    Monitoreo de ONUs (online, señal, tráfico) por SNMP
+                    read-only; aprovisionamiento y sync por CLI Telnet/SSH. Elige
                     cómo llega el servidor a la OLT: Pública (IP pública) o VPN
                     (IP local; el servidor VPN se configura en etapa 2).
+                    {device.snmpMonitor != null && (
+                      <>
+                        {' '}
+                        SNMP:{' '}
+                        {device.snmpMonitor.ok
+                          ? 'OK'
+                          : `falló${
+                              device.snmpMonitor.error
+                                ? ` (${device.snmpMonitor.error})`
+                                : ''
+                            }`}
+                        .
+                      </>
+                    )}
                   </p>
                 ) : (
                   <p className="text-xs text-[var(--text-muted)]">
@@ -1100,7 +1120,7 @@ export function DeviceDetailModal({
                         </label>
                         <label className="block text-sm">
                           <span className="mb-1 block text-[var(--text-muted)]">
-                            SNMP read-only community
+                            SNMP read-only (monitoreo)
                           </span>
                           <input
                             className={inputClass}
@@ -1111,10 +1131,14 @@ export function DeviceDetailModal({
                             disabled={!canWrite}
                             placeholder="public"
                           />
+                          <span className="mt-1 block text-xs text-[var(--text-muted)]">
+                            GET/WALK: online, señal y tráfico de ONUs. No usa
+                            Telnet.
+                          </span>
                         </label>
                         <label className="block text-sm">
                           <span className="mb-1 block text-[var(--text-muted)]">
-                            SNMP read-write community
+                            SNMP read-write (no usada)
                           </span>
                           <input
                             className={inputClass}
@@ -1125,6 +1149,10 @@ export function DeviceDetailModal({
                             disabled={!canWrite}
                             placeholder="private"
                           />
+                          <span className="mt-1 block text-xs text-[var(--text-muted)]">
+                            Reservada. Aprovisionamiento va por CLI, no por SNMP
+                            SET.
+                          </span>
                         </label>
                         <label className="block text-sm sm:col-span-2">
                           <span className="mb-1 block text-[var(--text-muted)]">
@@ -1291,21 +1319,27 @@ export function DeviceDetailModal({
               </>
             )}
 
-            {device && tab === 'tarjetas' && isZteOlt && (
+            {device && tab === 'tarjetas' && isManagedOlt && (
               <div className="space-y-4">
-                <div className="flex flex-wrap items-center gap-2">
+                <div className={oltToolbarClass}>
                   <button
                     type="button"
                     disabled={cardsQuery.isFetching}
                     onClick={() => void cardsQuery.refetch()}
-                    className="rounded-lg bg-[var(--accent)] px-3 py-2 text-sm font-medium text-white hover:bg-[var(--accent-hover)] disabled:opacity-60"
+                    className={oltBtnPrimary}
                   >
                     {cardsQuery.isFetching
-                      ? 'Actualizando…'
-                      : 'Refresh OLT cards info'}
+                      ? 'Sincronizando…'
+                      : 'Sincronizar'}
                   </button>
+                  {cardsQuery.data?.probedAt && (
+                    <span className={oltMetaClass}>
+                      Última sincronización:{' '}
+                      {new Date(cardsQuery.data.probedAt).toLocaleString()}
+                    </span>
+                  )}
                   {cardsQuery.data?.summary && (
-                    <span className="text-xs text-[var(--text-muted)]">
+                    <span className={oltMetaClass}>
                       {cardsQuery.data.summary}
                     </span>
                   )}
@@ -1313,7 +1347,7 @@ export function DeviceDetailModal({
 
                 {cardsQuery.isLoading && (
                   <p className="text-sm text-[var(--text-muted)]">
-                    Leyendo show card…
+                    Sincronizando tarjetas…
                   </p>
                 )}
                 {cardsQuery.error && (
@@ -1331,7 +1365,8 @@ export function DeviceDetailModal({
                   !cardsQuery.error &&
                   (cardsQuery.data?.cards.length ?? 0) === 0 && (
                     <p className="rounded-lg border border-dashed border-[var(--border)] px-4 py-8 text-center text-sm text-[var(--text-muted)]">
-                      No se encontraron tarjetas. Comprueba la conexión CLI.
+                      No se encontraron tarjetas. Comprueba la conexión con la
+                      OLT.
                     </p>
                   )}
 
@@ -1425,18 +1460,18 @@ export function DeviceDetailModal({
               </div>
             )}
 
-            {device && tab === 'pon' && isZteOlt && deviceId && (
+            {device && tab === 'pon' && isManagedOlt && deviceId && (
               <OltPonPortsPanel deviceId={deviceId} canWrite={canWrite} />
             )}
 
-            {device && tab === 'uplinks' && isZteOlt && deviceId && (
+            {device && tab === 'uplinks' && isManagedOlt && deviceId && (
               <OltUplinksPanel deviceId={deviceId} canWrite={canWrite} />
             )}
 
-            {device && tab === 'vlans' && isZteOlt && deviceId && (
+            {device && tab === 'vlans' && isManagedOlt && deviceId && (
               <OltVlansPanel deviceId={deviceId} canWrite={canWrite} />
             )}
-            {device && tab === 'speed_profiles' && isZteOlt && deviceId && (
+            {device && tab === 'speed_profiles' && isManagedOlt && deviceId && (
               <OltSpeedProfilesPanel deviceId={deviceId} canWrite={canWrite} />
             )}
           </div>

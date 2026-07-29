@@ -98,11 +98,7 @@ export function resolveSuspensionPortalTemplateId(
   return DEFAULT_SUSPENSION_PORTAL_TEMPLATE;
 }
 
-function shell(
-  title: string,
-  css: string,
-  body: string,
-): string {
+function shell(title: string, css: string, body: string): string {
   return `<!DOCTYPE html>
 <html lang="es">
 <head>

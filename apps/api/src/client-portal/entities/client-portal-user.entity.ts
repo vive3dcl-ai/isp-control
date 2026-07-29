@@ -99,7 +99,12 @@ export class ClientPortalUser {
   @Column({ name: 'zone_id', type: 'uuid', nullable: true })
   zoneId: string | null;
 
-  @Column({ name: 'password_hash', type: 'varchar', length: 255, nullable: true })
+  @Column({
+    name: 'password_hash',
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+  })
   passwordHash: string | null;
 
   @Column({ type: 'varchar', length: 20, default: 'stored' })

@@ -42,41 +42,137 @@ export const routerSubtypeLabel: Record<RouterSubtype, string> = {
   edge_router: 'Edge Router',
 }
 
-export const OLT_SUBTYPES = [
+export const ZTE_SELECTABLE_SUBTYPES = [
   'zte_c220',
   'zte_c300',
   'zte_c320',
   'zte_c350',
+  'zte_c610',
+  'zte_c620',
+  'zte_c650',
+  'zte_c600',
+  'zte_c680',
+] as const
+
+export const ZTE_C3XX_SUBTYPES = [
+  'zte_c220',
+  'zte_c300',
+  'zte_c320',
+  'zte_c350',
+] as const
+
+export const ZTE_C6XX_SUBTYPES = [
+  'zte_c610',
+  'zte_c620',
+  'zte_c650',
+  'zte_c600',
+  'zte_c680',
+] as const
+
+export const HUAWEI_SELECTABLE_SUBTYPES = [
+  'huawei_ma5608t',
+  'huawei_ma5683t',
+  'huawei_ma5680t',
+  'huawei_ma5800_x2',
+  'huawei_ma5800_x7',
+  'huawei_ma5800_x15',
+  'huawei_ma5800_x17',
+] as const
+
+export const OLT_SUBTYPES = [
+  ...ZTE_SELECTABLE_SUBTYPES,
   'zte_c3xx',
+  ...HUAWEI_SELECTABLE_SUBTYPES,
 ] as const
 
 export type OltSubtype = (typeof OLT_SUBTYPES)[number]
+export type ZteSelectableSubtype = (typeof ZTE_SELECTABLE_SUBTYPES)[number]
+export type HuaweiSelectableSubtype =
+  (typeof HUAWEI_SELECTABLE_SUBTYPES)[number]
 
 /** Models shown in create/edit form (exact chassis). */
 export const OLT_SELECTABLE_SUBTYPES = [
-  'zte_c220',
-  'zte_c300',
-  'zte_c320',
-  'zte_c350',
+  ...ZTE_SELECTABLE_SUBTYPES,
+  ...HUAWEI_SELECTABLE_SUBTYPES,
 ] as const satisfies readonly OltSubtype[]
+
+export type OltSelectableSubtype = (typeof OLT_SELECTABLE_SUBTYPES)[number]
+export type OltVendor = 'zte' | 'huawei'
 
 export const oltSubtypeLabel: Record<OltSubtype, string> = {
   zte_c220: 'ZTE C220',
   zte_c300: 'ZTE C300',
   zte_c320: 'ZTE C320',
   zte_c350: 'ZTE C350 / C350M',
+  zte_c610: 'ZTE C610 (Titan)',
+  zte_c620: 'ZTE C620 (Titan)',
+  zte_c650: 'ZTE C650 (Titan)',
+  zte_c600: 'ZTE C600 (Titan)',
+  zte_c680: 'ZTE C680 (Titan)',
   zte_c3xx: 'ZTE C3xx (sin modelo)',
+  huawei_ma5608t: 'Huawei MA5608T',
+  huawei_ma5683t: 'Huawei MA5683T',
+  huawei_ma5680t: 'Huawei MA5680T / MA5600T',
+  huawei_ma5800_x2: 'Huawei MA5800-X2',
+  huawei_ma5800_x7: 'Huawei MA5800-X7',
+  huawei_ma5800_x15: 'Huawei MA5800-X15',
+  huawei_ma5800_x17: 'Huawei MA5800-X17',
 }
 
 export function isZteOltSubtype(subtype?: string | null): boolean {
   return (
     !!subtype &&
-    (OLT_SELECTABLE_SUBTYPES as readonly string[]).includes(subtype)
+    ((ZTE_SELECTABLE_SUBTYPES as readonly string[]).includes(subtype) ||
+      subtype === 'zte_c3xx')
+  )
+}
+
+export function isZteC6xxSubtype(subtype?: string | null): boolean {
+  return (
+    !!subtype && (ZTE_C6XX_SUBTYPES as readonly string[]).includes(subtype)
+  )
+}
+
+export function isZteC3xxSubtype(subtype?: string | null): boolean {
+  return (
+    !!subtype &&
+    ((ZTE_C3XX_SUBTYPES as readonly string[]).includes(subtype) ||
+      subtype === 'zte_c3xx')
+  )
+}
+
+export function isHuaweiOltSubtype(subtype?: string | null): boolean {
+  return (
+    !!subtype &&
+    (HUAWEI_SELECTABLE_SUBTYPES as readonly string[]).includes(subtype)
   )
 }
 
 export function isZteOltDevice(type?: string | null, subtype?: string | null) {
-  return type === 'olt' && (isZteOltSubtype(subtype) || subtype === 'zte_c3xx')
+  return type === 'olt' && isZteOltSubtype(subtype)
+}
+
+export function isHuaweiOltDevice(
+  type?: string | null,
+  subtype?: string | null,
+) {
+  return type === 'olt' && isHuaweiOltSubtype(subtype)
+}
+
+export function isManagedOltDevice(
+  type?: string | null,
+  subtype?: string | null,
+) {
+  return isZteOltDevice(type, subtype) || isHuaweiOltDevice(type, subtype)
+}
+
+export function oltVendor(
+  type?: string | null,
+  subtype?: string | null,
+): OltVendor | null {
+  if (isHuaweiOltDevice(type, subtype)) return 'huawei'
+  if (isZteOltDevice(type, subtype)) return 'zte'
+  return null
 }
 
 export type OltCardRow = {
@@ -126,7 +222,10 @@ export type OltPonPortRow = {
 export type OltPonPortsResponse = {
   deviceId: string
   probedAt: string
+  /** Last CLI sync of PON config (stable until next Sincronizar). */
+  syncedAt?: string | null
   summary: string | null
+  source?: string
   ports: OltPonPortRow[]
 }
 
@@ -154,7 +253,9 @@ export type OltUplinkRow = {
 export type OltUplinksResponse = {
   deviceId: string
   probedAt: string
+  syncedAt?: string | null
   summary: string | null
+  source?: string
   uplinks: OltUplinkRow[]
 }
 
@@ -176,7 +277,9 @@ export type OltVlanRow = {
 export type OltVlansResponse = {
   deviceId: string
   probedAt: string
+  syncedAt?: string | null
   summary: string | null
+  source?: string
   vlans: OltVlanRow[]
 }
 
@@ -271,6 +374,8 @@ export interface TopologyDevice {
   snmpCommunity?: string | null
   snmpCommunityRw?: string | null
   snmpPort?: number | null
+  /** Last SNMP RO probe summary (from connection test / metricSummary). */
+  snmpMonitor?: { ok: boolean; error?: string } | null
   /** gpon | epon | gpon_epon — usually auto-detected */
   ponType?: string | null
   /** After connect test: prompt to import ONUs into DB */

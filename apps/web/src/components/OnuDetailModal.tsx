@@ -44,36 +44,48 @@ function isUuid(id: string | undefined): id is string {
   return !!id && /^[0-9a-f-]{36}$/i.test(id)
 }
 
+/** Keep charts light when showing 24h of 1-min (+ denser live) points. */
+function downsampleSeries<T>(samples: T[], maxPoints: number): T[] {
+  if (samples.length <= maxPoints) return samples
+  const out: T[] = []
+  const step = (samples.length - 1) / (maxPoints - 1)
+  for (let i = 0; i < maxPoints; i++) {
+    out.push(samples[Math.round(i * step)]!)
+  }
+  return out
+}
+
 function SignalChart({
   samples,
 }: {
   samples: Array<{ value: number; sampledAt: string }>
 }) {
   const points = useMemo(() => {
-    if (samples.length === 0) return null
-    const vals = samples.map((s) => s.value)
+    const series = downsampleSeries(samples, 360)
+    if (series.length === 0) return null
+    const vals = series.map((s) => s.value)
     const min = Math.min(...vals) - 1
     const max = Math.max(...vals) + 1
     const span = Math.max(max - min, 0.5)
     const w = 320
     const h = 100
     const pad = 8
-    const coords = samples.map((s, i) => {
+    const coords = series.map((s, i) => {
       const x =
         pad +
-        (samples.length === 1
+        (series.length === 1
           ? (w - pad * 2) / 2
-          : (i / (samples.length - 1)) * (w - pad * 2))
+          : (i / (series.length - 1)) * (w - pad * 2))
       const y = pad + ((max - s.value) / span) * (h - pad * 2)
       return `${x.toFixed(1)},${y.toFixed(1)}`
     })
-    return { w, h, path: coords.join(' '), min, max }
+    return { w, h, path: coords.join(' '), min, max, n: samples.length }
   }, [samples])
 
   if (!points) {
     return (
       <p className="text-xs text-[var(--text-muted)]">
-        Sin muestras aún. El poll automático (~1 min) llenará el historial.
+        Sin muestras aún. Flota ~1 min; con la modal abierta ~3 s.
       </p>
     )
   }
@@ -94,7 +106,7 @@ function SignalChart({
         />
       </svg>
       <p className="mt-1 text-xs text-[var(--text-muted)]">
-        {points.min.toFixed(1)} … {points.max.toFixed(1)} dBm · {samples.length}{' '}
+        {points.min.toFixed(1)} … {points.max.toFixed(1)} dBm · {points.n}{' '}
         muestras
       </p>
     </div>
@@ -113,13 +125,15 @@ function TrafficChart({
   liveUploadBps?: number | null
 }) {
   const chart = useMemo(() => {
+    const downSeries = downsampleSeries(download, 360)
+    const upSeries = downsampleSeries(upload, 360)
     const times = new Map<string, { down?: number; up?: number }>()
-    for (const s of download) {
+    for (const s of downSeries) {
       const t = times.get(s.sampledAt) ?? {}
       t.down = bpsToMbps(s.value)
       times.set(s.sampledAt, t)
     }
-    for (const s of upload) {
+    for (const s of upSeries) {
       const t = times.get(s.sampledAt) ?? {}
       t.up = bpsToMbps(s.value)
       times.set(s.sampledAt, t)
@@ -150,15 +164,14 @@ function TrafficChart({
       downPath: toPath(downs),
       upPath: toPath(ups),
       max,
-      n: keys.length,
+      n: Math.max(download.length, upload.length),
     }
   }, [download, upload])
 
   if (!chart) {
     return (
       <p className="text-xs text-[var(--text-muted)]">
-        Sin muestras de tráfico aún. Se actualizan con el poll (~1 min) o
-        «Obtener estado».
+        Sin muestras de tráfico aún. Flota ~1 min; con la modal abierta ~3 s.
       </p>
     )
   }
@@ -244,6 +257,8 @@ export function OnuDetailModal({
       apiFetch<ConnectedOnuDetailResponse>(
         `/app/onus/detail?oltId=${encodeURIComponent(oltId)}&onuIf=${encodeURIComponent(onuIf)}`,
       ),
+    // Live SNMP sample (via metrics?live=1) updates DB; refresh header often.
+    refetchInterval: 3_000,
   })
 
   const onuDbId = detailQuery.data?.onu?.id
@@ -282,13 +297,14 @@ export function OnuDetailModal({
   })
 
   const metricsQuery = useQuery({
-    queryKey: ['app', 'onus', 'metrics', onuDbId],
+    queryKey: ['app', 'onus', 'metrics', onuDbId, 'live'],
     queryFn: () =>
       apiFetch<OnuMetricsResponse>(
-        `/app/onus/${onuDbId}/metrics?hours=6`,
+        `/app/onus/${onuDbId}/metrics?hours=24&live=1`,
       ),
     enabled: isUuid(onuDbId),
-    refetchInterval: 60_000,
+    refetchInterval: 3_000,
+    staleTime: 0,
   })
 
   const profilesQuery = useQuery({
@@ -1085,7 +1101,7 @@ export function OnuDetailModal({
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="rounded-lg border border-[var(--border)] p-3">
                   <p className="mb-2 text-xs font-medium text-[var(--text-muted)]">
-                    Tráfico (6 h)
+                    Tráfico (últimas 24 h · live ~3 s)
                   </p>
                   <TrafficChart
                     download={downloadSamples}
@@ -1096,7 +1112,7 @@ export function OnuDetailModal({
                 </div>
                 <div className="rounded-lg border border-[var(--border)] p-3">
                   <p className="mb-2 text-xs font-medium text-[var(--text-muted)]">
-                    Señal histórica (6 h)
+                    Señal (últimas 24 h · live ~3 s)
                   </p>
                   <SignalChart samples={signalSamples} />
                 </div>

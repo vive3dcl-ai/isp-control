@@ -13,7 +13,8 @@ import {
 } from 'class-validator';
 
 function nullableNumber({ value }: { value: unknown }) {
-  if (value === null || value === undefined || value === '') return value ?? null;
+  if (value === null || value === undefined || value === '')
+    return value ?? null;
   return Number(value);
 }
 
@@ -108,7 +109,7 @@ export class CreateClientDto {
 
   @IsOptional()
   @ValidateIf((_, v) => v != null && v !== '')
-  @Transform(({ value }) =>
+  @Transform(({ value }: { value: unknown }) =>
     value === null || value === undefined || value === '' ? null : value,
   )
   @IsUUID()

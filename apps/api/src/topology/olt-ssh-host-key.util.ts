@@ -1,0 +1,60 @@
+import type { SyncHostFingerprintVerifier } from 'ssh2';
+
+interface HostVerification {
+  hostHash?: string;
+  hostVerifier?: SyncHostFingerprintVerifier;
+}
+
+function configuredFingerprint(host: string, port: number): string | null {
+  const raw = process.env.OLT_SSH_HOST_KEYS?.trim();
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const value = parsed[`${host}:${port}`] ?? parsed[host];
+    return typeof value === 'string' && value.trim() ? value.trim() : null;
+  } catch {
+    throw new Error(
+      'OLT_SSH_HOST_KEYS debe ser JSON: {"host:puerto":"SHA256:fingerprint"}',
+    );
+  }
+}
+
+function fingerprintMatches(actualHex: string, expected: string): boolean {
+  const normalized = expected.trim();
+  if (/^SHA256:/i.test(normalized)) {
+    const expectedBase64 = normalized.slice(7).replace(/=+$/, '');
+    const actualBase64 = Buffer.from(actualHex, 'hex')
+      .toString('base64')
+      .replace(/=+$/, '');
+    return actualBase64 === expectedBase64;
+  }
+  return actualHex.toLowerCase() === normalized.replace(/:/g, '').toLowerCase();
+}
+
+/**
+ * Pin SSH host keys in production. `OLT_SSH_ALLOW_UNVERIFIED=true` is an
+ * explicit break-glass escape hatch for legacy deployments.
+ */
+export function sshHostVerification(
+  host: string,
+  port: number,
+): HostVerification {
+  const expected = configuredFingerprint(host, port);
+  if (expected) {
+    const hostVerifier: SyncHostFingerprintVerifier = (actual) =>
+      fingerprintMatches(actual, expected);
+    return {
+      hostHash: 'sha256',
+      hostVerifier,
+    };
+  }
+
+  const production = process.env.NODE_ENV === 'production';
+  const allowUnverified = process.env.OLT_SSH_ALLOW_UNVERIFIED === 'true';
+  if (production && !allowUnverified) {
+    throw new Error(
+      `Falta fingerprint SSH para ${host}:${port} en OLT_SSH_HOST_KEYS`,
+    );
+  }
+  return {};
+}

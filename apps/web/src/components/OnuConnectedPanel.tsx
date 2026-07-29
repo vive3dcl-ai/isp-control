@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '../lib/api'
 import {
@@ -115,6 +115,7 @@ export function OnuConnectedPanel({ canWrite }: { canWrite: boolean }) {
     oltId: string
     onuIf: string
   } | null>(null)
+  const [syncBanner, setSyncBanner] = useState<string | null>(null)
 
   const listQuery = useQuery({
     queryKey: ['app', 'onus', 'connected'],
@@ -140,6 +141,7 @@ export function OnuConnectedPanel({ canWrite }: { canWrite: boolean }) {
             updated: number
             missing: number
             oltName: string
+            source?: string
           }>('/app/onus/sync', {
             method: 'POST',
             body: JSON.stringify({ oltId: id }),
@@ -148,10 +150,24 @@ export function OnuConnectedPanel({ canWrite }: { canWrite: boolean }) {
       }
       return results
     },
-    onSuccess: () => {
+    onSuccess: (results) => {
       void queryClient.invalidateQueries({ queryKey: ['app', 'onus'] })
+      setSyncBanner(
+        results
+          .map(
+            (r) =>
+              `${r.oltName}: +${r.added} / ~${r.updated} / offline ${r.missing}`,
+          )
+          .join(' · '),
+      )
     },
   })
+
+  useEffect(() => {
+    if (!syncBanner) return
+    const t = window.setTimeout(() => setSyncBanner(null), 5_000)
+    return () => window.clearTimeout(t)
+  }, [syncBanner])
 
   const onus = listQuery.data?.onus ?? []
 
@@ -470,8 +486,8 @@ export function OnuConnectedPanel({ canWrite }: { canWrite: boolean }) {
             className="rounded-lg bg-[var(--accent)] px-3 py-2 text-sm font-medium text-white hover:bg-[var(--accent-hover)] disabled:opacity-60"
             title={
               oltId
-                ? 'Reconciliar inventario de la OLT filtrada (altas/bajas)'
-                : 'Reconciliar inventario de todas las OLTs'
+                ? 'Reconciliar inventario vía SNMP (CLI si falla)'
+                : 'Reconciliar todas las OLTs vía SNMP (CLI si falla)'
             }
           >
             {syncMutation.isPending ? 'Sincronizando…' : 'Sincronizar'}
@@ -479,26 +495,13 @@ export function OnuConnectedPanel({ canWrite }: { canWrite: boolean }) {
         )}
       </div>
 
-      <p className="text-xs text-[var(--text-muted)]">
-        Inventario en base de datos. Señal y estado se actualizan solos (~1
-        min). Sincronizar reconcilia altas/bajas en la OLT. Zona: catálogo de
-        Ajustes → Zonas. Tráfico histórico: pendiente (counters CLI).
-      </p>
-
       {syncMutation.error && (
         <p className="text-sm text-[var(--danger)]">
           {(syncMutation.error as Error).message}
         </p>
       )}
-      {syncMutation.isSuccess && syncMutation.data && (
-        <p className="text-sm text-emerald-500">
-          {syncMutation.data
-            .map(
-              (r) =>
-                `${r.oltName}: +${r.added} / ~${r.updated} / offline ${r.missing}`,
-            )
-            .join(' · ')}
-        </p>
+      {syncBanner && (
+        <p className="text-sm text-emerald-500">{syncBanner}</p>
       )}
 
       {listQuery.error && (

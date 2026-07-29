@@ -25,7 +25,6 @@ export function OnuOrphansPanel({ canWrite }: { canWrite: boolean }) {
         body: JSON.stringify(oltId ? { oltId } : {}),
       }),
     staleTime: 15_000,
-    enabled: canWrite,
   })
 
   const refreshMutation = useMutation({
@@ -122,10 +121,10 @@ export function OnuOrphansPanel({ canWrite }: { canWrite: boolean }) {
       </div>
 
       <p className="text-sm text-[var(--text-muted)]">
-        ONUs detectadas en la OLT que aún no están autorizadas (
+        ONUs en la OLT pendientes de autorización (
         <span className="font-mono text-xs">show … onu uncfg</span>). Denegar
-        las oculta aquí (Bloqueadas). Las que ya están en Conectadas no
-        aparecen — Disable/Enable se gestiona solo desde el detalle.
+        las oculta aquí (Bloqueadas). Si el SN aún aparece en Conectadas,
+        se marca como registro posible obsoleto.
       </p>
 
       {msg && (
@@ -199,7 +198,14 @@ export function OnuOrphansPanel({ canWrite }: { canWrite: boolean }) {
                     {o.board}/{o.port}
                   </td>
                   <td className="px-3 py-2 font-mono text-xs">{o.sn}</td>
-                  <td className="px-3 py-2">{o.state ?? '—'}</td>
+                  <td className="px-3 py-2">
+                    {o.state ?? '—'}
+                    {o.inConnected ? (
+                      <span className="ml-1 text-[10px] text-amber-400">
+                        (también en inventario)
+                      </span>
+                    ) : null}
+                  </td>
                   <td className="px-3 py-2">
                     {o.suggestedOnuId ?? '—'}
                   </td>

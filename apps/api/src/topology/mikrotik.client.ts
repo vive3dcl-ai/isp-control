@@ -14,7 +14,6 @@ export interface MikroTikPortVlan {
   comment?: string;
 }
 
-
 export interface MikroTikPhysicalPort {
   name: string;
   defaultName?: string;
@@ -324,9 +323,7 @@ export class MikrotikClient {
         freeMemory:
           res['free-memory'] != null ? Number(res['free-memory']) : undefined,
         totalMemory:
-          res['total-memory'] != null
-            ? Number(res['total-memory'])
-            : undefined,
+          res['total-memory'] != null ? Number(res['total-memory']) : undefined,
         uptime: res.uptime,
         boardName: res['board-name'],
         architecture: res['architecture-name'],
@@ -400,18 +397,31 @@ export class MikrotikClient {
         id && typeof id === 'object' && 'name' in id
           ? String((id as { name: string }).name)
           : undefined,
-      version: res['version'] != null ? String(res['version']) : undefined,
+      version:
+        res['version'] != null
+          ? // RouterOS values are scalar at runtime.
+            // eslint-disable-next-line @typescript-eslint/no-base-to-string
+            String(res['version'])
+          : undefined,
       cpuLoad: res['cpu-load'] != null ? Number(res['cpu-load']) : undefined,
       freeMemory:
         res['free-memory'] != null ? Number(res['free-memory']) : undefined,
       totalMemory:
         res['total-memory'] != null ? Number(res['total-memory']) : undefined,
-      uptime: res['uptime'] != null ? String(res['uptime']) : undefined,
+      uptime:
+        res['uptime'] != null
+          ? // eslint-disable-next-line @typescript-eslint/no-base-to-string
+            String(res['uptime'])
+          : undefined,
       boardName:
-        res['board-name'] != null ? String(res['board-name']) : undefined,
+        res['board-name'] != null
+          ? // eslint-disable-next-line @typescript-eslint/no-base-to-string
+            String(res['board-name'])
+          : undefined,
       architecture:
         res['architecture-name'] != null
-          ? String(res['architecture-name'])
+          ? // eslint-disable-next-line @typescript-eslint/no-base-to-string
+            String(res['architecture-name'])
           : undefined,
       temperature: this.pickTemperature(health),
       physicalPorts: this.mapPhysicalPorts(
@@ -424,14 +434,14 @@ export class MikrotikClient {
     };
   }
 
-  private rowToStringMap(
-    row: Record<string, unknown> | unknown,
-  ): Record<string, string> {
+  private rowToStringMap(row: unknown): Record<string, string> {
     if (!row || typeof row !== 'object') return {};
     const out: Record<string, string> = {};
     for (const [k, v] of Object.entries(row as Record<string, unknown>)) {
       if (v == null) continue;
       if (Array.isArray(v)) out[k] = v.map(String).join(',');
+      // RouterOS API attributes are scalar; preserve the existing coercion.
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string
       else out[k] = String(v);
     }
     return out;
@@ -515,11 +525,7 @@ export class MikrotikClient {
       return map.get(port)!;
     };
 
-    const add = (
-      port: string,
-      vlanId: number,
-      mode: 'tagged' | 'untagged',
-    ) => {
+    const add = (port: string, vlanId: number, mode: 'tagged' | 'untagged') => {
       if (!portNames.has(port) || !Number.isFinite(vlanId) || vlanId < 1) {
         return;
       }
@@ -759,9 +765,7 @@ export class MikrotikClient {
 
         const current = listed.addresses.filter((a) => !!a.id);
         const currentById = new Map(current.map((a) => [a.id, a]));
-        const currentByAddress = new Map(
-          current.map((a) => [a.address, a]),
-        );
+        const currentByAddress = new Map(current.map((a) => [a.address, a]));
 
         // Match desired rows to live entries by id, else by address
         const matchedDesired: Array<{ id?: string; address: string }> =
@@ -775,9 +779,7 @@ export class MikrotikClient {
           });
 
         const desiredIds = new Set(
-          matchedDesired
-            .map((d) => d.id)
-            .filter((id): id is string => !!id),
+          matchedDesired.map((d) => d.id).filter((id): id is string => !!id),
         );
 
         const toRemove = current.filter((c) => !desiredIds.has(c.id));
@@ -935,11 +937,7 @@ export class MikrotikClient {
         }
 
         const useTls = protocol !== 'api_plain';
-        const client = new RouterOsApiClient(
-          params.host,
-          params.port,
-          useTls,
-        );
+        const client = new RouterOsApiClient(params.host, params.port, useTls);
         try {
           await client.connect();
           await client.login(params.username, params.password);
@@ -955,8 +953,7 @@ export class MikrotikClient {
             }))
             .filter(
               (a) =>
-                !!a.address &&
-                (a.interface || '').toLowerCase() === wantIface,
+                !!a.address && (a.interface || '').toLowerCase() === wantIface,
             );
 
           return await this.applyGatewayUpsertOnListed({
@@ -1092,11 +1089,7 @@ export class MikrotikClient {
         }
 
         const useTls = protocol !== 'api_plain';
-        const client = new RouterOsApiClient(
-          params.host,
-          params.port,
-          useTls,
-        );
+        const client = new RouterOsApiClient(params.host, params.port, useTls);
         try {
           await client.connect();
           await client.login(params.username, params.password);
@@ -1153,11 +1146,7 @@ export class MikrotikClient {
         }
 
         const useTls = protocol !== 'api_plain';
-        const client = new RouterOsApiClient(
-          params.host,
-          params.port,
-          useTls,
-        );
+        const client = new RouterOsApiClient(params.host, params.port, useTls);
         try {
           await client.connect();
           await client.login(params.username, params.password);
@@ -1205,9 +1194,9 @@ export class MikrotikClient {
             `https://${params.host}:${params.port}/rest/interface?name=${encodeURIComponent(params.interfaceName)}`,
             auth,
           );
-          const rows = (
-            Array.isArray(raw) ? raw : raw ? [raw] : []
-          ).map((r) => this.rowToStringMap(r));
+          const rows = (Array.isArray(raw) ? raw : raw ? [raw] : []).map((r) =>
+            this.rowToStringMap(r),
+          );
           const row =
             rows.find((r) => r.name === params.interfaceName) ?? rows[0];
           const id = row?.['.id'] || row?.id;
@@ -1228,11 +1217,7 @@ export class MikrotikClient {
         }
 
         const useTls = protocol !== 'api_plain';
-        const client = new RouterOsApiClient(
-          params.host,
-          params.port,
-          useTls,
-        );
+        const client = new RouterOsApiClient(params.host, params.port, useTls);
         try {
           await client.connect();
           await client.login(params.username, params.password);
@@ -1297,13 +1282,11 @@ export class MikrotikClient {
             `https://${params.host}:${params.port}/rest/interface/vlan`,
             auth,
           );
-          const rows = (
-            Array.isArray(raw) ? raw : raw ? [raw] : []
-          ).map((r) => this.rowToStringMap(r));
+          const rows = (Array.isArray(raw) ? raw : raw ? [raw] : []).map((r) =>
+            this.rowToStringMap(r),
+          );
           const row = rows.find(
-            (r) =>
-              r.name === name ||
-              Number(r['vlan-id']) === params.vlanId,
+            (r) => r.name === name || Number(r['vlan-id']) === params.vlanId,
           );
           const id = row?.['.id'] || row?.id;
           if (!id) return { ok: true, missing: true };
@@ -1317,11 +1300,7 @@ export class MikrotikClient {
         }
 
         const useTls = protocol !== 'api_plain';
-        const client = new RouterOsApiClient(
-          params.host,
-          params.port,
-          useTls,
-        );
+        const client = new RouterOsApiClient(params.host, params.port, useTls);
         try {
           await client.connect();
           await client.login(params.username, params.password);
@@ -1439,7 +1418,7 @@ export class MikrotikClient {
         },
         (res) => {
           const chunks: Buffer[] = [];
-          res.on('data', (c) => chunks.push(c));
+          res.on('data', (c: Buffer) => chunks.push(c));
           res.on('end', () => {
             const text = Buffer.concat(chunks).toString('utf8');
             if ((res.statusCode ?? 500) >= 400) {
@@ -1493,7 +1472,7 @@ export class MikrotikClient {
         },
         (res) => {
           const chunks: Buffer[] = [];
-          res.on('data', (c) => chunks.push(c));
+          res.on('data', (c: Buffer) => chunks.push(c));
           res.on('end', () => {
             const text = Buffer.concat(chunks).toString('utf8');
             if ((res.statusCode ?? 500) >= 400) {
@@ -1507,8 +1486,7 @@ export class MikrotikClient {
             try {
               resolve(
                 JSON.parse(text) as
-                  | Record<string, unknown>
-                  | Record<string, unknown>[],
+                  Record<string, unknown> | Record<string, unknown>[],
               );
             } catch {
               reject(new Error('Invalid JSON from MikroTik'));

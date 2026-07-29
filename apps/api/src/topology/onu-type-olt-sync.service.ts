@@ -5,11 +5,9 @@ import { TenantConnectionService } from '../database/tenant-connection.service';
 import { OnuCatalogItem } from './entities/onu-catalog.entity';
 import type { NetworkDevice } from './entities/network-device.entity';
 import { OnuCatalogAdminService } from './onu-catalog-admin.service';
-import {
-  inferOnuVendor,
-  normalizeOnuModelName,
-} from './onu-model-catalog';
+import { inferOnuVendor, normalizeOnuModelName } from './onu-model-catalog';
 import { ZteOltClient } from './zte-olt.client';
+import { HuaweiOltClient } from './huawei-olt.client';
 import {
   VENDOR_PROBE_ORDER,
   vendorFromSn,
@@ -18,6 +16,8 @@ import {
 } from './zte-olt-onu-type.util';
 import {
   DEFAULT_OLT_PORTS,
+  isHuaweiOltDevice,
+  isManagedOltDevice,
 } from './olt.constants';
 
 export type OnuTypeSyncStep = {
@@ -48,10 +48,17 @@ export class OnuTypeOltSyncService {
   constructor(
     private readonly tenantConnections: TenantConnectionService,
     private readonly zteOlt: ZteOltClient,
+    private readonly huaweiOlt: HuaweiOltClient,
     private readonly onuCatalog: OnuCatalogAdminService,
     @InjectRepository(OnuCatalogItem)
     private readonly catalogRepo: Repository<OnuCatalogItem>,
   ) {}
+
+  private oltCli(device: NetworkDevice) {
+    return isHuaweiOltDevice(device.type, device.subtype)
+      ? this.huaweiOlt
+      : this.zteOlt;
+  }
 
   private zteConn(device: NetworkDevice) {
     const protocol: 'telnet' | 'ssh' =
@@ -77,11 +84,7 @@ export class OnuTypeOltSyncService {
     device: NetworkDevice,
   ): Promise<{ ok: boolean; steps: OnuTypeSyncStep[]; error?: string }> {
     const steps: OnuTypeSyncStep[] = [];
-    if (
-      !device.mgmtHost ||
-      !device.mgmtUsername ||
-      !device.mgmtPassword
-    ) {
+    if (!device.mgmtHost || !device.mgmtUsername || !device.mgmtPassword) {
       return {
         ok: false,
         steps,
@@ -90,7 +93,16 @@ export class OnuTypeOltSyncService {
     }
 
     try {
-      const listed = await this.zteOlt.listOnuTypes(this.zteConn(device));
+      if (!isManagedOltDevice(device.type, device.subtype)) {
+        return {
+          ok: false,
+          steps,
+          error: 'OLT no gestionada (ZTE/Huawei)',
+        };
+      }
+      const listed = await this.oltCli(device).listOnuTypes(
+        this.zteConn(device),
+      );
       if (!listed.ok) {
         return {
           ok: false,
@@ -105,9 +117,7 @@ export class OnuTypeOltSyncService {
         message: `${listed.types.length} type(s) en la OLT`,
       });
 
-      const onOlt = new Set(
-        listed.types.map((t) => t.name.toLowerCase()),
-      );
+      const onOlt = new Set(listed.types.map((t) => t.name.toLowerCase()));
 
       // OLT → admin catalog only (do NOT flood tenant types list)
       let imported = 0;
@@ -130,7 +140,7 @@ export class OnuTypeOltSyncService {
       for (const t of tenantTypes) {
         const name = normalizeOnuModelName(t.name);
         if (!name || onOlt.has(name.toLowerCase())) continue;
-        const created = await this.zteOlt.ensureOnuTypeOnOlt({
+        const created = await this.oltCli(device).ensureOnuTypeOnOlt({
           ...this.zteConn(device),
           spec: this.specFromTenant(t),
         });
@@ -172,7 +182,7 @@ export class OnuTypeOltSyncService {
           });
           break;
         }
-        const created = await this.zteOlt.ensureOnuTypeOnOlt({
+        const created = await this.oltCli(device).ensureOnuTypeOnOlt({
           ...this.zteConn(device),
           spec: this.specFromCatalog(item),
         });
@@ -248,8 +258,7 @@ export class OnuTypeOltSyncService {
     Array<{ name: string; vendor: OnuVendorKind; spec: OnuTypeProfileSpec }>
   > {
     const snVendor = vendorFromSn(sn);
-    const typeRepo =
-      await this.tenantConnections.getOnuTypeRepository(schema);
+    const typeRepo = await this.tenantConnections.getOnuTypeRepository(schema);
     const tenantTypes = await typeRepo.find();
     const approved = await this.catalogRepo.find({
       where: { isActive: true, registrationStatus: 'approved' },
@@ -260,21 +269,22 @@ export class OnuTypeOltSyncService {
       { name: string; vendor: OnuVendorKind; spec: OnuTypeProfileSpec }
     >();
 
-    const add = (
-      nameRaw: string,
-      vendor: string,
-      spec: OnuTypeProfileSpec,
-    ) => {
+    const add = (nameRaw: string, vendor: string, spec: OnuTypeProfileSpec) => {
       const name = normalizeOnuModelName(nameRaw);
       if (!name) return;
-      if (spec.ponType !== ponType && ponType === 'gpon' && spec.ponType === 'epon')
+      if (
+        spec.ponType !== ponType &&
+        ponType === 'gpon' &&
+        spec.ponType === 'epon'
+      )
         return;
       const key = name.toLowerCase();
       if (byName.has(key)) return;
       const v = (vendor as OnuVendorKind) || inferOnuVendor(name);
       byName.set(key, {
         name,
-        vendor: v === 'huawei' || v === 'zte' || v === 'fiberhome' ? v : 'other',
+        vendor:
+          v === 'huawei' || v === 'zte' || v === 'fiberhome' ? v : 'other',
         spec: { ...spec, name, ponType },
       });
     };
@@ -289,9 +299,7 @@ export class OnuTypeOltSyncService {
     }
 
     const all = [...byName.values()];
-    const preferred = preferredType
-      ? normalizeOnuModelName(preferredType)
-      : '';
+    const preferred = preferredType ? normalizeOnuModelName(preferredType) : '';
 
     const vendorOrder: OnuVendorKind[] =
       snVendor === 'other'
@@ -305,7 +313,9 @@ export class OnuTypeOltSyncService {
     );
 
     if (preferred) {
-      const hit = all.find((a) => a.name.toLowerCase() === preferred.toLowerCase());
+      const hit = all.find(
+        (a) => a.name.toLowerCase() === preferred.toLowerCase(),
+      );
       if (hit) {
         ordered.push(hit);
         used.add(hit.name.toLowerCase());
@@ -344,11 +354,8 @@ export class OnuTypeOltSyncService {
     return ordered.slice(0, 10);
   }
 
-  async ensureTypeOnOlt(
-    device: NetworkDevice,
-    spec: OnuTypeProfileSpec,
-  ) {
-    return this.zteOlt.ensureOnuTypeOnOlt({
+  async ensureTypeOnOlt(device: NetworkDevice, spec: OnuTypeProfileSpec) {
+    return this.oltCli(device).ensureOnuTypeOnOlt({
       ...this.zteConn(device),
       spec,
     });

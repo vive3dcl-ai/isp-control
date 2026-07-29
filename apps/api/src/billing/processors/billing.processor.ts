@@ -1,10 +1,7 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Logger } from '@nestjs/common';
 import { Job } from 'bullmq';
-import {
-  BillingJobPayload,
-  QUEUE_BILLING,
-} from '../../queues/queue.constants';
+import { BillingJobPayload, QUEUE_BILLING } from '../../queues/queue.constants';
 import { BillingService } from '../billing.service';
 
 @Processor(QUEUE_BILLING)

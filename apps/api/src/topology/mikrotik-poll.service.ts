@@ -10,14 +10,14 @@ import { Tenant } from '../tenants/entities/tenant.entity';
 import { TopologyService } from './topology.service';
 
 /**
- * How often to schedule a poll pass.
- * Per-device in-flight locks skip devices still probing (OLT CLI is slow).
+ * Background poller: MikroTik via API; ZTE OLT liveness via SNMP RO.
+ * Does not open Telnet/SSH to OLTs on the ticker.
  */
 const POLL_INTERVAL_MS = 15_000;
 
 /**
- * Background poller: MikroTik + ZTE OLT metrics/ports.
- * Does not wait for slow OLT probes before scheduling the next MikroTik pass.
+ * Background poller: MikroTik + ZTE OLT health.
+ * OLTs use SNMP RO only here — CLI stays for provisioning / "Probar".
  */
 @Injectable()
 export class MikrotikPollService implements OnModuleInit, OnModuleDestroy {

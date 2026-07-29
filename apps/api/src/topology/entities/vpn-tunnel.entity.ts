@@ -26,7 +26,12 @@ export class VpnTunnel {
   mode: string;
 
   /** Legacy column; unused (concentrador usa VPN_PUBLIC_HOST). */
-  @Column({ name: 'endpoint_host', type: 'varchar', length: 255, nullable: true })
+  @Column({
+    name: 'endpoint_host',
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+  })
   endpointHost: string | null;
 
   /** Tunnel overlay subnet, e.g. 10.69.69.0/24 */
@@ -67,7 +72,11 @@ export class VpnTunnel {
   @Column({ name: 'setup_token', type: 'varchar', length: 64, nullable: true })
   setupToken: string | null;
 
-  @Column({ name: 'setup_token_expires_at', type: 'timestamptz', nullable: true })
+  @Column({
+    name: 'setup_token_expires_at',
+    type: 'timestamptz',
+    nullable: true,
+  })
   setupTokenExpiresAt: Date | null;
 
   @Column({ name: 'last_imported_device_id', type: 'uuid', nullable: true })

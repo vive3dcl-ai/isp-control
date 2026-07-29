@@ -11,7 +11,10 @@ import {
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
-import { PlatformAccess } from '../auth/decorators/roles.decorator';
+import {
+  PlatformAccess,
+  PlatformWriteAccess,
+} from '../auth/decorators/roles.decorator';
 import {
   OnuCatalogAdminService,
   type UpsertOnuCatalogDto,
@@ -29,11 +32,13 @@ export class OnuCatalogAdminController {
   }
 
   @Post()
+  @PlatformWriteAccess()
   create(@Body() dto: UpsertOnuCatalogDto) {
     return this.catalog.create(dto);
   }
 
   @Patch(':id')
+  @PlatformWriteAccess()
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: Partial<UpsertOnuCatalogDto>,
@@ -42,16 +47,19 @@ export class OnuCatalogAdminController {
   }
 
   @Delete(':id')
+  @PlatformWriteAccess()
   remove(@Param('id', ParseUUIDPipe) id: string) {
     return this.catalog.remove(id);
   }
 
   @Post('propagate')
+  @PlatformWriteAccess()
   propagate() {
     return this.catalog.propagateToAllTenants();
   }
 
   @Post(':id/approve')
+  @PlatformWriteAccess()
   approve(@Param('id', ParseUUIDPipe) id: string) {
     return this.catalog.approve(id);
   }

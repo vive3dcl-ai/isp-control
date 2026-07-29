@@ -93,6 +93,20 @@ export class Onu {
   @Column({ name: 'last_probed_at', type: 'timestamptz', nullable: true })
   lastProbedAt: Date | null;
 
+  /**
+   * When the ONU was last observed going online (SNMP/CLI poll).
+   * Used to show live “Online Duration” without Telnet.
+   */
+  @Column({ name: 'online_since', type: 'timestamptz', nullable: true })
+  onlineSince: Date | null;
+
+  /**
+   * ZTE XPON ONU ifIndex (3902.1015…, often >2^31) for traffic counters.
+   * Live path can also re-encode from slot/pon/onuId.
+   */
+  @Column({ name: 'if_index', type: 'bigint', nullable: true })
+  ifIndex: number | null;
+
   /** Assigned management IP from an ip_pool (purpose=management). */
   @Column({ name: 'mgmt_ip', type: 'varchar', length: 45, nullable: true })
   mgmtIp: string | null;

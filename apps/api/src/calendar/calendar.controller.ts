@@ -44,27 +44,18 @@ export class CalendarController {
   }
 
   @Get('events/day')
-  listDay(
-    @CurrentUser() user: AuthUser,
-    @Query('day') day: string,
-  ) {
+  listDay(@CurrentUser() user: AuthUser, @Query('day') day: string) {
     return this.calendar.listDay(user, day);
   }
 
   @Get('events/:id')
-  get(
-    @CurrentUser() user: AuthUser,
-    @Param('id', ParseUUIDPipe) id: string,
-  ) {
+  get(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string) {
     return this.calendar.get(user, id);
   }
 
   @Post('events')
   @TenantRoles(...FIELD_INSTALL_ROLES)
-  create(
-    @CurrentUser() user: AuthUser,
-    @Body() dto: CreateCalendarEventDto,
-  ) {
+  create(@CurrentUser() user: AuthUser, @Body() dto: CreateCalendarEventDto) {
     return this.calendar.create(user, dto);
   }
 

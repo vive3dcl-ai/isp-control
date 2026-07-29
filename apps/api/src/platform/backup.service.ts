@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { createReadStream, promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -32,7 +33,9 @@ export class BackupService {
     env: NodeJS.ProcessEnv;
   } {
     const host = this.config.get<string>('DATABASE_HOST', 'localhost');
-    const port = String(this.config.get<string | number>('DATABASE_PORT', 5432));
+    const port = String(
+      this.config.get<string | number>('DATABASE_PORT', 5432),
+    );
     const user = this.config.get<string>('DATABASE_USER', 'isp');
     const password = this.config.get<string>('DATABASE_PASSWORD', 'isp');
     const database = this.config.get<string>('DATABASE_NAME', 'isp_control');
@@ -56,7 +59,7 @@ export class BackupService {
   async createDump(): Promise<DumpResult> {
     const { host, port, user, database, env } = this.dbEnv();
     const filename = `isp-control-${this.stamp()}.backup`;
-    const outPath = join(tmpdir(), filename);
+    const outPath = join(tmpdir(), `isp-control-${randomUUID()}.backup`);
 
     await this.assertPgTools();
 
@@ -119,9 +122,12 @@ export class BackupService {
    * Restore full DB from a custom-format dump.
    * Terminates other backends first so --clean can drop objects.
    */
-  async restoreFromFile(filePath: string): Promise<{ ok: true; warnings: string }> {
+  async restoreFromFile(
+    filePath: string,
+  ): Promise<{ ok: true; warnings: string }> {
     const { host, port, user, database, env } = this.dbEnv();
     await this.assertPgTools();
+    await this.validateDump(filePath, env);
 
     // Best-effort: kick other sessions (not ours) so DROP during restore works.
     await this.terminateOtherSessions(env, host, port, user, database);
@@ -138,6 +144,8 @@ export class BackupService {
         database,
         '--clean',
         '--if-exists',
+        '--exit-on-error',
+        '--single-transaction',
         '--no-owner',
         '--no-acl',
         filePath,
@@ -156,8 +164,7 @@ export class BackupService {
         );
       });
       child.on('close', (code) => {
-        // pg_restore: 0 = ok, 1 = warnings (common with --clean), >=2 = fatal
-        if (code === 0 || code === 1) {
+        if (code === 0) {
           resolve(stderr.slice(0, 2000));
         } else {
           reject(
@@ -171,6 +178,38 @@ export class BackupService {
 
     this.logger.warn('pg_restore finished');
     return { ok: true, warnings };
+  }
+
+  private validateDump(
+    filePath: string,
+    env: NodeJS.ProcessEnv,
+  ): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const child = spawn('pg_restore', ['--list', filePath], { env });
+      let stderr = '';
+      child.stderr.on('data', (buf: Buffer) => {
+        stderr = (stderr + buf.toString()).slice(0, 800);
+      });
+      child.on('error', (err) => {
+        reject(
+          new ServiceUnavailableException(
+            `No se pudo validar el respaldo: ${err.message}`,
+          ),
+        );
+      });
+      child.on('close', (code) => {
+        if (code === 0) resolve();
+        else {
+          reject(
+            new BadRequestException(
+              `El archivo no es un respaldo PostgreSQL válido: ${
+                stderr || `pg_restore terminó con código ${code}`
+              }`,
+            ),
+          );
+        }
+      });
+    });
   }
 
   private async assertPgTools(): Promise<void> {
@@ -207,7 +246,20 @@ export class BackupService {
       const sql = `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid() AND backend_type = 'client backend';`;
       const child = spawn(
         'psql',
-        ['-h', host, '-p', port, '-U', user, '-d', database, '-v', 'ON_ERROR_STOP=0', '-c', sql],
+        [
+          '-h',
+          host,
+          '-p',
+          port,
+          '-U',
+          user,
+          '-d',
+          database,
+          '-v',
+          'ON_ERROR_STOP=0',
+          '-c',
+          sql,
+        ],
         { env },
       );
       child.on('close', () => resolve());

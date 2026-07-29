@@ -1,11 +1,7 @@
-export type {
-  JwtRole,
-  PlatformRole,
-  TenantUserRole,
-} from './roles';
+export type { JwtRole, PlatformRole, TenantUserRole } from './roles';
 export { PLATFORM_ROLES, TENANT_ROLES, isPlatformRole } from './roles';
 
-import type { JwtRole, TenantUserRole } from './roles';
+import type { JwtRole } from './roles';
 
 export interface JwtPayload {
   sub: string;
@@ -15,19 +11,22 @@ export interface JwtPayload {
   tenantId?: string;
   tenantSlug?: string;
   schemaName?: string;
-  tenantRole?: TenantUserRole | string;
+  tenantRole?: string;
   /** CRM client id when role is client_portal */
   clientId?: string;
   /** Platform admin id when impersonating a tenant owner */
   impersonatedBy?: string;
   impersonatorEmail?: string;
+  /** Hash-derived marker used to revoke tokens after password changes. */
+  authVersion?: string;
+  impersonatorAuthVersion?: string;
 }
 
-export interface AuthUser extends JwtPayload {}
+export type AuthUser = JwtPayload;
 
 export interface LoginResponse {
   accessToken: string;
-  redirectTo: '/admin' | '/app' | string;
+  redirectTo: string;
   user: {
     id: string;
     email: string;

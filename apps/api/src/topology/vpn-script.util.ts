@@ -3,8 +3,7 @@ import type { VpnProtocol } from './vpn.constants';
 import { DEFAULT_VPN_PORTS } from './vpn.constants';
 
 export function randomPassword(length = 12): string {
-  const alphabet =
-    'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
   const bytes = randomBytes(length);
   let out = '';
   for (let i = 0; i < length; i++) {
@@ -94,7 +93,9 @@ export function desiredWgClientAllowedAddress(ctx: VpnScriptContext): string {
 }
 
 /** Normaliza dst-address de RouterOS (a veces /32 sin máscara). */
-export function normalizeRouteCidr(raw: string | undefined | null): string | null {
+export function normalizeRouteCidr(
+  raw: string | undefined | null,
+): string | null {
   if (!raw) return null;
   const s = raw.trim();
   if (/^\d+\.\d+\.\d+\.\d+\/\d+$/.test(s)) return s;
@@ -130,6 +131,29 @@ function safeName(name: string): string {
   return name.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 40) || 'tunnel';
 }
 
+// eslint-disable-next-line no-control-regex
+const UNSAFE_ROUTEROS_PASSWORD_RE = new RegExp('[\\x00-\\x1F\\x7F"\\\\]');
+
+function assertSafeRouterOsContext(ctx: VpnScriptContext): void {
+  if (!/^[A-Za-z0-9_-]{1,80}$/.test(ctx.name)) {
+    throw new Error(
+      'Nombre de túnel inválido para RouterOS (usa letras, números, _ o -)',
+    );
+  }
+  if (ctx.password && UNSAFE_ROUTEROS_PASSWORD_RE.test(ctx.password)) {
+    throw new Error(
+      'La contraseña contiene caracteres inseguros para RouterOS',
+    );
+  }
+  if (
+    !/^(?:[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?|\d{1,3}(?:\.\d{1,3}){3})$/.test(
+      ctx.vpnHost,
+    )
+  ) {
+    throw new Error('VPN_PUBLIC_HOST no es un hostname o IPv4 válido');
+  }
+}
+
 /**
  * Reglas MikroTik para tráfico del túnel ↔ LAN (OLT/mgmt).
  * Sin forward + exclusión de masquerade, el concentrador no alcanza OLTs.
@@ -161,6 +185,7 @@ function buildMikrotikTunnelAccessRules(
 
 /** Full RouterOS script (manual paste), SmartOLT-style. */
 export function buildMikrotikVpnScript(ctx: VpnScriptContext): string {
+  assertSafeRouterOsContext(ctx);
   const name = ifaceName(ctx);
   const routes = parseRoutes(ctx.tunnelRoutes);
   const lines: string[] = [
@@ -433,9 +458,7 @@ export function scriptToApiBatches(script: string): string[][] {
 function routerosLineToWords(line: string): string[] | null {
   // /interface ovpn-client add name=x connect-to=y ...
   // /interface ovpn-server server set ...
-  const m = line.match(
-    /^(\/[a-z0-9\/-]+)\s+(add|remove|set|sign)\s+(.+)$/i,
-  );
+  const m = line.match(/^(\/[a-z0-9/-]+)\s+(add|remove|set|sign)\s+(.+)$/i);
   if (!m) return null;
   const path = m[1];
   const action = m[2].toLowerCase();

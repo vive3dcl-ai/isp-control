@@ -23,8 +23,10 @@ COPY apps/api/package.json ./apps/api/
 COPY apps/web/package.json ./apps/web/
 RUN npm ci --workspace=@isp-control/whatsapp-baileys --omit=dev && npm cache clean --force
 COPY --from=build /app/apps/whatsapp-baileys/dist ./apps/whatsapp-baileys/dist
-RUN mkdir -p /data/sessions
+RUN mkdir -p /data/sessions \
+  && chown -R node:node /app /data/sessions
 VOLUME ["/data/sessions"]
 WORKDIR /app/apps/whatsapp-baileys
+USER node
 EXPOSE 3101
 CMD ["node", "dist/index.js"]

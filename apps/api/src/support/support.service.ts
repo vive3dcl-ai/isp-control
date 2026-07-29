@@ -463,9 +463,7 @@ export class SupportService {
 
   async ticketBadge(user: AuthUser) {
     if (isPlatformRole(user.role)) {
-      return (
-        (await this.tickets.count({ where: { adminUnread: true } })) > 0
-      );
+      return (await this.tickets.count({ where: { adminUnread: true } })) > 0;
     }
     const tenantId = this.requireTenantId(user);
     return (

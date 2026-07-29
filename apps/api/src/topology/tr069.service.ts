@@ -152,8 +152,7 @@ export class Tr069Service {
 
   async getStatus(user: AuthUser) {
     const schema = this.requireSchema(user);
-    const repo =
-      await this.tenantConnections.getTr069ProfileRepository(schema);
+    const repo = await this.tenantConnections.getTr069ProfileRepository(schema);
     const profiles = await repo.find({ order: { name: 'ASC' } });
 
     const faults: Array<{
@@ -199,8 +198,8 @@ export class Tr069Service {
       const li = device._lastInform;
       if (li instanceof Date) return li.toISOString();
       if (typeof li === 'string') return li;
-      if (li && typeof li === 'object' && '$date' in (li as object)) {
-        return String((li as { $date: unknown }).$date);
+      if (li && typeof li === 'object' && '$date' in li) {
+        return String(li.$date);
       }
       return null;
     };
@@ -212,7 +211,12 @@ export class Tr069Service {
       const sn = (o.sn || '').trim();
       const acs = sn
         ? acsDevices.find((d) =>
-            deviceIdMatchesSerial(String(d._id ?? ''), sn),
+            deviceIdMatchesSerial(
+              typeof d._id === 'string' || typeof d._id === 'number'
+                ? String(d._id)
+                : '',
+              sn,
+            ),
           )
         : undefined;
       const lastInform = parseLastInform(acs);
@@ -363,8 +367,7 @@ export class Tr069Service {
 
   async list(user: AuthUser) {
     const schema = this.requireSchema(user);
-    const repo =
-      await this.tenantConnections.getTr069ProfileRepository(schema);
+    const repo = await this.tenantConnections.getTr069ProfileRepository(schema);
     const profiles = await repo.find({ order: { name: 'ASC' } });
     const oltMap = await this.loadOlts(
       schema,
@@ -388,8 +391,7 @@ export class Tr069Service {
 
   async get(user: AuthUser, id: string) {
     const schema = this.requireSchema(user);
-    const repo =
-      await this.tenantConnections.getTr069ProfileRepository(schema);
+    const repo = await this.tenantConnections.getTr069ProfileRepository(schema);
     const p = await repo.findOne({ where: { id } });
     if (!p) throw new NotFoundException('TR069 profile not found');
     const oltMap = await this.loadOlts(schema, [id]);
@@ -404,8 +406,7 @@ export class Tr069Service {
   ): Promise<string> {
     if (explicit?.trim()) return explicit.trim();
 
-    const vpnRepo =
-      await this.tenantConnections.getVpnTunnelRepository(schema);
+    const vpnRepo = await this.tenantConnections.getVpnTunnelRepository(schema);
 
     const tunnels = await vpnRepo.find({
       order: { createdAt: 'ASC' },
@@ -422,8 +423,7 @@ export class Tr069Service {
 
   async create(user: AuthUser, dto: CreateTr069ProfileDto) {
     const schema = this.requireSchema(user);
-    const repo =
-      await this.tenantConnections.getTr069ProfileRepository(schema);
+    const repo = await this.tenantConnections.getTr069ProfileRepository(schema);
 
     const port = dto.acsPort ?? DEFAULT_TR069_ACS_PORT;
     const acsUrl = await this.defaultAcsUrl(schema, port, dto.acsUrl);
@@ -441,8 +441,7 @@ export class Tr069Service {
       acsUsername: dto.acsUsername?.trim() || `acs_${randomPassword(6)}`,
       acsPassword: dto.acsPassword?.trim() || randomPassword(14),
       connectionRequestUsername:
-        dto.connectionRequestUsername?.trim() ||
-        `cr_${randomPassword(6)}`,
+        dto.connectionRequestUsername?.trim() || `cr_${randomPassword(6)}`,
       connectionRequestPassword:
         dto.connectionRequestPassword?.trim() || randomPassword(14),
       periodicInformEnable: dto.periodicInformEnable ?? true,
@@ -456,8 +455,7 @@ export class Tr069Service {
 
   async update(user: AuthUser, id: string, dto: UpdateTr069ProfileDto) {
     const schema = this.requireSchema(user);
-    const repo =
-      await this.tenantConnections.getTr069ProfileRepository(schema);
+    const repo = await this.tenantConnections.getTr069ProfileRepository(schema);
     const p = await repo.findOne({ where: { id } });
     if (!p) throw new NotFoundException('TR069 profile not found');
 
@@ -497,8 +495,7 @@ export class Tr069Service {
 
   async remove(user: AuthUser, id: string) {
     const schema = this.requireSchema(user);
-    const repo =
-      await this.tenantConnections.getTr069ProfileRepository(schema);
+    const repo = await this.tenantConnections.getTr069ProfileRepository(schema);
     const p = await repo.findOne({ where: { id } });
     if (!p) throw new NotFoundException('TR069 profile not found');
 
@@ -511,8 +508,7 @@ export class Tr069Service {
 
   async setOlts(user: AuthUser, id: string, dto: SetTr069ProfileOltsDto) {
     const schema = this.requireSchema(user);
-    const repo =
-      await this.tenantConnections.getTr069ProfileRepository(schema);
+    const repo = await this.tenantConnections.getTr069ProfileRepository(schema);
     const p = await repo.findOne({ where: { id } });
     if (!p) throw new NotFoundException('TR069 profile not found');
 

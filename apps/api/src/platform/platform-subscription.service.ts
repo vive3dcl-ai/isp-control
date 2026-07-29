@@ -108,8 +108,7 @@ export class PlatformSubscriptionService {
   }
 
   serializeCharge(c: PlatformCharge) {
-    const status =
-      c.status === 'recorded' ? 'paid' : c.status;
+    const status = c.status === 'recorded' ? 'paid' : c.status;
     return {
       id: c.id,
       kind: c.kind,
@@ -226,10 +225,7 @@ export class PlatformSubscriptionService {
       throw new BadRequestException('Módulo no contratable');
     }
     const country = (tenant.country || '').toUpperCase();
-    if (
-      def.availableCountries &&
-      !def.availableCountries.includes(country)
-    ) {
+    if (def.availableCountries && !def.availableCountries.includes(country)) {
       throw new BadRequestException(
         'Este módulo no está disponible para el país de tu empresa',
       );
@@ -447,8 +443,7 @@ export class PlatformSubscriptionService {
        * alwaysEnabled (SMTP) → incluido.
        */
       const purchased = contracted && !!contract;
-      const included =
-        contracted && (m.alwaysEnabled || !contract);
+      const included = contracted && (m.alwaysEnabled || !contract);
       return {
         id: m.id,
         name: m.name,
@@ -601,10 +596,7 @@ export class PlatformSubscriptionService {
         ? await this.plans.getByCycle(cycle)
         : null;
       const months = plan?.months ?? 1;
-      const start =
-        charge.coversFrom ??
-        tenant.subscriptionPeriodEnd ??
-        now;
+      const start = charge.coversFrom ?? tenant.subscriptionPeriodEnd ?? now;
       const end = charge.coversTo ?? addMonthsUtc(start, months);
       tenant.billingCycle = cycle;
       tenant.subscriptionStatus = 'active';

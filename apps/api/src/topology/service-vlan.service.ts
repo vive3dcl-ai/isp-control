@@ -5,12 +5,17 @@ import {
 } from '@nestjs/common';
 import type { AuthUser } from '../auth/auth.types';
 import { TenantConnectionService } from '../database/tenant-connection.service';
-import { isZteOltDevice, DEFAULT_OLT_PORTS } from './olt.constants';
+import {
+  isHuaweiOltDevice,
+  isManagedOltDevice,
+  DEFAULT_OLT_PORTS,
+} from './olt.constants';
 import type { NetworkDevice } from './entities/network-device.entity';
 import type { NetworkPort } from './entities/network-port.entity';
 import type { ServiceVlan } from './entities/service-vlan.entity';
 import { MikrotikClient } from './mikrotik.client';
 import { ZteOltClient } from './zte-olt.client';
+import { HuaweiOltClient } from './huawei-olt.client';
 import {
   CreateServiceVlanDto,
   UpdateServiceVlanDto,
@@ -24,6 +29,7 @@ export class ServiceVlanService {
     private readonly tenantConnections: TenantConnectionService,
     private readonly mikrotik: MikrotikClient,
     private readonly zteOlt: ZteOltClient,
+    private readonly huaweiOlt: HuaweiOltClient,
   ) {}
 
   private requireSchema(user: AuthUser): string {
@@ -47,8 +53,7 @@ export class ServiceVlanService {
     return {
       host: device.mgmtHost,
       port:
-        device.mgmtPort ??
-        (device.mgmtProtocol === 'rest_https' ? 443 : 8729),
+        device.mgmtPort ?? (device.mgmtProtocol === 'rest_https' ? 443 : 8729),
       username: device.mgmtUsername,
       password: device.mgmtPassword,
       protocol: device.mgmtProtocol ?? 'api_ssl',
@@ -57,7 +62,7 @@ export class ServiceVlanService {
 
   private zteConn(device: NetworkDevice) {
     if (
-      !isZteOltDevice(device.type, device.subtype) ||
+      !isManagedOltDevice(device.type, device.subtype) ||
       !device.mgmtHost ||
       !device.mgmtUsername ||
       !device.mgmtPassword
@@ -77,6 +82,12 @@ export class ServiceVlanService {
     };
   }
 
+  private oltCli(device: NetworkDevice): ZteOltClient {
+    return (isHuaweiOltDevice(device.type, device.subtype)
+      ? this.huaweiOlt
+      : this.zteOlt) as unknown as ZteOltClient;
+  }
+
   private serialize(
     row: ServiceVlan,
     opts: {
@@ -92,9 +103,7 @@ export class ServiceVlanService {
       oltIds: row.oltIds ?? [],
       routerIds: row.routerIds ?? [],
       /** OLT(s) where this VLAN currently exists (blank if none). */
-      olt: opts.olts.length
-        ? opts.olts.map((d) => d.name).join(', ')
-        : null,
+      olt: opts.olts.length ? opts.olts.map((d) => d.name).join(', ') : null,
       /** Router(s) where this VLAN currently exists (blank if none). */
       router: opts.routers.length
         ? opts.routers.map((d) => d.name).join(', ')
@@ -141,7 +150,7 @@ export class ServiceVlanService {
       return row;
     };
 
-    const olts = devices.filter((d) => isZteOltDevice(d.type, d.subtype));
+    const olts = devices.filter((d) => isManagedOltDevice(d.type, d.subtype));
     const routers = devices.filter(
       (d) => d.type === 'router' && d.subtype === 'mikrotik',
     );
@@ -160,44 +169,27 @@ export class ServiceVlanService {
       }
     }
 
-    await Promise.all(
-      olts.map(async (olt) => {
-        const found = new Set<number>();
-        const meta = olt.oltVlanMeta ?? {};
-        for (const key of Object.keys(meta)) {
-          const id = Number(key);
-          if (Number.isInteger(id) && id >= 1 && id <= 4094) found.add(id);
-        }
-        try {
-          if (olt.mgmtHost && olt.mgmtUsername && olt.mgmtPassword) {
-            const live = await this.zteOlt.listVlans(this.zteConn(olt));
-            if (live.ok) {
-              for (const v of live.vlans) {
-                if (v.vlanId === 1) continue; // skip system clutter unless catalogued
-                found.add(v.vlanId);
-                if (v.description?.trim()) {
-                  ensure(v.vlanId).comments.push(v.description.trim());
-                }
-              }
-            }
-          }
-        } catch {
-          /* use meta only */
-        }
-        for (const vlanId of found) {
-          if (vlanId === 1) continue;
-          ensure(vlanId).olts.push({ id: olt.id, name: olt.name });
-        }
-      }),
-    );
+    for (const olt of olts) {
+      const found = new Set<number>();
+      const meta = olt.oltVlanMeta ?? {};
+      for (const key of Object.keys(meta)) {
+        const id = Number(key);
+        if (Number.isInteger(id) && id >= 1 && id <= 4094) found.add(id);
+      }
+      // Do NOT open Telnet here — listing settings must stay DB/meta only.
+      // Live OLT VLAN scrape stays on explicit sync/verify actions.
+      for (const vlanId of found) {
+        if (vlanId === 1) continue;
+        ensure(vlanId).olts.push({ id: olt.id, name: olt.name });
+      }
+    }
 
     return { byVlan, devices };
   }
 
   async list(user: AuthUser) {
     const schema = this.requireSchema(user);
-    const repo =
-      await this.tenantConnections.getServiceVlanRepository(schema);
+    const repo = await this.tenantConnections.getServiceVlanRepository(schema);
     const catalog = await repo.find({ order: { vlanId: 'ASC' } });
     const { byVlan } = await this.discoverPresence(schema);
 
@@ -215,9 +207,7 @@ export class ServiceVlanService {
         const olts = live?.olts ?? [];
         const routers = live?.routers ?? [];
         const description =
-          cat?.description ??
-          live?.comments.find((c) => !!c) ??
-          null;
+          cat?.description ?? live?.comments.find((c) => !!c) ?? null;
         if (cat) {
           return this.serialize(cat, { olts, routers });
         }
@@ -229,9 +219,7 @@ export class ServiceVlanService {
           oltIds: olts.map((d) => d.id),
           routerIds: routers.map((d) => d.id),
           olt: olts.length ? olts.map((d) => d.name).join(', ') : null,
-          router: routers.length
-            ? routers.map((d) => d.name).join(', ')
-            : null,
+          router: routers.length ? routers.map((d) => d.name).join(', ') : null,
           olts,
           routers,
           syncMessages: [] as string[],
@@ -246,11 +234,12 @@ export class ServiceVlanService {
 
   async create(user: AuthUser, dto: CreateServiceVlanDto) {
     const schema = this.requireSchema(user);
-    const repo =
-      await this.tenantConnections.getServiceVlanRepository(schema);
+    const repo = await this.tenantConnections.getServiceVlanRepository(schema);
     const clash = await repo.findOne({ where: { vlanId: dto.vlanId } });
     if (clash) {
-      throw new BadRequestException(`Ya existe VLAN ${dto.vlanId} en el catálogo`);
+      throw new BadRequestException(
+        `Ya existe VLAN ${dto.vlanId} en el catálogo`,
+      );
     }
     const row = await repo.save(
       repo.create({
@@ -265,8 +254,7 @@ export class ServiceVlanService {
 
   async update(user: AuthUser, id: string, dto: UpdateServiceVlanDto) {
     const schema = this.requireSchema(user);
-    const repo =
-      await this.tenantConnections.getServiceVlanRepository(schema);
+    const repo = await this.tenantConnections.getServiceVlanRepository(schema);
     let row = await repo.findOne({ where: { id } });
     if (!row) throw new NotFoundException('VLAN not found');
 
@@ -296,8 +284,7 @@ export class ServiceVlanService {
     dto: UpdateServiceVlanDto & { description?: string | null },
   ) {
     const schema = this.requireSchema(user);
-    const repo =
-      await this.tenantConnections.getServiceVlanRepository(schema);
+    const repo = await this.tenantConnections.getServiceVlanRepository(schema);
     let row = await repo.findOne({ where: { vlanId } });
     if (!row) {
       row = await repo.save(
@@ -327,8 +314,7 @@ export class ServiceVlanService {
 
   async remove(user: AuthUser, id: string) {
     const schema = this.requireSchema(user);
-    const repo =
-      await this.tenantConnections.getServiceVlanRepository(schema);
+    const repo = await this.tenantConnections.getServiceVlanRepository(schema);
     const row = await repo.findOne({ where: { id } });
     if (!row) throw new NotFoundException('VLAN not found');
     await repo.delete({ id });
@@ -342,8 +328,7 @@ export class ServiceVlanService {
     dto: { deviceId: string; kind: 'olt' | 'router'; parentPortId?: string },
   ) {
     const schema = this.requireSchema(user);
-    const repo =
-      await this.tenantConnections.getServiceVlanRepository(schema);
+    const repo = await this.tenantConnections.getServiceVlanRepository(schema);
     const row = await repo.findOne({ where: { id } });
     if (!row) throw new NotFoundException('VLAN not found');
 
@@ -362,7 +347,12 @@ export class ServiceVlanService {
         row.vlanId,
         row.description,
       );
-      return { ok: true, deviceId: device.id, deviceName: device.name, message };
+      return {
+        ok: true,
+        deviceId: device.id,
+        deviceName: device.name,
+        message,
+      };
     }
 
     if (!(row.routerIds ?? []).includes(device.id)) {
@@ -390,8 +380,7 @@ export class ServiceVlanService {
     dto: { deviceId: string; kind: 'olt' | 'router' },
   ) {
     const schema = this.requireSchema(user);
-    const repo =
-      await this.tenantConnections.getServiceVlanRepository(schema);
+    const repo = await this.tenantConnections.getServiceVlanRepository(schema);
     const row = await repo.findOne({ where: { id } });
     if (!row) throw new NotFoundException('VLAN not found');
     if (row.vlanId === 1) {
@@ -406,13 +395,18 @@ export class ServiceVlanService {
     let message: string;
     if (dto.kind === 'olt') {
       const conn = this.zteConn(device);
-      const result = await this.zteOlt.deleteVlan({ ...conn, vlanId: row.vlanId });
+      const result = await this.oltCli(device).deleteVlan({
+        ...conn,
+        vlanId: row.vlanId,
+      });
       if (!result.ok) {
         throw new BadRequestException(
           result.error || 'No se pudo eliminar la VLAN de la OLT',
         );
       }
-      const meta = { ...((device.oltVlanMeta ?? {}) as Record<string, unknown>) };
+      const meta = {
+        ...((device.oltVlanMeta ?? {}) as Record<string, unknown>),
+      };
       delete meta[String(row.vlanId)];
       device.oltVlanMeta = meta as typeof device.oltVlanMeta;
       await deviceRepo.save(device);
@@ -435,8 +429,7 @@ export class ServiceVlanService {
       for (const port of ports) {
         const next = (port.vlans ?? []).filter(
           (v) =>
-            v.vlanId !== row.vlanId &&
-            v.interfaceName?.toLowerCase() !== iface,
+            v.vlanId !== row.vlanId && v.interfaceName?.toLowerCase() !== iface,
         );
         if (next.length !== (port.vlans ?? []).length) {
           port.vlans = next;
@@ -456,8 +449,7 @@ export class ServiceVlanService {
   /** Confirm VLAN is present on all assigned devices. */
   async verify(user: AuthUser, id: string) {
     const schema = this.requireSchema(user);
-    const repo =
-      await this.tenantConnections.getServiceVlanRepository(schema);
+    const repo = await this.tenantConnections.getServiceVlanRepository(schema);
     const row = await repo.findOne({ where: { id } });
     if (!row) throw new NotFoundException('VLAN not found');
 
@@ -500,9 +492,7 @@ export class ServiceVlanService {
         ? `VLAN ${row.vlanId} verificada en todos los equipos asignados`
         : `VLAN ${row.vlanId}: faltan equipos`,
       checks,
-      olt: live?.olts?.length
-        ? live.olts.map((d) => d.name).join(', ')
-        : null,
+      olt: live?.olts?.length ? live.olts.map((d) => d.name).join(', ') : null,
       router: live?.routers?.length
         ? live.routers.map((d) => d.name).join(', ')
         : null,
@@ -515,11 +505,11 @@ export class ServiceVlanService {
     description: string | null,
   ): Promise<string> {
     const conn = this.zteConn(olt);
-    const live = await this.zteOlt.listVlans(conn);
+    const live = await this.oltCli(olt).listVlans(conn);
     if (live.ok && live.vlans.some((v) => v.vlanId === vlanId)) {
       return 'ya existía en la OLT';
     }
-    const result = await this.zteOlt.upsertVlan({
+    const result = await this.oltCli(olt).upsertVlan({
       ...conn,
       vlanId,
       description: description ?? undefined,

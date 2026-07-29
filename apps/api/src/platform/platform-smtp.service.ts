@@ -12,7 +12,10 @@ export class PlatformSmtpService {
   ) {}
 
   async getOrCreate(): Promise<PlatformSmtpSettings> {
-    const existing = await this.repo.find({ take: 1, order: { createdAt: 'ASC' } });
+    const existing = await this.repo.find({
+      take: 1,
+      order: { createdAt: 'ASC' },
+    });
     if (existing[0]) return existing[0];
     return this.repo.save(this.repo.create({}));
   }
