@@ -5,6 +5,8 @@ const THEME_META_ID = 'isp-pwa-theme-color'
 const PWA_KIND_KEY = 'isp-pwa-kind'
 const ADMIN_INSTALLED_KEY = 'isp-pwa-admin-installed'
 const TECH_INSTALLED_KEY = 'isp-pwa-tech-installed'
+const PUSH_PROMPT_PENDING_KEY = 'isp-push-prompt-pending'
+const PUSH_PROMPT_DISMISS_KEY = 'isp-push-prompt-dismissed-at'
 
 export type PwaKind = 'tech' | 'admin'
 
@@ -102,6 +104,53 @@ export function markPwaInstalled(kind: PwaKind) {
       kind === 'admin' ? ADMIN_INSTALLED_KEY : TECH_INSTALLED_KEY,
       '1',
     )
+    // Pedir permisos de notificación en la siguiente sesión autenticada.
+    localStorage.setItem(PUSH_PROMPT_PENDING_KEY, '1')
+  } catch {
+    // ignore
+  }
+}
+
+export function markPushPromptPending() {
+  try {
+    localStorage.setItem(PUSH_PROMPT_PENDING_KEY, '1')
+  } catch {
+    // ignore
+  }
+}
+
+export function clearPushPromptPending() {
+  try {
+    localStorage.removeItem(PUSH_PROMPT_PENDING_KEY)
+  } catch {
+    // ignore
+  }
+}
+
+export function isPushPromptPending() {
+  try {
+    return localStorage.getItem(PUSH_PROMPT_PENDING_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+export function wasPushPromptDismissedRecently(cooldownMs = 7 * 24 * 60 * 60 * 1000) {
+  try {
+    const raw = localStorage.getItem(PUSH_PROMPT_DISMISS_KEY)
+    if (!raw) return false
+    const ts = Number(raw)
+    if (!Number.isFinite(ts)) return false
+    return Date.now() - ts < cooldownMs
+  } catch {
+    return false
+  }
+}
+
+export function dismissPushPrompt() {
+  try {
+    localStorage.setItem(PUSH_PROMPT_DISMISS_KEY, String(Date.now()))
+    localStorage.removeItem(PUSH_PROMPT_PENDING_KEY)
   } catch {
     // ignore
   }

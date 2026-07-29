@@ -155,7 +155,15 @@ export function NotificationBell({
       </button>
 
       {open && (
-        <div className="absolute right-0 z-[60] mt-2 w-[min(22rem,calc(100vw-2rem))] overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] shadow-lg">
+        <div
+          className={[
+            'z-[60] overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] shadow-lg',
+            // Móvil: panel fijo centrado bajo el header (no se sale de pantalla).
+            'fixed left-1/2 top-[calc(env(safe-area-inset-top,0px)+3.5rem)] w-[min(22rem,calc(100vw-1.5rem))] -translate-x-1/2',
+            // Desktop: anclado a la campana.
+            'sm:absolute sm:left-auto sm:right-0 sm:top-auto sm:mt-2 sm:w-[min(22rem,calc(100vw-2rem))] sm:translate-x-0',
+          ].join(' ')}
+        >
           <div className="flex items-center justify-between border-b border-[var(--border)] px-3 py-2">
             <p className="text-sm font-medium">Notificaciones</p>
             <button

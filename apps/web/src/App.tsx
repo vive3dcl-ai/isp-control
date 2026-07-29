@@ -35,6 +35,7 @@ import { MobileRoutes } from './mobile/MobileRoutes'
 import { StandaloneMobileGuard } from './mobile/StandaloneMobileGuard'
 import { MobileInstallPrompt } from './mobile/MobileInstallPrompt'
 import { AdminInstallPrompt } from './components/AdminInstallPrompt'
+import { PushEnablePrompt } from './components/PushEnablePrompt'
 import { useBranding } from './branding/BrandingContext'
 import {
   applyAdminPwaManifest,
@@ -70,6 +71,7 @@ export default function App() {
       <NotifyProvider>
         <StandaloneMobileGuard>
         <DualPwaHost />
+        <PushEnablePrompt />
         <Routes>
           <Route path="/:slug/portal/*" element={<PortalRoutes />} />
 
