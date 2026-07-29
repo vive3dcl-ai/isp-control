@@ -7,16 +7,20 @@ describe('sshHostVerification', () => {
     process.env = { ...originalEnv, NODE_ENV: 'production' };
     delete process.env.OLT_SSH_HOST_KEYS;
     delete process.env.OLT_SSH_ALLOW_UNVERIFIED;
+    delete process.env.OLT_SSH_REQUIRE_HOST_KEYS;
   });
 
   afterAll(() => {
     process.env = originalEnv;
   });
 
-  it('fails closed in production without a pinned key', () => {
-    expect(() => sshHostVerification('10.0.0.2', 22)).toThrow(
-      'Falta fingerprint SSH',
-    );
+  it('allows panel-managed OLTs without a pinned key by default', () => {
+    expect(sshHostVerification('10.0.0.2', 22)).toEqual({});
+  });
+
+  it('treats an empty JSON map as no pins', () => {
+    process.env.OLT_SSH_HOST_KEYS = '{}';
+    expect(sshHostVerification('10.0.0.2', 22)).toEqual({});
   });
 
   it('accepts only the configured SHA256 fingerprint', () => {
@@ -34,8 +38,17 @@ describe('sshHostVerification', () => {
     expect(config.hostVerifier?.('11'.repeat(32))).toBe(false);
   });
 
-  it('requires an explicit break-glass flag to skip verification', () => {
-    process.env.OLT_SSH_ALLOW_UNVERIFIED = 'true';
-    expect(sshHostVerification('10.0.0.2', 22)).toEqual({});
+  it('fails closed when host keys are explicitly required', () => {
+    process.env.OLT_SSH_REQUIRE_HOST_KEYS = 'true';
+    expect(() => sshHostVerification('10.0.0.2', 22)).toThrow(
+      'Falta fingerprint SSH',
+    );
+  });
+
+  it('fails closed when unverified SSH is explicitly disabled', () => {
+    process.env.OLT_SSH_ALLOW_UNVERIFIED = 'false';
+    expect(() => sshHostVerification('10.0.0.2', 22)).toThrow(
+      'Falta fingerprint SSH',
+    );
   });
 });

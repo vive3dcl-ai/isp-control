@@ -7,7 +7,7 @@ interface HostVerification {
 
 function configuredFingerprint(host: string, port: number): string | null {
   const raw = process.env.OLT_SSH_HOST_KEYS?.trim();
-  if (!raw) return null;
+  if (!raw || raw === '{}') return null;
   try {
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     const value = parsed[`${host}:${port}`] ?? parsed[host];
@@ -32,8 +32,12 @@ function fingerprintMatches(actualHex: string, expected: string): boolean {
 }
 
 /**
- * Pin SSH host keys in production. `OLT_SSH_ALLOW_UNVERIFIED=true` is an
- * explicit break-glass escape hatch for legacy deployments.
+ * Optional SSH host-key pinning for OLTs.
+ *
+ * Tenants add OLTs from the panel with dynamic management IPs, so unverified
+ * SSH is allowed by default. When a fingerprint exists in OLT_SSH_HOST_KEYS it
+ * is always enforced. Set OLT_SSH_REQUIRE_HOST_KEYS=true only if every SSH OLT
+ * must be listed in the env map before connecting.
  */
 export function sshHostVerification(
   host: string,
@@ -49,9 +53,9 @@ export function sshHostVerification(
     };
   }
 
-  const production = process.env.NODE_ENV === 'production';
-  const allowUnverified = process.env.OLT_SSH_ALLOW_UNVERIFIED === 'true';
-  if (production && !allowUnverified) {
+  const requireKeys = process.env.OLT_SSH_REQUIRE_HOST_KEYS === 'true';
+  const allowUnverified = process.env.OLT_SSH_ALLOW_UNVERIFIED !== 'false';
+  if (requireKeys || !allowUnverified) {
     throw new Error(
       `Falta fingerprint SSH para ${host}:${port} en OLT_SSH_HOST_KEYS`,
     );
