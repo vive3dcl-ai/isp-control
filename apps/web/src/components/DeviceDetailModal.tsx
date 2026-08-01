@@ -1588,6 +1588,7 @@ export function DeviceDetailModal({
               <SwitchBridgeVlansPanel
                 deviceId={deviceId}
                 canWrite={canWrite}
+                devicePorts={device.ports}
               />
             )}
 

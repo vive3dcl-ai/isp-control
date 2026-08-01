@@ -136,7 +136,26 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
     setDescription(v.description ?? '')
     setRouterParentPort({})
     setSwitchBridge({})
-    setSwitchPortModes({})
+    // Prefill tagged/untagged from topology port cache so existing VLANs are editable.
+    const modes: Record<string, Record<string, SwitchPortMode | ''>> = {}
+    for (const d of topologyQuery.data?.devices ?? []) {
+      if (
+        d.type !== 'switch' ||
+        d.subtype !== 'mikrotik_routeros' ||
+        !d.isActive
+      ) {
+        continue
+      }
+      const perPort: Record<string, SwitchPortMode | ''> = {}
+      for (const p of physicalPorts(d, { excludeBridge: true })) {
+        const assignment = (p.vlans ?? []).find((x) => x.vlanId === v.vlanId)
+        if (assignment?.mode === 'tagged' || assignment?.mode === 'untagged') {
+          perPort[p.id] = assignment.mode
+        }
+      }
+      modes[d.id] = perPort
+    }
+    setSwitchPortModes(modes)
     setError(null)
   }
 
@@ -290,11 +309,15 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
     setError(null)
     const kindLabel =
       kind === 'olt' ? 'OLT' : kind === 'router' ? 'Router' : 'Switch'
+    const actionLabel =
+      kind === 'switch' && switchHasVlan(device, currentVlanId)
+        ? 'actualizar'
+        : 'crear'
     const steps: ProgressStep[] = [
       { id: 'catalog', label: 'Guardar en catálogo', status: 'pending' },
       {
         id: 'device',
-        label: `${kindLabel} · ${device.name} — crear VLAN`,
+        label: `${kindLabel} · ${device.name} — ${actionLabel} VLAN`,
         status: 'pending',
       },
       { id: 'verify', label: 'Verificar en equipos', status: 'pending' },
@@ -340,7 +363,11 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
         return r.message
       },
     }
-    startProgress(`Crear VLAN ${currentVlanId} en ${device.name}`, steps, runners)
+    startProgress(
+      `${actionLabel === 'actualizar' ? 'Actualizar' : 'Crear'} VLAN ${currentVlanId} en ${device.name}`,
+      steps,
+      runners,
+    )
   }
 
   function confirmDelete() {
@@ -727,34 +754,38 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
                                   {exists ? 'creada' : 'no existe'}
                                 </span>
                               </span>
-                              {canWrite &&
-                                (exists ? (
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setDeleteConfirm('')
-                                      setPendingDelete({
-                                        device: sw,
-                                        kind: 'switch',
-                                        vlanId: currentVlanId,
-                                      })
-                                    }}
-                                    className="rounded-lg border border-[var(--danger)]/50 px-2 py-1 text-[var(--danger)] hover:bg-[var(--danger)]/10"
-                                  >
-                                    Eliminar
-                                  </button>
-                                ) : (
+                              {canWrite && (
+                                <div className="flex shrink-0 gap-1">
                                   <button
                                     type="button"
                                     disabled={selected.length === 0}
-                                    onClick={() => createOnDevice(sw, 'switch')}
+                                    onClick={() =>
+                                      createOnDevice(sw, 'switch')
+                                    }
                                     className="rounded-lg bg-[var(--accent)] px-2 py-1 font-medium text-white hover:bg-[var(--accent-hover)] disabled:opacity-40"
                                   >
-                                    Crear
+                                    {exists ? 'Guardar' : 'Crear'}
                                   </button>
-                                ))}
+                                  {exists && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setDeleteConfirm('')
+                                        setPendingDelete({
+                                          device: sw,
+                                          kind: 'switch',
+                                          vlanId: currentVlanId,
+                                        })
+                                      }}
+                                      className="rounded-lg border border-[var(--danger)]/50 px-2 py-1 text-[var(--danger)] hover:bg-[var(--danger)]/10"
+                                    >
+                                      Eliminar
+                                    </button>
+                                  )}
+                                </div>
+                              )}
                             </div>
-                            {!exists && canWrite && (
+                            {canWrite && (
                               <div className="space-y-2">
                                 <label className="block text-xs">
                                   <span className="mb-1 block text-[var(--text-muted)]">

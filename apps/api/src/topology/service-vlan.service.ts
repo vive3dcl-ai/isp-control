@@ -888,15 +888,23 @@ export class ServiceVlanService {
 
     const portRepo =
       await this.tenantConnections.getNetworkPortRepository(schema);
-    for (const { port, mode } of selected) {
-      port.vlans = [
-        ...(port.vlans ?? []).filter((v) => v.vlanId !== vlanId),
-        {
-          vlanId,
-          mode,
-          comment: description ?? undefined,
-        },
-      ];
+    const selectedIds = new Set(selected.map((s) => s.port.id));
+    for (const port of ports) {
+      if (selectedIds.has(port.id)) {
+        const mode = selected.find((s) => s.port.id === port.id)!.mode;
+        port.vlans = [
+          ...(port.vlans ?? []).filter((v) => v.vlanId !== vlanId),
+          {
+            vlanId,
+            mode,
+            comment: description ?? undefined,
+          },
+        ];
+      } else {
+        const next = (port.vlans ?? []).filter((v) => v.vlanId !== vlanId);
+        if (next.length === (port.vlans ?? []).length) continue;
+        port.vlans = next;
+      }
       await portRepo.save(port);
     }
 

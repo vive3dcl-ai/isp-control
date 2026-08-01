@@ -1,6 +1,7 @@
-import { useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '../lib/api'
+import type { TopologyPort } from '../lib/topology'
 
 const inputClass =
   'w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 outline-none ring-[var(--accent)] focus:ring-2'
@@ -22,12 +23,25 @@ type BridgeConfig = {
   }>
 }
 
+type PortMode = 'tagged' | 'untagged' | ''
+
+function isPhysicalIface(name: string) {
+  return (
+    !!name &&
+    !/^vlan[_-]?/i.test(name) &&
+    !/^lo$/i.test(name) &&
+    !/^pppoe/i.test(name)
+  )
+}
+
 export function SwitchBridgeVlansPanel({
   deviceId,
   canWrite,
+  devicePorts = [],
 }: {
   deviceId: string
   canWrite: boolean
+  devicePorts?: TopologyPort[]
 }) {
   const queryClient = useQueryClient()
   const [bridgeName, setBridgeName] = useState('bridge')
@@ -36,8 +50,10 @@ export function SwitchBridgeVlansPanel({
   const [portPvid, setPortPvid] = useState('1')
   const [vlanId, setVlanId] = useState('')
   const [vlanBridge, setVlanBridge] = useState('bridge')
-  const [tagged, setTagged] = useState('')
-  const [untagged, setUntagged] = useState('')
+  const [vlanPortModes, setVlanPortModes] = useState<Record<string, PortMode>>(
+    {},
+  )
+  const [editingExisting, setEditingExisting] = useState(false)
 
   const query = useQuery({
     queryKey: ['app', 'topology', 'devices', deviceId, 'bridge'],
@@ -52,6 +68,7 @@ export function SwitchBridgeVlansPanel({
     void queryClient.invalidateQueries({
       queryKey: ['app', 'topology', 'device', deviceId],
     })
+    void queryClient.invalidateQueries({ queryKey: ['app', 'topology'] })
   }
 
   const ensureMutation = useMutation({
@@ -75,31 +92,39 @@ export function SwitchBridgeVlansPanel({
       }),
     onSuccess: () => {
       setPortIface('')
+      setPortPvid('1')
       invalidate()
     },
   })
 
   const vlanMutation = useMutation({
-    mutationFn: () =>
-      apiFetch(`/app/topology/devices/${deviceId}/bridge/vlans`, {
+    mutationFn: () => {
+      const tagged: string[] = []
+      const untagged: string[] = []
+      for (const [iface, mode] of Object.entries(vlanPortModes)) {
+        if (mode === 'tagged') tagged.push(iface)
+        if (mode === 'untagged') untagged.push(iface)
+      }
+      const bridge = vlanBridge.trim() || 'bridge'
+      if (
+        !tagged.map((n) => n.toLowerCase()).includes(bridge.toLowerCase())
+      ) {
+        tagged.push(bridge)
+      }
+      return apiFetch(`/app/topology/devices/${deviceId}/bridge/vlans`, {
         method: 'PUT',
         body: JSON.stringify({
-          bridge: vlanBridge.trim() || 'bridge',
+          bridge,
           vlanId: Number(vlanId),
-          tagged: tagged
-            .split(/[,\s]+/)
-            .map((s) => s.trim())
-            .filter(Boolean),
-          untagged: untagged
-            .split(/[,\s]+/)
-            .map((s) => s.trim())
-            .filter(Boolean),
+          tagged,
+          untagged,
         }),
-      }),
+      })
+    },
     onSuccess: () => {
       setVlanId('')
-      setTagged('')
-      setUntagged('')
+      setVlanPortModes({})
+      setEditingExisting(false)
       invalidate()
     },
   })
@@ -108,11 +133,66 @@ export function SwitchBridgeVlansPanel({
   const ports = query.data?.ports ?? []
   const vlans = query.data?.vlans ?? []
 
-  const portOptions = useMemo(() => {
+  const selectableIfaces = useMemo(() => {
     const names = new Set<string>()
-    for (const p of ports) if (p.interface) names.add(p.interface)
-    return [...names].sort()
-  }, [ports])
+    for (const p of ports) {
+      if (isPhysicalIface(p.interface) && !/^bridge/i.test(p.interface)) {
+        names.add(p.interface)
+      }
+    }
+    for (const p of devicePorts) {
+      if (isPhysicalIface(p.name) && !/^bridge/i.test(p.name)) {
+        names.add(p.name)
+      }
+    }
+    return [...names].sort((a, b) => a.localeCompare(b))
+  }, [ports, devicePorts])
+
+  const bridgeSelectOptions = useMemo(() => {
+    const names = new Set<string>(['bridge'])
+    for (const b of bridges) if (b.name) names.add(b.name)
+    return [...names]
+  }, [bridges])
+
+  // Prefill port PVID when selecting an interface already on the bridge.
+  useEffect(() => {
+    if (!portIface) return
+    const existing = ports.find(
+      (p) => p.interface.toLowerCase() === portIface.toLowerCase(),
+    )
+    if (existing) {
+      setPortBridge(existing.bridge || 'bridge')
+      setPortPvid(String(existing.pvid || 1))
+    }
+  }, [portIface, ports])
+
+  function loadVlanForEdit(v: {
+    vlanIds: number[]
+    bridge: string
+    tagged: string[]
+    untagged: string[]
+  }) {
+    const id = v.vlanIds[0]
+    if (!id) return
+    setVlanId(String(id))
+    setVlanBridge(v.bridge || 'bridge')
+    const modes: Record<string, PortMode> = {}
+    for (const iface of selectableIfaces) {
+      const lower = iface.toLowerCase()
+      if (v.tagged.some((t) => t.toLowerCase() === lower)) modes[iface] = 'tagged'
+      else if (v.untagged.some((t) => t.toLowerCase() === lower))
+        modes[iface] = 'untagged'
+      else modes[iface] = ''
+    }
+    setVlanPortModes(modes)
+    setEditingExisting(true)
+  }
+
+  function clearVlanForm() {
+    setVlanId('')
+    setVlanPortModes({})
+    setEditingExisting(false)
+  }
 
   function onEnsure(e: FormEvent) {
     e.preventDefault()
@@ -126,15 +206,23 @@ export function SwitchBridgeVlansPanel({
   function onVlan(e: FormEvent) {
     e.preventDefault()
     if (!Number(vlanId)) return
+    const hasMembership = Object.values(vlanPortModes).some(
+      (m) => m === 'tagged' || m === 'untagged',
+    )
+    if (!hasMembership) return
     vlanMutation.mutate()
   }
+
+  const hasVlanMembership = Object.values(vlanPortModes).some(
+    (m) => m === 'tagged' || m === 'untagged',
+  )
 
   return (
     <div className="space-y-4">
       <p className="text-sm text-[var(--text-muted)]">
         Flujo RouterOS switch: crea un bridge con VLAN filtering, asigna
         puertos (PVID = untagged nativo) y define cada VLAN con tagged /
-        untagged.
+        untagged. Haz clic en una fila VLAN para editarla.
       </p>
 
       {query.isLoading && (
@@ -196,7 +284,20 @@ export function SwitchBridgeVlansPanel({
               </thead>
               <tbody>
                 {ports.map((p) => (
-                  <tr key={`${p.bridge}-${p.interface}`} className="border-t border-[var(--border)]">
+                  <tr
+                    key={`${p.bridge}-${p.interface}`}
+                    className={`border-t border-[var(--border)] ${
+                      canWrite
+                        ? 'cursor-pointer hover:bg-[var(--bg)]'
+                        : ''
+                    }`}
+                    onClick={() => {
+                      if (!canWrite) return
+                      setPortIface(p.interface)
+                      setPortBridge(p.bridge || 'bridge')
+                      setPortPvid(String(p.pvid || 1))
+                    }}
+                  >
                     <td className="py-1 pr-2 font-medium">{p.interface}</td>
                     <td className="py-1 pr-2">{p.bridge}</td>
                     <td className="py-1">{p.pvid}</td>
@@ -210,24 +311,29 @@ export function SwitchBridgeVlansPanel({
               onSubmit={onPort}
               className="mt-3 grid gap-2 sm:grid-cols-4"
             >
-              <input
+              <select
                 className={inputClass}
-                list={`ifaces-${deviceId}`}
                 value={portIface}
                 onChange={(e) => setPortIface(e.target.value)}
-                placeholder="ether2"
-              />
-              <datalist id={`ifaces-${deviceId}`}>
-                {portOptions.map((n) => (
-                  <option key={n} value={n} />
+              >
+                <option value="">Seleccionar puerto…</option>
+                {selectableIfaces.map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
                 ))}
-              </datalist>
-              <input
+              </select>
+              <select
                 className={inputClass}
                 value={portBridge}
                 onChange={(e) => setPortBridge(e.target.value)}
-                placeholder="bridge"
-              />
+              >
+                {bridgeSelectOptions.map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
               <input
                 className={inputClass}
                 type="number"
@@ -246,6 +352,11 @@ export function SwitchBridgeVlansPanel({
               </button>
             </form>
           )}
+          {selectableIfaces.length === 0 && (
+            <p className="mt-2 text-[11px] text-amber-400">
+              Sin puertos detectados. Sincroniza el switch en topología.
+            </p>
+          )}
           {portMutation.error && (
             <p className="mt-1 text-xs text-[var(--danger)]">
               {portMutation.error.message}
@@ -255,7 +366,18 @@ export function SwitchBridgeVlansPanel({
       </div>
 
       <div className="rounded-lg border border-[var(--border)] p-3">
-        <h3 className="text-sm font-medium">Bridge VLANs</h3>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-sm font-medium">Bridge VLANs</h3>
+          {editingExisting && canWrite && (
+            <button
+              type="button"
+              onClick={clearVlanForm}
+              className="text-xs text-[var(--text-muted)] hover:underline"
+            >
+              Nueva VLAN
+            </button>
+          )}
+        </div>
         <div className="mt-2 max-h-52 overflow-auto text-sm">
           <table className="w-full text-left">
             <thead className="text-xs text-[var(--text-muted)]">
@@ -270,7 +392,18 @@ export function SwitchBridgeVlansPanel({
               {vlans.map((v, i) => (
                 <tr
                   key={`${v.bridge}-${v.vlanIds.join('-')}-${i}`}
-                  className="border-t border-[var(--border)] align-top"
+                  className={`border-t border-[var(--border)] align-top ${
+                    canWrite ? 'cursor-pointer hover:bg-[var(--bg)]' : ''
+                  } ${
+                    editingExisting &&
+                    vlanId === String(v.vlanIds[0]) &&
+                    vlanBridge === v.bridge
+                      ? 'bg-[var(--accent)]/10'
+                      : ''
+                  }`}
+                  onClick={() => {
+                    if (canWrite) loadVlanForEdit(v)
+                  }}
                 >
                   <td className="py-1 pr-2 font-medium">
                     {v.vlanIds.join(', ')}
@@ -284,40 +417,79 @@ export function SwitchBridgeVlansPanel({
           </table>
         </div>
         {canWrite && (
-          <form onSubmit={onVlan} className="mt-3 grid gap-2 sm:grid-cols-2">
-            <input
-              className={inputClass}
-              type="number"
-              min={1}
-              max={4094}
-              value={vlanId}
-              onChange={(e) => setVlanId(e.target.value)}
-              placeholder="VLAN ID"
-            />
-            <input
-              className={inputClass}
-              value={vlanBridge}
-              onChange={(e) => setVlanBridge(e.target.value)}
-              placeholder="bridge"
-            />
-            <input
-              className={inputClass}
-              value={tagged}
-              onChange={(e) => setTagged(e.target.value)}
-              placeholder="Tagged: ether1,sfp-sfpplus1"
-            />
-            <input
-              className={inputClass}
-              value={untagged}
-              onChange={(e) => setUntagged(e.target.value)}
-              placeholder="Untagged: ether2,ether3"
-            />
+          <form onSubmit={onVlan} className="mt-3 space-y-3">
+            <div className="grid gap-2 sm:grid-cols-2">
+              <input
+                className={inputClass}
+                type="number"
+                min={1}
+                max={4094}
+                value={vlanId}
+                onChange={(e) => {
+                  setVlanId(e.target.value)
+                  setEditingExisting(false)
+                }}
+                placeholder="VLAN ID"
+                disabled={editingExisting}
+              />
+              <select
+                className={inputClass}
+                value={vlanBridge}
+                onChange={(e) => setVlanBridge(e.target.value)}
+              >
+                {bridgeSelectOptions.map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <p className="mb-1 text-xs text-[var(--text-muted)]">
+                Puertos (tagged = trunk, untagged = access / PVID)
+              </p>
+              {selectableIfaces.length === 0 ? (
+                <p className="text-[11px] text-amber-400">
+                  Sin puertos para seleccionar.
+                </p>
+              ) : (
+                <div className="max-h-56 space-y-1 overflow-y-auto rounded-md border border-[var(--border)] p-2">
+                  {selectableIfaces.map((iface) => (
+                    <div
+                      key={iface}
+                      className="flex items-center justify-between gap-2 text-xs"
+                    >
+                      <span className="truncate font-mono">{iface}</span>
+                      <select
+                        className="rounded border border-[var(--border)] bg-[var(--bg-elevated)] px-2 py-1 text-xs"
+                        value={vlanPortModes[iface] ?? ''}
+                        onChange={(e) => {
+                          const value = e.target.value as PortMode
+                          setVlanPortModes((prev) => ({
+                            ...prev,
+                            [iface]: value,
+                          }))
+                        }}
+                      >
+                        <option value="">—</option>
+                        <option value="tagged">tagged</option>
+                        <option value="untagged">untagged</option>
+                      </select>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
             <button
               type="submit"
-              disabled={vlanMutation.isPending || !Number(vlanId)}
-              className="sm:col-span-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-white disabled:opacity-50"
+              disabled={
+                vlanMutation.isPending ||
+                !Number(vlanId) ||
+                !hasVlanMembership
+              }
+              className="w-full rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-white disabled:opacity-50"
             >
-              Guardar VLAN
+              {editingExisting ? 'Actualizar VLAN' : 'Guardar VLAN'}
             </button>
           </form>
         )}
