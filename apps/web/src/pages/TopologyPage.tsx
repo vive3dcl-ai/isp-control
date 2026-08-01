@@ -6,6 +6,19 @@ import {
   canWriteTopology,
   deviceTypeLabel,
   layoutTopology,
+  CLOUD_H,
+  CLOUD_W,
+  DOT_GAP,
+  DOT_R,
+  NODE_H,
+  NODE_W,
+  ONU_COLS,
+  PON_ANCHOR_DY,
+  PON_BLOCK_GAP,
+  PON_DOTS_GAP,
+  PON_H,
+  PON_OFFSET_X,
+  PON_W,
   type NetworkDeviceType,
   type TopologyDevice,
   type TopologyGraph,
@@ -33,21 +46,8 @@ const TYPE_COLOR: Record<NetworkDeviceType, string> = {
   cpe_router: '#38bdf8',
 }
 
-const NODE_W = 100
-const NODE_H = 56
-const CLOUD_W = 120
-const CLOUD_H = 72
 const MIN_SCALE = 0.25
 const MAX_SCALE = 4
-
-// PON / ONU expansion (a la derecha de cada OLT)
-const PON_W = 58
-const PON_H = 20
-const PON_OFFSET_X = 60
-const PON_BLOCK_GAP = 12
-const ONU_COLS = 10
-const DOT_GAP = 15
-const DOT_R = 5
 
 type ViewTransform = { x: number; y: number; scale: number }
 
@@ -93,18 +93,19 @@ function comparePortKeys(a: string, b: string): number {
   return 0
 }
 
-/** Layout de puertos PON + ONUs colgando de cada OLT (coords mundo). */
-function layoutPonExpansion(
+type PonPorts = Map<string, ConnectedOnu[]>
+
+/** ONUs agrupadas por OLT y puerto PON. */
+function groupOnusByPon(
   onus: ConnectedOnu[],
-  positions: Map<string, { x: number; y: number }>,
   devices: TopologyDevice[],
-): { blocks: PonBlock[]; bounds: Bounds | null } {
+): Map<string, PonPorts> {
   const oltIds = new Set(
     devices.filter((d) => d.type === 'olt').map((d) => d.id),
   )
-  const byOlt = new Map<string, Map<string, ConnectedOnu[]>>()
+  const byOlt = new Map<string, PonPorts>()
   for (const o of onus) {
-    if (!oltIds.has(o.oltId) || !positions.has(o.oltId)) continue
+    if (!oltIds.has(o.oltId)) continue
     const ports = byOlt.get(o.oltId) ?? new Map<string, ConnectedOnu[]>()
     const key = ponPortKey(o)
     const list = ports.get(key) ?? []
@@ -112,6 +113,48 @@ function layoutPonExpansion(
     ports.set(key, list)
     byOlt.set(o.oltId, ports)
   }
+  return byOlt
+}
+
+/** Puertos ordenados y alto de cada bloque + del clúster completo de una OLT. */
+function ponMetrics(ports: PonPorts): {
+  keys: string[]
+  blockHeights: number[]
+  totalH: number
+} {
+  const keys = [...ports.keys()].sort(comparePortKeys)
+  const blockHeights = keys.map((k) => {
+    const rows = Math.ceil(ports.get(k)!.length / ONU_COLS)
+    return Math.max(PON_H, rows * DOT_GAP)
+  })
+  const totalH =
+    blockHeights.reduce((s, h) => s + h, 0) +
+    PON_BLOCK_GAP * Math.max(0, keys.length - 1)
+  return { keys, blockHeights, totalH }
+}
+
+/**
+ * Alto que despliega cada OLT medido desde su borde superior, para que el
+ * layout le reserve el espacio por donde cuelgan las ONUs.
+ */
+function ponClusterHeights(
+  onus: ConnectedOnu[],
+  devices: TopologyDevice[],
+): Map<string, number> {
+  const heights = new Map<string, number>()
+  for (const [oltId, ports] of groupOnusByPon(onus, devices)) {
+    heights.set(oltId, PON_ANCHOR_DY + ponMetrics(ports).totalH)
+  }
+  return heights
+}
+
+/** Layout de puertos PON + ONUs colgando de cada OLT (coords mundo). */
+function layoutPonExpansion(
+  onus: ConnectedOnu[],
+  positions: Map<string, { x: number; y: number }>,
+  devices: TopologyDevice[],
+): { blocks: PonBlock[]; bounds: Bounds | null } {
+  const byOlt = groupOnusByPon(onus, devices)
 
   const blocks: PonBlock[] = []
   let bounds: Bounds | null = null
@@ -126,20 +169,12 @@ function layoutPonExpansion(
   }
 
   for (const [oltId, ports] of byOlt) {
-    const oltPos = positions.get(oltId)!
-    const keys = [...ports.keys()].sort(comparePortKeys)
-
-    const blockHeights = keys.map((k) => {
-      const n = ports.get(k)!.length
-      const rows = Math.ceil(n / ONU_COLS)
-      return Math.max(PON_H, rows * DOT_GAP)
-    })
-    const totalH =
-      blockHeights.reduce((s, h) => s + h, 0) +
-      PON_BLOCK_GAP * Math.max(0, keys.length - 1)
+    const oltPos = positions.get(oltId)
+    if (!oltPos) continue
+    const { keys, blockHeights } = ponMetrics(ports)
 
     const portX = oltPos.x + NODE_W + PON_OFFSET_X
-    let cursorY = oltPos.y + NODE_H / 2 - totalH / 2
+    let cursorY = oltPos.y + PON_ANCHOR_DY
 
     keys.forEach((key, idx) => {
       const list = ports
@@ -148,7 +183,7 @@ function layoutPonExpansion(
         .sort((a, b) => a.onuIf.localeCompare(b.onuIf))
       const h = blockHeights[idx]
       const portY = cursorY + h / 2 - PON_H / 2
-      const dotsX = portX + PON_W + 18
+      const dotsX = portX + PON_W + PON_DOTS_GAP
 
       const dots = list.map((onu, i) => {
         const col = i % ONU_COLS
@@ -300,15 +335,16 @@ export function TopologyPage() {
   const devices = graphQuery.data?.devices ?? []
   const links = graphQuery.data?.links ?? []
 
+  const onus = onusQuery.data?.onus ?? []
+
   const positions = useMemo(
-    () => layoutTopology(devices, links),
-    [devices, links],
+    () => layoutTopology(devices, links, ponClusterHeights(onus, devices)),
+    [devices, links, onus],
   )
 
   const ponExpansion = useMemo(
-    () =>
-      layoutPonExpansion(onusQuery.data?.onus ?? [], positions, devices),
-    [onusQuery.data?.onus, positions, devices],
+    () => layoutPonExpansion(onus, positions, devices),
+    [onus, positions, devices],
   )
 
   const layoutRef = useRef<{

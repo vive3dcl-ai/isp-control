@@ -23,6 +23,7 @@ import {
   UpdateNetworkDeviceDto,
   UpdateNetworkPortDto,
 } from './dto/topology.dto';
+import { saveDeviceIfPresent } from './device-persist.util';
 import { MikrotikClient } from './mikrotik.client';
 import { ZteOltClient } from './zte-olt.client';
 import { ZteOltSnmpClient } from './zte-olt-snmp.client';
@@ -59,6 +60,31 @@ function formatUplinkVlans(vlans: number[]): string {
 
 const INTERNET_PORT_COUNT = 8;
 
+/** Hard budget for one MikroTik probe attempt (client has its own deadlines). */
+const MIKROTIK_PROBE_TIMEOUT_MS = 25_000;
+/** Whole probe sequence (first attempt + retries) must fit in this window. */
+const MIKROTIK_PROBE_BUDGET_MS = 45_000;
+/** After this, a probe slot is considered stuck and can be taken over. */
+const PROBE_SLOT_MAX_AGE_MS = 120_000;
+/** Cómo máximo espera “Guardar conexión” al probe antes de responder. */
+const CONNECTION_SAVE_PROBE_WAIT_MS = 8_000;
+
+/** Nadie escucha o no hay camino: reintentar solo alarga la espera. */
+function isDeadHostProbeError(error?: string): boolean {
+  if (!error) return false;
+  return /EHOSTUNREACH|ENETUNREACH|ECONNREFUSED|EHOSTDOWN|ENOTFOUND/i.test(
+    error,
+  );
+}
+
+/**
+ * Un timeout sobre un túnel OpenVPN/TCP puede ser un stall puntual (TCP dentro
+ * de TCP retransmite el doble), así que merece un reintento — pero uno solo.
+ */
+function isTimeoutProbeError(error?: string): boolean {
+  return !!error && /timeout/i.test(error);
+}
+
 const DEVICE_TYPE_LABEL: Record<string, string> = {
   internet: 'Internet',
   router: 'Router',
@@ -90,9 +116,37 @@ export class TopologyService {
   /** Consecutive probe failures per device — avoid flapping on blips. */
   private readonly probeFailStreak = new Map<string, number>();
   /** Skip overlapping probes (OLT CLI is slow; concurrent sessions collide). */
-  private readonly probeInFlight = new Set<string>();
+  private readonly probeInFlight = new Map<string, number>();
   /** Coalesce concurrent CLI inventory refreshes. */
   private readonly inventoryCliInFlight = new Map<string, Promise<void>>();
+
+  /**
+   * Take the per-device probe slot. Entries older than this are stolen so a
+   * probe that never settles cannot freeze the device on its last status.
+   */
+  private acquireProbeSlot(deviceId: string): boolean {
+    const startedAt = this.probeInFlight.get(deviceId);
+    if (startedAt != null && Date.now() - startedAt < PROBE_SLOT_MAX_AGE_MS) {
+      return false;
+    }
+    this.probeInFlight.set(deviceId, Date.now());
+    return true;
+  }
+
+  private releaseProbeSlot(deviceId: string) {
+    this.probeInFlight.delete(deviceId);
+  }
+
+  /**
+   * A probe can outlive its device row (operator deletes while it runs), and
+   * `save` would re-insert it. Persist only while the row is still there.
+   */
+  private async persistProbedDevice(
+    devices: Repository<NetworkDevice>,
+    device: NetworkDevice,
+  ) {
+    return saveDeviceIfPresent(devices, device);
+  }
 
   private requireSchema(user: AuthUser): string {
     if (!user.schemaName) {
@@ -330,6 +384,8 @@ export class TopologyService {
       );
     }
     await devices.delete({ id });
+    this.releaseProbeSlot(id);
+    this.probeFailStreak.delete(id);
     return { ok: true };
   }
 
@@ -551,9 +607,18 @@ export class TopologyService {
 
     await devices.save(device);
 
-    // Auto-probe after save if credentials present
+    // Auto-probe after save if credentials present. No se espera el probe
+    // completo: con un host inalcanzable tarda ~25 s y el operador solo veía
+    // “Guardando…”. Sigue en background y el poller refresca el estado.
     if (device.mgmtHost && device.mgmtUsername && device.mgmtPassword) {
-      await this.probeAndPersist(schema, device.id);
+      const probe = this.probeAndPersist(schema, device.id).catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.logger.warn(`Probe tras guardar ${device.id} falló: ${msg}`);
+      });
+      await Promise.race([
+        probe,
+        new Promise((r) => setTimeout(r, CONNECTION_SAVE_PROBE_WAIT_MS)),
+      ]);
     }
 
     return this.getDeviceDetail(user, id);
@@ -763,15 +828,18 @@ export class TopologyService {
       await this.tenantConnections.getNetworkDeviceRepository(schema);
     // Always merge onto the DB row so concurrent SNMP/CLI writes don't wipe
     // each other's fields (vlans / configProbedAt / CLI descriptions…).
-    const latest =
-      (await devices.findOne({ where: { id: device.id } })) ?? device;
+    const latest = await devices.findOne({ where: { id: device.id } });
+    if (!latest) {
+      // Device deleted while the CLI/SNMP refresh was running.
+      return;
+    }
     const next: OltInventoryCache = {
       ...this.inventoryCache(latest),
       ...patch,
     };
     latest.oltInventoryCache = next;
     device.oltInventoryCache = next;
-    await devices.save(latest);
+    await saveDeviceIfPresent(devices, latest);
   }
 
   /**
@@ -1776,7 +1844,7 @@ export class TopologyService {
       isolated,
     };
     device.oltVlanMeta = meta;
-    await deviceRepo.save(device);
+    await saveDeviceIfPresent(deviceRepo, device);
 
     try {
       await this.refreshVlansViaCli(schema, device, 'interactive');
@@ -1818,7 +1886,7 @@ export class TopologyService {
     };
     delete meta[String(vlanId)];
     device.oltVlanMeta = meta as NetworkDevice['oltVlanMeta'];
-    await deviceRepo.save(device);
+    await saveDeviceIfPresent(deviceRepo, device);
     try {
       await this.refreshVlansViaCli(schema, device, 'interactive');
     } catch {
@@ -1994,14 +2062,13 @@ export class TopologyService {
   }
 
   private async probeAndPersist(schema: string, deviceId: string) {
-    if (this.probeInFlight.has(deviceId)) {
+    if (!this.acquireProbeSlot(deviceId)) {
       return;
     }
-    this.probeInFlight.add(deviceId);
     try {
       return await this.probeAndPersistUnlocked(schema, deviceId);
     } finally {
-      this.probeInFlight.delete(deviceId);
+      this.releaseProbeSlot(deviceId);
     }
   }
 
@@ -2015,7 +2082,7 @@ export class TopologyService {
       device.connectionStatus = 'disconnected';
       device.lastError = 'Missing host, username or password';
       device.lastCheckedAt = new Date();
-      await devices.save(device);
+      await this.persistProbedDevice(devices, device);
       return device;
     }
 
@@ -2023,7 +2090,7 @@ export class TopologyService {
       // Seed / datos viejos: OLT sin modelo → bucket genérico ZTE (se afina al probe)
       // Huawei always picks an explicit subtype in the create form.
       device.subtype = 'zte_c3xx';
-      await devices.save(device);
+      await this.persistProbedDevice(devices, device);
     }
 
     if (isZteOltDevice(device.type, device.subtype)) {
@@ -2036,14 +2103,14 @@ export class TopologyService {
     // Routers sin subtype (p.ej. seed antiguo): asumir MikroTik
     if (device.type === 'router' && !device.subtype) {
       device.subtype = 'mikrotik';
-      await devices.save(device);
+      await this.persistProbedDevice(devices, device);
     }
 
     if (device.subtype !== 'mikrotik') {
       device.connectionStatus = 'error';
       device.lastError = `Probe not implemented for subtype ${device.subtype ?? 'unknown'} yet`;
       device.lastCheckedAt = new Date();
-      await devices.save(device);
+      await this.persistProbedDevice(devices, device);
       return device;
     }
 
@@ -2056,13 +2123,30 @@ export class TopologyService {
       protocol: device.mgmtProtocol ?? 'api_ssl',
     };
 
-    // Retry transient RouterOS API drops (“Connection closed”, timeouts…)
-    let result = await this.mikrotik.probe(probeParams);
-    if (!result.ok) {
-      for (let attempt = 1; attempt <= 2; attempt++) {
+    // Always bounded: an unreachable or filtered host must surface as an error
+    // instead of leaving "Probar conexión" pending forever.
+    const probeOnce = () =>
+      this.withTimeout(
+        this.mikrotik.probe(probeParams),
+        MIKROTIK_PROBE_TIMEOUT_MS,
+        `MikroTik probe ${probeParams.host}`,
+      ).catch((err) => ({
+        ok: false as const,
+        error: err instanceof Error ? err.message : String(err),
+      }));
+
+    // Reintentar cortes transitorios de la API RouterOS (“Connection closed”,
+    // carreras de login) y un timeout aislado; nunca un host muerto.
+    const deadline = Date.now() + MIKROTIK_PROBE_BUDGET_MS;
+    const maxAttempts = (error?: string) => (isTimeoutProbeError(error) ? 1 : 2);
+    let result = await probeOnce();
+    if (!result.ok && !isDeadHostProbeError(result.error)) {
+      const retries = maxAttempts(result.error);
+      for (let attempt = 1; attempt <= retries; attempt++) {
+        if (Date.now() >= deadline) break;
         await new Promise((r) => setTimeout(r, 400 * attempt));
-        result = await this.mikrotik.probe(probeParams);
-        if (result.ok) break;
+        result = await probeOnce();
+        if (result.ok || isDeadHostProbeError(result.error)) break;
       }
     }
 
@@ -2084,7 +2168,10 @@ export class TopologyService {
         result.temperature != null && Number.isFinite(result.temperature)
           ? result.temperature
           : null;
-      await devices.save(device);
+      if (!(await this.persistProbedDevice(devices, device))) {
+        // Deleted while probing: skip metrics/ports so nothing recreates it
+        return device;
+      }
 
       try {
         await this.recordMetricSample(schema, device, result);
@@ -2118,7 +2205,7 @@ export class TopologyService {
         device.connectionStatus = 'disconnected';
         device.lastError = errMsg;
       }
-      await devices.save(device);
+      await this.persistProbedDevice(devices, device);
       if (becameDown) {
         void this.notifyTenantAdminsDeviceDown(schema, device);
       }
@@ -2132,8 +2219,7 @@ export class TopologyService {
    * Used by background pollers — never opens Telnet/SSH.
    */
   private async probeAndPersistOltSnmp(schema: string, device: NetworkDevice) {
-    if (this.probeInFlight.has(device.id)) return;
-    this.probeInFlight.add(device.id);
+    if (!this.acquireProbeSlot(device.id)) return;
     try {
       const devices =
         await this.tenantConnections.getNetworkDeviceRepository(schema);
@@ -2148,7 +2234,7 @@ export class TopologyService {
             ? `${summary} · SNMP sin community RO`
             : 'SNMP sin community RO';
         }
-        await devices.save(device);
+        await this.persistProbedDevice(devices, device);
         return;
       }
 
@@ -2181,7 +2267,7 @@ export class TopologyService {
           const s = sec % 60;
           device.metricUptime = `${d} Days, ${h} Hours, ${m} Minutes, ${s} Seconds`;
         }
-        await devices.save(device);
+        await this.persistProbedDevice(devices, device);
         return;
       }
 
@@ -2204,12 +2290,12 @@ export class TopologyService {
       device.metricSummary = summary
         ? `${summary} · SNMP fail: ${errMsg.slice(0, 80)}`
         : `SNMP fail: ${errMsg.slice(0, 80)}`;
-      await devices.save(device);
+      await this.persistProbedDevice(devices, device);
       if (becameDown) {
         void this.notifyTenantAdminsDeviceDown(schema, device);
       }
     } finally {
-      this.probeInFlight.delete(device.id);
+      this.releaseProbeSlot(device.id);
     }
   }
 
@@ -2234,7 +2320,7 @@ export class TopologyService {
     if (!result.ok) {
       device.connectionStatus = 'disconnected';
       device.lastError = result.error ?? 'Connection failed';
-      await devices.save(device);
+      await this.persistProbedDevice(devices, device);
       return device;
     }
     this.probeFailStreak.delete(device.id);
@@ -2276,7 +2362,10 @@ export class TopologyService {
       parts.push('SNMP sin community RO');
     }
     device.metricSummary = parts.filter(Boolean).join(' · ') || null;
-    await devices.save(device);
+    if (!(await this.persistProbedDevice(devices, device))) {
+      // Deleted while probing: skip metrics/type sync so nothing recreates it
+      return device;
+    }
     try {
       await this.recordMetricSample(schema, device, result);
     } catch {
@@ -2433,7 +2522,10 @@ export class TopologyService {
           }
         }
       }
-      await devices.save(device);
+      if (!(await this.persistProbedDevice(devices, device))) {
+        // Deleted while probing: skip metrics/type sync so nothing recreates it
+        return device;
+      }
 
       try {
         await this.recordMetricSample(schema, device, result);
@@ -2473,7 +2565,7 @@ export class TopologyService {
         device.connectionStatus = 'disconnected';
         device.lastError = errMsg;
       }
-      await devices.save(device);
+      await this.persistProbedDevice(devices, device);
       if (becameDown) {
         void this.notifyTenantAdminsDeviceDown(schema, device);
       }

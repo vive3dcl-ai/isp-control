@@ -440,10 +440,38 @@ export function canWriteTopology(tenantRole?: string | null) {
   )
 }
 
-/** BFS layered layout from core devices; returns pixel positions. */
+// Geometría del plano. Vive acá porque el layout de columnas y el de la
+// expansión PON (TopologyPage) tienen que coincidir.
+export const NODE_W = 100
+export const NODE_H = 56
+export const CLOUD_W = 120
+export const CLOUD_H = 72
+
+export const PON_W = 58
+export const PON_H = 20
+export const PON_OFFSET_X = 60
+export const PON_BLOCK_GAP = 12
+export const PON_DOTS_GAP = 18
+export const ONU_COLS = 10
+export const DOT_GAP = 15
+export const DOT_R = 5
+
+/** Ancho total que ocupa una OLT con sus puertos PON y sus ONUs desplegadas. */
+export const PON_EXPANSION_W =
+  NODE_W + PON_OFFSET_X + PON_W + PON_DOTS_GAP + ONU_COLS * DOT_GAP
+
+/** El primer puerto PON arranca a la altura del centro de la OLT. */
+export const PON_ANCHOR_DY = NODE_H / 2 - PON_H / 2
+
+/**
+ * BFS layered layout from core devices; returns pixel positions.
+ * `clusterHeights` es el alto que cada equipo despliega hacia abajo a su
+ * derecha (las ONUs de una OLT), medido desde el borde superior del nodo.
+ */
 export function layoutTopology(
   devices: TopologyDevice[],
   links: TopologyLink[],
+  clusterHeights?: Map<string, number>,
 ): Map<string, { x: number; y: number }> {
   const positions = new Map<string, { x: number; y: number }>()
   if (devices.length === 0) return positions
@@ -517,28 +545,87 @@ export function layoutTopology(
     }
   }
 
-  // Remaining disconnected nodes
-  const rest = devices
+  // Todavía sin enlaces: no tienen lugar en el grafo, van a una fila aparte
+  // debajo de todo (ver más abajo).
+  const unlinked = devices
     .filter((d) => !visited.has(d.id))
     .sort((a, b) => a.name.localeCompare(b.name))
-  if (rest.length > 0) {
-    const depth = layers.length
-    layers[depth] = rest.map((d) => d.id)
-  }
+    .map((d) => d.id)
 
   const colGap = 180
   const rowGap = 100
   const padX = 80
   const padY = 60
+  const rowPad = rowGap - NODE_H
+  const clusterPadX = 40
+  const clusterPadY = 24
+  const clusterH = (id: string) => clusterHeights?.get(id) ?? 0
 
+  // El clúster de ONUs cuelga hacia abajo y a la derecha de la OLT. Por eso la
+  // OLT baja al final de su fila y las columnas siguientes solo se corren si
+  // realmente caerían encima: así el resto del plano queda compacto.
+  const clusters: Array<{ x1: number; y1: number; x2: number; y2: number }> = []
+  let x = padX
   for (let depth = 0; depth < layers.length; depth++) {
-    const row = layers[depth]
-    const totalH = (row.length - 1) * rowGap
-    const startY = padY + Math.max(0, (300 - totalH) / 2)
+    const row = (layers[depth] ?? [])
+      .slice()
+      .sort((a, b) => (clusterH(a) ? 1 : 0) - (clusterH(b) ? 1 : 0))
+
+    // El centrado usa solo el alto de los nodos: el clúster crece hacia abajo,
+    // no hay nada que equilibrar arriba.
+    const nodesH = rowGap * row.length - rowPad
+    let cursorY = padY + Math.max(0, (300 - nodesH) / 2)
+    const hasLaterColumns = depth < layers.length - 1
+    const ys = row.map((id, i) => {
+      // Las ONUs quedan bien por debajo de la línea principal del plano, así
+      // los equipos aguas abajo siguen en su columna en vez de irse al final.
+      if (clusterH(id) && (i > 0 || hasLaterColumns)) cursorY += rowGap
+      const y = cursorY
+      cursorY += Math.max(NODE_H, clusterH(id)) + rowPad
+      return y
+    })
+
+    for (let guard = 0; guard < 4; guard++) {
+      let shifted = x
+      row.forEach((_, i) => {
+        for (const c of clusters) {
+          const hits =
+            x < c.x2 + clusterPadX &&
+            c.x1 < x + NODE_W &&
+            ys[i] < c.y2 &&
+            c.y1 - clusterPadY < ys[i] + NODE_H
+          if (hits) shifted = Math.max(shifted, c.x2 + clusterPadX)
+        }
+      })
+      if (shifted === x) break
+      x = shifted
+    }
+
     row.forEach((id, i) => {
+      positions.set(id, { x, y: ys[i] })
+      const h = clusterH(id)
+      if (h > 0) {
+        clusters.push({
+          x1: x + NODE_W + PON_OFFSET_X,
+          y1: ys[i] + PON_ANCHOR_DY,
+          x2: x + PON_EXPANSION_W + 2 * DOT_R,
+          y2: ys[i] + h,
+        })
+      }
+    })
+
+    x += colGap
+  }
+
+  if (unlinked.length > 0) {
+    let bottom = padY
+    for (const p of positions.values()) bottom = Math.max(bottom, p.y + NODE_H)
+    for (const c of clusters) bottom = Math.max(bottom, c.y2)
+    const startY = bottom + 90
+    unlinked.forEach((id, i) => {
       positions.set(id, {
-        x: padX + depth * colGap,
-        y: startY + i * rowGap,
+        x: padX + (i % 6) * colGap,
+        y: startY + Math.floor(i / 6) * rowGap,
       })
     })
   }

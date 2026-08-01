@@ -10,6 +10,7 @@ import {
   isManagedOltDevice,
   DEFAULT_OLT_PORTS,
 } from './olt.constants';
+import { saveDeviceIfPresent } from './device-persist.util';
 import type { NetworkDevice } from './entities/network-device.entity';
 import type { NetworkPort } from './entities/network-port.entity';
 import type { ServiceVlan } from './entities/service-vlan.entity';
@@ -86,6 +87,31 @@ export class ServiceVlanService {
     return (isHuaweiOltDevice(device.type, device.subtype)
       ? this.huaweiOlt
       : this.zteOlt) as unknown as ZteOltClient;
+  }
+
+  /**
+   * `discoverPresence` lee la presencia en OLT desde `oltVlanMeta`, así que
+   * todo camino que confirme la VLAN en el equipo tiene que dejarla anotada.
+   */
+  private async rememberOltVlan(
+    schema: string,
+    device: NetworkDevice,
+    vlanId: number,
+    isolated?: boolean,
+  ): Promise<void> {
+    const deviceRepo =
+      await this.tenantConnections.getNetworkDeviceRepository(schema);
+    const meta = {
+      ...((device.oltVlanMeta ?? {}) as Record<string, { isolated?: boolean }>),
+    };
+    const prev = meta[String(vlanId)];
+    if (prev && (isolated === undefined || prev.isolated === isolated)) return;
+    meta[String(vlanId)] = {
+      ...(prev ?? {}),
+      ...(isolated === undefined ? {} : { isolated }),
+    };
+    device.oltVlanMeta = meta;
+    await saveDeviceIfPresent(deviceRepo, device);
   }
 
   private serialize(
@@ -178,6 +204,14 @@ export class ServiceVlanService {
       }
       // Do NOT open Telnet here — listing settings must stay DB/meta only.
       // Live OLT VLAN scrape stays on explicit sync/verify actions.
+      for (const v of olt.oltInventoryCache?.vlans ?? []) {
+        if (Number.isInteger(v.vlanId) && v.vlanId >= 1 && v.vlanId <= 4094) {
+          found.add(v.vlanId);
+          if (v.description?.trim()) {
+            ensure(v.vlanId).comments.push(v.description.trim());
+          }
+        }
+      }
       for (const vlanId of found) {
         if (vlanId === 1) continue;
         ensure(vlanId).olts.push({ id: olt.id, name: olt.name });
@@ -343,6 +377,7 @@ export class ServiceVlanService {
         await repo.save(row);
       }
       const message = await this.ensureOnOlt(
+        schema,
         device,
         row.vlanId,
         row.description,
@@ -409,7 +444,7 @@ export class ServiceVlanService {
       };
       delete meta[String(row.vlanId)];
       device.oltVlanMeta = meta as typeof device.oltVlanMeta;
-      await deviceRepo.save(device);
+      await saveDeviceIfPresent(deviceRepo, device);
       row.oltIds = (row.oltIds ?? []).filter((x) => x !== device.id);
       message = result.message ?? 'eliminada de la OLT';
     } else {
@@ -453,7 +488,7 @@ export class ServiceVlanService {
     const row = await repo.findOne({ where: { id } });
     if (!row) throw new NotFoundException('VLAN not found');
 
-    const { byVlan } = await this.discoverPresence(schema);
+    const { byVlan, devices } = await this.discoverPresence(schema);
     const live = byVlan.get(row.vlanId);
     const oltPresent = new Set((live?.olts ?? []).map((d) => d.id));
     const routerPresent = new Set((live?.routers ?? []).map((d) => d.id));
@@ -465,14 +500,36 @@ export class ServiceVlanService {
       detail: string;
     }> = [];
 
+    // Verificar es una acción explícita: si la caché no la conoce se consulta
+    // la OLT por CLI en vez de dar por ausente algo que sí está configurado.
+    const byId = new Map(devices.map((d) => [d.id, d]));
+    const oltNames: string[] = [];
     for (const oltId of row.oltIds ?? []) {
-      const ok = oltPresent.has(oltId);
-      checks.push({
-        deviceId: oltId,
-        kind: 'olt',
-        ok,
-        detail: ok ? 'presente en OLT' : 'no encontrada en la OLT',
-      });
+      const device = byId.get(oltId);
+      let ok = oltPresent.has(oltId);
+      let detail = ok ? 'presente en OLT' : 'no encontrada en la OLT';
+      if (!ok && device) {
+        try {
+          const scan = await this.oltCli(device).listVlans(
+            this.zteConn(device),
+          );
+          if (scan.ok) {
+            ok = scan.vlans.some((v) => v.vlanId === row.vlanId);
+            detail = ok ? 'presente en OLT' : 'no encontrada en la OLT';
+            if (ok) await this.rememberOltVlan(schema, device, row.vlanId);
+          } else {
+            detail = scan.error
+              ? `no se pudo leer la OLT: ${scan.error}`
+              : 'no se pudo leer la OLT';
+          }
+        } catch (err) {
+          detail = `no se pudo leer la OLT: ${
+            err instanceof Error ? err.message : String(err)
+          }`;
+        }
+      }
+      if (ok) oltNames.push(device?.name ?? oltId);
+      checks.push({ deviceId: oltId, kind: 'olt', ok, detail });
     }
     for (const routerId of row.routerIds ?? []) {
       const ok = routerPresent.has(routerId);
@@ -485,14 +542,17 @@ export class ServiceVlanService {
     }
 
     const ok = checks.every((c) => c.ok);
+    const missing = checks
+      .filter((c) => !c.ok)
+      .map((c) => `${byId.get(c.deviceId)?.name ?? c.deviceId} (${c.detail})`);
     return {
       ok,
       vlanId: row.vlanId,
       message: ok
         ? `VLAN ${row.vlanId} verificada en todos los equipos asignados`
-        : `VLAN ${row.vlanId}: faltan equipos`,
+        : `VLAN ${row.vlanId}: ${missing.join('; ')}`,
       checks,
-      olt: live?.olts?.length ? live.olts.map((d) => d.name).join(', ') : null,
+      olt: oltNames.length ? oltNames.join(', ') : null,
       router: live?.routers?.length
         ? live.routers.map((d) => d.name).join(', ')
         : null,
@@ -500,6 +560,7 @@ export class ServiceVlanService {
   }
 
   private async ensureOnOlt(
+    schema: string,
     olt: NetworkDevice,
     vlanId: number,
     description: string | null,
@@ -507,6 +568,7 @@ export class ServiceVlanService {
     const conn = this.zteConn(olt);
     const live = await this.oltCli(olt).listVlans(conn);
     if (live.ok && live.vlans.some((v) => v.vlanId === vlanId)) {
+      await this.rememberOltVlan(schema, olt, vlanId);
       return 'ya existía en la OLT';
     }
     const result = await this.oltCli(olt).upsertVlan({
@@ -518,6 +580,7 @@ export class ServiceVlanService {
     if (!result.ok) {
       throw new BadRequestException(result.error || 'No se pudo crear en OLT');
     }
+    await this.rememberOltVlan(schema, olt, vlanId, true);
     return result.message ?? 'creada en la OLT';
   }
 

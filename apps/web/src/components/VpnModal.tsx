@@ -629,8 +629,17 @@ export function VpnModal({
                   className={inputClass}
                   value={tunnelSubnet}
                   onChange={(e) => setTunnelSubnet(e.target.value)}
-                  placeholder="Auto 10.69.x.0/24"
+                  placeholder={
+                    (view === 'edit' ? selected?.protocol : protocol) ===
+                    'openvpn_udp'
+                      ? 'Auto 10.69.129-254.0/24'
+                      : 'Auto 10.69.1-126.0/24'
+                  }
                 />
+                <span className="mt-1 block text-xs text-[var(--text-muted)]">
+                  OpenVPN TCP y WireGuard usan 10.69.1–126; OpenVPN UDP usa
+                  10.69.129–254 (pools separados en el concentrador).
+                </span>
               </label>
               {((view === 'create' && protocol !== 'wireguard') ||
                 (view === 'edit' &&

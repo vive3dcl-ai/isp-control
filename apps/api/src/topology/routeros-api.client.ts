@@ -40,23 +40,56 @@ export class RouterOsApiClient {
     if (this.socket) return;
 
     await new Promise<void>((resolve, reject) => {
-      const onError = (err: Error) => {
+      let settled = false;
+      let tcpConnected = false;
+      let sock: net.Socket | tls.TLSSocket;
+      let deadline: NodeJS.Timeout;
+
+      const cleanup = () => {
+        sock.off('error', onError);
+        sock.off('timeout', onTimeout);
+        sock.off('secureConnect', onConnect);
+        sock.off('connect', onConnect);
+        sock.off('connect', onTcpConnect);
+      };
+      // A filtered host (DROP) or a port that is not the API never emits
+      // connect/error, and Node's socket timeout does not destroy the socket:
+      // without this deadline the promise would stay pending forever.
+      const fail = (err: Error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(deadline);
         cleanup();
+        this.socket = null;
+        sock.destroy();
         reject(err);
       };
+      const onError = (err: Error) => fail(err);
+      const onTcpConnect = () => {
+        tcpConnected = true;
+      };
+      // Distinguir "el SYN no vuelve" (ruta/firewall) de "el TLS no avanza"
+      // (api-ssl habilitado sin certificado) ahorra horas de diagnóstico.
+      const onTimeout = () =>
+        fail(
+          new Error(
+            tcpConnected
+              ? `TCP ${this.host}:${this.port} abierto pero el TLS no completó en ${this.timeoutMs}ms (¿api-ssl sin certificado?)`
+              : `Connect timeout after ${this.timeoutMs}ms (sin respuesta de ${this.host}:${this.port}: ruta o firewall)`,
+          ),
+        );
       const onConnect = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(deadline);
         cleanup();
         // Idle timeout would kill long multi-command sessions; rely on per-command timers.
         sock.setTimeout(0);
         resolve();
       };
-      const cleanup = () => {
-        sock.off('error', onError);
-        sock.off('secureConnect', onConnect);
-        sock.off('connect', onConnect);
-      };
 
-      let sock: net.Socket | tls.TLSSocket;
+      deadline = setTimeout(onTimeout, this.timeoutMs);
+
       if (this.useTls) {
         sock = tls.connect({
           host: this.host,
@@ -67,6 +100,7 @@ export class RouterOsApiClient {
           minVersion: 'TLSv1',
           timeout: this.timeoutMs,
         });
+        sock.once('connect', onTcpConnect);
         sock.once('secureConnect', onConnect);
       } else {
         sock = net.connect({
@@ -78,6 +112,7 @@ export class RouterOsApiClient {
       }
 
       sock.once('error', onError);
+      sock.once('timeout', onTimeout);
       sock.on('data', (chunk: Buffer) => this.onData(chunk));
       sock.on('close', () => this.onClose());
       this.socket = sock;

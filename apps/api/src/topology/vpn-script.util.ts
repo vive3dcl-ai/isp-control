@@ -1,6 +1,9 @@
 import { generateKeyPairSync, randomBytes } from 'crypto';
 import type { VpnProtocol } from './vpn.constants';
-import { DEFAULT_VPN_PORTS } from './vpn.constants';
+import {
+  DEFAULT_VPN_PORTS,
+  VPN_TUNNEL_THIRD_OCTET_RANGES,
+} from './vpn.constants';
 
 export function randomPassword(length = 12): string {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
@@ -16,8 +19,11 @@ export function randomSetupToken(): string {
   return randomBytes(9).toString('base64url');
 }
 
-/** Allocate 10.69.<n>.0/24 from existing subnets. */
-export function allocateTunnelSubnet(existing: string[]): {
+/** Allocate 10.69.<n>.0/24 from the range the protocol's server pool covers. */
+export function allocateTunnelSubnet(
+  existing: string[],
+  protocol: VpnProtocol = 'openvpn_tcp',
+): {
   tunnelSubnet: string;
   serverAddress: string;
   clientAddress: string;
@@ -27,14 +33,31 @@ export function allocateTunnelSubnet(existing: string[]): {
     const m = cidr.match(/^10\.69\.(\d+)\.0\/24$/);
     if (m) used.add(Number(m[1]));
   }
-  let n = 1;
-  while (used.has(n) && n < 254) n += 1;
-  if (n >= 254) n = 1 + Math.floor(Math.random() * 200);
+  const { first, last } = VPN_TUNNEL_THIRD_OCTET_RANGES[protocol];
+  let n = first;
+  while (used.has(n) && n < last) n += 1;
+  if (used.has(n)) {
+    throw new Error(
+      `Sin subredes libres para ${protocol} (10.69.${first}.0/24 – 10.69.${last}.0/24)`,
+    );
+  }
   return {
     tunnelSubnet: `10.69.${n}.0/24`,
     serverAddress: `10.69.${n}.1`,
     clientAddress: `10.69.${n}.2`,
   };
+}
+
+/** Is this /24 inside the pool the concentrator serves for that protocol? */
+export function tunnelSubnetMatchesProtocol(
+  tunnelSubnet: string,
+  protocol: VpnProtocol,
+): boolean {
+  const m = tunnelSubnet.match(/^10\.69\.(\d+)\.0\/24$/);
+  if (!m) return false;
+  const n = Number(m[1]);
+  const { first, last } = VPN_TUNNEL_THIRD_OCTET_RANGES[protocol];
+  return n >= first && n <= last;
 }
 
 export function generateWireguardKeyPair(): {
@@ -175,6 +198,18 @@ function buildMikrotikTunnelAccessRules(
     `/ip firewall filter add chain=input in-interface="${iface}" action=accept comment="${tag} vpn-input" place-before=0`,
     `# API RouterOS desde el concentrador (gestión ISP Control)`,
     `:do { /ip service set api disabled=no } on-error={}`,
+    // api-ssl sin certificado escucha pero nunca completa el TLS: el panel
+    // se queda esperando el handshake. Firmamos uno propio si no hay.
+    `:local apiCert ""`,
+    `:do { :set apiCert [/ip service get api-ssl certificate] } on-error={}`,
+    `:if ($apiCert = "" or $apiCert = "none") do={`,
+    `  :if ([:len [/certificate find name="isp-control-api"]] = 0) do={`,
+    `    :do { /certificate add name="isp-control-api" common-name="isp-control-api" key-size=2048 days-valid=3650 key-usage=digital-signature,key-encipherment,tls-server } on-error={}`,
+    `    :do { /certificate sign "isp-control-api" } on-error={}`,
+    `    :delay 5s`,
+    `  }`,
+    `  :do { /ip service set api-ssl certificate="isp-control-api" } on-error={}`,
+    `}`,
     `:do { /ip service set api-ssl disabled=no } on-error={}`,
     `# Evita masquerade hacia el túnel (si hay srcnat genérico, place-before=0 gana)`,
     `/ip firewall nat add chain=srcnat out-interface="${iface}" action=accept comment="${tag} vpn-no-masq" place-before=0`,
@@ -433,12 +468,63 @@ export function buildWireguardConcentratorConf(
   return lines.join('\n').trimEnd() + '\n';
 }
 
+/** Tablas de firewall que hay que imprimir para resolver `place-before`. */
+export function placeBeforeTables(batches: string[][]): string[] {
+  const tables = new Set<string>();
+  for (const words of batches) {
+    if (!words.some((w) => w.startsWith('=place-before='))) continue;
+    tables.add(words[0].replace(/\/add$/, ''));
+  }
+  return [...tables];
+}
+
+/**
+ * `place-before=0` es el ordinal del CLI; por la API el valor debe ser un `.id`
+ * interno (`*3`) o el add falla con "no such item" y la regla nunca se crea.
+ * Se apunta a la primera regla de la misma cadena; si la cadena está vacía se
+ * quita el argumento, porque entonces la regla ya queda primera.
+ */
+export function resolvePlaceBeforeBatches(
+  batches: string[][],
+  rowsByTable: Record<string, Array<Record<string, string>>>,
+): string[][] {
+  return batches.map((words) => {
+    const idx = words.findIndex((w) => w.startsWith('=place-before='));
+    if (idx < 0) return words;
+    const table = words[0].replace(/\/add$/, '');
+    const chain =
+      words.find((w) => w.startsWith('=chain='))?.slice('=chain='.length) ?? '';
+    const firstOfChain = (rowsByTable[table] ?? []).find(
+      (r) => (r.chain || '') === chain && !!r['.id'],
+    );
+    const next = words.slice();
+    if (firstOfChain?.['.id']) {
+      next[idx] = `=place-before=${firstOfChain['.id']}`;
+    } else {
+      next.splice(idx, 1);
+    }
+    return next;
+  });
+}
+
 /** Convert script lines to RouterOS API word batches for import. */
 export function scriptToApiBatches(script: string): string[][] {
   const batches: string[][] = [];
+  // The API cannot evaluate RouterOS conditionals, and running the body
+  // unconditionally would be wrong (e.g. rebinding a working api-ssl
+  // certificate). Those blocks only apply when the script is imported.
+  let conditionalDepth = 0;
   for (const raw of script.split('\n')) {
     const line = raw.trim();
     if (!line || line.startsWith('#') || line.startsWith(':put')) continue;
+    if (/^:if\b.*do=\{$/.test(line)) {
+      conditionalDepth += 1;
+      continue;
+    }
+    if (conditionalDepth > 0) {
+      if (line === '}') conditionalDepth -= 1;
+      continue;
+    }
     // Skip :do { ... } on-error={} wrappers — expand simple removes via API differently
     if (line.startsWith(':do {')) {
       const inner = line.match(/:do \{(.+)\} on-error=\{\}/)?.[1]?.trim();
@@ -458,11 +544,23 @@ export function scriptToApiBatches(script: string): string[][] {
 function routerosLineToWords(line: string): string[] | null {
   // /interface ovpn-client add name=x connect-to=y ...
   // /interface ovpn-server server set ...
-  const m = line.match(/^(\/[a-z0-9/-]+)\s+(add|remove|set|sign)\s+(.+)$/i);
+  // CLI paths are space separated (`/ip firewall filter add`); the API wants
+  // them slash separated (`/ip/firewall/filter/add`).
+  const m = line.match(
+    /^(\/[a-z0-9/-]+(?:\s+[a-z0-9/-]+)*)\s+(add|remove|set|sign)\s+(.+)$/i,
+  );
   if (!m) return null;
-  const path = m[1];
+  const path = `/${m[1]
+    .slice(1)
+    .trim()
+    .split(/[\s/]+/)
+    .join('/')}`;
   const action = m[2].toLowerCase();
   const rest = m[3];
+
+  // `set` on a named item (`/ip service set api-ssl disabled=no`) needs an
+  // .id the CLI resolves implicitly — not translatable, leave it to the import.
+  if (action === 'set' && !/^[a-z0-9-]+=/i.test(rest)) return null;
 
   if (action === 'remove') {
     // /interface ovpn-client remove [find name="x"] — skip via API find; best-effort ignore

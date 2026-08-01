@@ -17,6 +17,7 @@ import {
   DEFAULT_VPN_PORTS,
   DEFAULT_VPN_TUNNEL_ROUTES,
   VPN_PROTOCOL_LABELS,
+  VPN_TUNNEL_THIRD_OCTET_RANGES,
   type VpnProtocol,
 } from './vpn.constants';
 import {
@@ -31,9 +32,12 @@ import {
   desiredWgClientAllowedAddress,
   generateWireguardKeyPair,
   normalizeRouteCidr,
+  placeBeforeTables,
   randomPassword,
   randomSetupToken,
+  resolvePlaceBeforeBatches,
   scriptToApiBatches,
+  tunnelSubnetMatchesProtocol,
   vpnClientInterfaceName,
   type VpnScriptContext,
   vpnEndpoint,
@@ -225,12 +229,20 @@ export class VpnService {
       openvpnIps.add(ip);
     }
 
-    // Fallback: parse openvpn-status.log (v1 o v2)
-    try {
-      const text = await fs.promises.readFile(
-        `${dir}/openvpn-status.log`,
-        'utf8',
-      );
+    // Fallback: parse the per-daemon status logs (v1 o v2)
+    const statusFiles = [
+      `${dir}/openvpn-status-tcp.log`,
+      `${dir}/openvpn-status-udp.log`,
+      `${dir}/openvpn-status.log`,
+    ];
+    for (const statusFile of statusFiles) {
+      let text: string;
+      try {
+        text = await fs.promises.readFile(statusFile, 'utf8');
+      } catch {
+        // volume not mounted / this transport not running
+        continue;
+      }
       let section = '';
       for (const raw of text.split(/\r?\n/)) {
         const line = raw.trim();
@@ -275,8 +287,6 @@ export class VpnService {
           if (parts[1]) openvpn.add(parts[1].trim());
         }
       }
-    } catch {
-      // volume not mounted / status not ready
     }
 
     try {
@@ -527,8 +537,11 @@ export class VpnService {
     }
 
     const alloc = dto.tunnelSubnet?.trim()
-      ? this.parseSubnet(dto.tunnelSubnet.trim())
-      : allocateTunnelSubnet(await this.listUsedTunnelSubnetsAcrossTenants());
+      ? this.parseSubnet(dto.tunnelSubnet.trim(), protocol)
+      : allocateTunnelSubnet(
+          await this.listUsedTunnelSubnetsAcrossTenants(),
+          protocol,
+        );
 
     const password =
       protocol === 'wireguard'
@@ -569,10 +582,16 @@ export class VpnService {
     return this.sanitize(tunnel);
   }
 
-  private parseSubnet(cidr: string) {
+  private parseSubnet(cidr: string, protocol: VpnProtocol) {
     const m = cidr.match(/^(\d+\.\d+\.\d+)\.0\/24$/);
     if (!m) {
       throw new BadRequestException('tunnelSubnet must be like 10.69.10.0/24');
+    }
+    if (!tunnelSubnetMatchesProtocol(cidr, protocol)) {
+      const { first, last } = VPN_TUNNEL_THIRD_OCTET_RANGES[protocol];
+      throw new BadRequestException(
+        `Para ${VPN_PROTOCOL_LABELS[protocol]} la subred debe estar entre 10.69.${first}.0/24 y 10.69.${last}.0/24 (pool del concentrador)`,
+      );
     }
     return {
       tunnelSubnet: cidr,
@@ -596,7 +615,10 @@ export class VpnService {
       tunnel.name = name;
     }
     if (dto.tunnelSubnet !== undefined && dto.tunnelSubnet.trim()) {
-      const alloc = this.parseSubnet(dto.tunnelSubnet.trim());
+      const alloc = this.parseSubnet(
+        dto.tunnelSubnet.trim(),
+        tunnel.protocol as VpnProtocol,
+      );
       tunnel.tunnelSubnet = alloc.tunnelSubnet;
       tunnel.serverAddress = alloc.serverAddress;
       tunnel.clientAddress = alloc.clientAddress;
@@ -1186,7 +1208,15 @@ export class VpnService {
 
     if (phase === 'apply') {
       if (!ifaceExists) {
-        const batches = scriptToApiBatches(script);
+        const batches = await this.resolvePlaceBefore(
+          conn,
+          scriptToApiBatches(script),
+        );
+        if (batches.length === 0) {
+          throw new BadRequestException(
+            'No se pudo traducir el script a comandos de la API: aplícalo en el router (Bootstrap o pegar el script).',
+          );
+        }
         const results = await this.mikrotik.runWordsMany({
           ...conn,
           commands: batches,
@@ -1199,7 +1229,7 @@ export class VpnService {
         await repo.save(tunnel);
 
         return {
-          ok: failed.length < results.length || results.length === 0,
+          ok: failed.length < results.length,
           phase,
           mode: 'full' as const,
           applied: results.length,
@@ -1224,12 +1254,10 @@ export class VpnService {
         tunnel,
         iface,
       );
+      const commands = await this.resolvePlaceBefore(conn, plan.commands);
       const results =
-        plan.commands.length > 0
-          ? await this.mikrotik.runWordsMany({
-              ...conn,
-              commands: plan.commands,
-            })
+        commands.length > 0
+          ? await this.mikrotik.runWordsMany({ ...conn, commands })
           : [];
       const failed = results.filter((r) => !r.ok);
 
@@ -1353,6 +1381,35 @@ export class VpnService {
       errors: checks.filter((c) => !c.ok).map((c) => `${c.label}: ${c.detail}`),
       tunnel: this.sanitize(tunnel),
     };
+  }
+
+  /** Imprime las tablas necesarias y sustituye `place-before` por un `.id`. */
+  private async resolvePlaceBefore(
+    conn: {
+      host: string;
+      port: number;
+      username: string;
+      password: string;
+      useTls: boolean;
+    },
+    batches: string[][],
+  ): Promise<string[][]> {
+    const tables = placeBeforeTables(batches);
+    if (tables.length === 0) return batches;
+
+    const rowsByTable: Record<string, Array<Record<string, string>>> = {};
+    for (const table of tables) {
+      try {
+        const res = await this.mikrotik.runWords({
+          ...conn,
+          words: [`${table}/print`],
+        });
+        rowsByTable[table] = res.rows ?? [];
+      } catch {
+        rowsByTable[table] = [];
+      }
+    }
+    return resolvePlaceBeforeBatches(batches, rowsByTable);
   }
 
   private async buildIncrementalImportPlan(
