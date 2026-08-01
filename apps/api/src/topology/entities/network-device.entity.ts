@@ -47,7 +47,11 @@ export class NetworkDevice {
   @Column({ type: 'varchar', length: 40 })
   type: NetworkDeviceType;
 
-  /** router: mikrotik | cisco | edge_router */
+  /**
+   * router: mikrotik | cisco | edge_router
+   * switch: generic | mikrotik_routeros | mikrotik_swos
+   * olt: zte_* | huawei_*
+   */
   @Column({ type: 'varchar', length: 40, nullable: true })
   subtype: string | null;
 

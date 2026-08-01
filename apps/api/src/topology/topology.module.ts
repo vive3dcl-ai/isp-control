@@ -7,6 +7,7 @@ import { TenantRolesGuard } from '../auth/guards/tenant-roles.guard';
 import { TopologyController } from './topology.controller';
 import { TopologyService } from './topology.service';
 import { MikrotikClient } from './mikrotik.client';
+import { SwosClient } from './swos.client';
 import { ZteOltClient } from './zte-olt.client';
 import { ZteOltSnmpClient } from './zte-olt-snmp.client';
 import { HuaweiOltClient } from './huawei-olt.client';
@@ -73,6 +74,7 @@ import { SupportModule } from '../support/support.module';
   providers: [
     TopologyService,
     MikrotikClient,
+    SwosClient,
     ZteOltClient,
     ZteOltSnmpClient,
     HuaweiOltClient,

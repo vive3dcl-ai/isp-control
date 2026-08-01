@@ -27,6 +27,9 @@ import {
   CreateNetworkLinkDto,
   CreateNetworkPortDto,
   MikrotikCommandDto,
+  EnsureBridgeDto,
+  SetBridgePortDto,
+  UpsertBridgeVlanDto,
   UpdateDeviceConnectionDto,
   UpdateNetworkDeviceDto,
   UpdateNetworkPortDto,
@@ -321,6 +324,44 @@ export class TopologyController {
     @Body() dto: MikrotikCommandDto,
   ) {
     return this.topology.runMikrotikCommand(user, id, dto);
+  }
+
+  @Get('devices/:id/bridge')
+  getBridge(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.topology.getDeviceBridgeConfig(user, id);
+  }
+
+  @Post('devices/:id/bridge/ensure')
+  @TenantRoles(...CRM_WRITE_ROLES)
+  ensureBridge(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: EnsureBridgeDto,
+  ) {
+    return this.topology.ensureDeviceBridge(user, id, dto);
+  }
+
+  @Post('devices/:id/bridge/ports')
+  @TenantRoles(...CRM_WRITE_ROLES)
+  setBridgePort(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: SetBridgePortDto,
+  ) {
+    return this.topology.setDeviceBridgePort(user, id, dto);
+  }
+
+  @Put('devices/:id/bridge/vlans')
+  @TenantRoles(...CRM_WRITE_ROLES)
+  upsertBridgeVlan(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpsertBridgeVlanDto,
+  ) {
+    return this.topology.upsertDeviceBridgeVlan(user, id, dto);
   }
 
   @Delete('devices/:id')

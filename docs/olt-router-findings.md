@@ -552,6 +552,25 @@ Los parsers se **ampliaron**, no se reemplazaron: `zte-olt-onu.util.ts`, `zte-ol
 
 ---
 
+## P7 — Switches MikroTik (RouterOS + SwitchOS)
+
+### Modelo
+- `type=switch` ahora admite `subtype`: `generic` | `mikrotik_routeros` | `mikrotik_swos`.
+- UI: Fabricante (Genérico / MikroTik) + OS (RouterOS / SwitchOS).
+- RouterOS reutiliza `MikrotikClient` (API-SSL/REST) + panel Bridge/VLANs (bridge → puertos/PVID → bridge vlan tagged/untagged).
+- Las VLANs L3 (`/interface/vlan`) siguen siendo el flujo de **routers**; los switches usan bridge VLAN filtering.
+
+### P7.1 SwitchOS write — PENDIENTE
+- **Qué:** SwitchOS no tiene API oficial. Solo HTTP Digest a endpoints `.b` del web UI (`/sys.b`, `/link.b`, `/vlan.b`). Las escrituras suelen enviar el objeto completo; un payload mal formado puede corromper config (reportado por libs comunitarias).
+- **Estado:** Cliente `swos.client.ts` + `swos.util.ts` hacen **solo lectura** (identidad, puertos, membresía VLAN). Escritura de puertos/VLANs queda pendiente tras pruebas contra hardware real (SwOS vs SwOS Lite usan field maps distintos).
+- **Acción:** capturar dumps de un CSS/CRS en SwOS del usuario; implementar write read-modify-write por endpoint; no publicar write ciego.
+
+### P7.2 Diferencia L2 switch vs L3 router
+- Router: `createPortVlan` → `/interface/vlan` (interfaz L3 `vlan_N`).
+- Switch RouterOS: `ensureBridge` + `setBridgePort` + `upsertBridgeVlan` → `/interface/bridge*`.
+
+---
+
 ## Checklist de resolución (vacío — marcar al ir cerrando)
 
 | ID | Estado | Notas |
@@ -565,6 +584,7 @@ Los parsers se **ampliaron**, no se reemplazaron: `zte-olt-onu.util.ts`, `zte-ol
 | P6.2 | pendiente | aislamiento VLAN ZTE: comandos a ciegas |
 | P6.3 | resuelto | delete VLAN silencioso + caché que la revivía |
 | P6.4 | parcial | auditoría CLI ZTE: 10 arreglados; enable-password, PON light y óptica de uplinks pendientes |
+| P7.1 | pendiente | SwitchOS write (API no oficial; solo lectura ahora) |
 | P0.1 | pendiente | TLS MikroTik |
 | P0.2 | pendiente | SSH host-key |
 | P0.3 | pendiente | SNMP RW unused |

@@ -17,11 +17,18 @@ import {
 import { Type } from 'class-transformer';
 import { CREATABLE_DEVICE_TYPES } from '../entities/network-device.entity';
 import { ROUTER_SUBTYPES } from '../router.constants';
+import { SWITCH_SUBTYPES } from '../switch.constants';
 import {
   OLT_SUBTYPES,
   OLT_CONNECTION_MODES,
   OLT_PON_TYPES,
 } from '../olt.constants';
+
+const DEVICE_SUBTYPES = [
+  ...ROUTER_SUBTYPES,
+  ...SWITCH_SUBTYPES,
+  ...OLT_SUBTYPES,
+] as const;
 
 export class CreateNetworkDeviceDto {
   @IsString()
@@ -33,7 +40,7 @@ export class CreateNetworkDeviceDto {
   type: string;
 
   @IsOptional()
-  @IsIn([...ROUTER_SUBTYPES, ...OLT_SUBTYPES])
+  @IsIn([...DEVICE_SUBTYPES])
   subtype?: string;
 
   @IsOptional()
@@ -65,7 +72,7 @@ export class UpdateNetworkDeviceDto {
 
   @IsOptional()
   @ValidateIf((_, v) => v != null)
-  @IsIn([...ROUTER_SUBTYPES, ...OLT_SUBTYPES])
+  @IsIn([...DEVICE_SUBTYPES])
   subtype?: string | null;
 
   @IsOptional()
@@ -100,9 +107,9 @@ export class UpdateDeviceConnectionDto {
   @MaxLength(255)
   mgmtPassword?: string | null;
 
-  /** MikroTik: rest_https|api_ssl|api_plain — OLT: telnet|ssh */
+  /** MikroTik RouterOS: rest_https|api_ssl|api_plain — SwitchOS: http — OLT: telnet|ssh */
   @IsOptional()
-  @IsIn(['rest_https', 'api_ssl', 'api_plain', 'telnet', 'ssh'])
+  @IsIn(['rest_https', 'api_ssl', 'api_plain', 'http', 'telnet', 'ssh'])
   mgmtProtocol?: string | null;
 
   @IsOptional()
@@ -147,6 +154,53 @@ export class MikrotikCommandDto {
   @ArrayMinSize(1)
   @IsString({ each: true })
   words?: string[];
+}
+
+export class EnsureBridgeDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  name?: string;
+}
+
+export class SetBridgePortDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(80)
+  interfaceName: string;
+
+  @IsString()
+  @MinLength(1)
+  @MaxLength(80)
+  bridge: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(4094)
+  pvid?: number;
+}
+
+export class UpsertBridgeVlanDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(80)
+  bridge: string;
+
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(4094)
+  vlanId: number;
+
+  @IsArray()
+  @IsString({ each: true })
+  tagged: string[];
+
+  @IsArray()
+  @IsString({ each: true })
+  untagged: string[];
 }
 
 export class CreateNetworkPortDto {

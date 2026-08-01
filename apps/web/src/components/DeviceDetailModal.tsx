@@ -7,11 +7,15 @@ import {
   formatBytes,
   INTERNET_DEVICE_TYPE,
   isManagedOltDevice,
+  isManagedSwitch,
+  isMikrotikRouterOsDevice,
+  isMikrotikSwosDevice,
   oltConnectionModeLabel,
   oltPonTypeLabel,
   oltSubtypeLabel,
   OLT_PON_TYPES,
   routerSubtypeLabel,
+  switchSubtypeLabel,
   type ConnectionStatus,
   type OltConnectionMode,
   type OltCardsResponse,
@@ -19,6 +23,7 @@ import {
   type OltSubtype,
   type PortLinkStatus,
   type RouterSubtype,
+  type SwitchSubtype,
   type TopologyDevice,
 } from '../lib/topology'
 import { PortSelectModal } from './PortSelectModal'
@@ -32,6 +37,7 @@ import { OltPonPortsPanel } from './OltPonPortsPanel'
 import { OltUplinksPanel } from './OltUplinksPanel'
 import { OltVlansPanel } from './OltVlansPanel'
 import { OltSpeedProfilesPanel } from './OltSpeedProfilesPanel'
+import { SwitchBridgeVlansPanel } from './SwitchBridgeVlansPanel'
 import { OnuImportModal } from './OnuImportModal'
 import { useNotify } from './NotifyProvider'
 import { ModalPortal } from './ModalPortal'
@@ -59,6 +65,7 @@ function ipsButtonClass(hasIps: boolean, extra = '') {
 type TabId =
   | 'red'
   | 'conexion'
+  | 'bridge'
   | 'tarjetas'
   | 'pon'
   | 'uplinks'
@@ -124,7 +131,8 @@ export function DeviceDetailModal({
     refetchInterval: (q) => {
       const d = q.state.data
       if (!open || !d?.mgmtHost) return false
-      if (d.subtype === 'mikrotik') return 10_000
+      if (isMikrotikRouterOsDevice(d.type, d.subtype)) return 10_000
+      if (isMikrotikSwosDevice(d.type, d.subtype)) return 15_000
       // OLT detail refresh uses SNMP health (~30s); full CLI only on "Probar"
       if (isManagedOltDevice(d.type, d.subtype)) return 30_000
       return false
@@ -170,6 +178,9 @@ export function DeviceDetailModal({
           ? (d.ponType as OltPonType)
           : '',
       )
+    } else if (isMikrotikSwosDevice(d.type, d.subtype)) {
+      setMgmtProtocol('http')
+      setMgmtPort(String(d.mgmtPort ?? 80))
     } else {
       setMgmtProtocol(d.mgmtProtocol ?? 'api_ssl')
       setMgmtPort(
@@ -260,6 +271,9 @@ export function DeviceDetailModal({
           body.mgmtProtocol = 'telnet'
         }
       }
+      if (isMikrotikSwosDevice(deviceQuery.data?.type, deviceQuery.data?.subtype)) {
+        body.mgmtProtocol = 'http'
+      }
       return apiFetch(`/app/topology/devices/${deviceId}/connection`, {
         method: 'PATCH',
         body: JSON.stringify(body),
@@ -315,16 +329,24 @@ export function DeviceDetailModal({
   const device = deviceQuery.data
   const isRouter = device?.type === 'router'
   const isOlt = device?.type === 'olt'
-  const hasConnectionTab = isRouter || isOlt
+  const isSwitch = device?.type === 'switch'
+  const hasConnectionTab =
+    isRouter || isOlt || isManagedSwitch(device?.type, device?.subtype)
   const isMikrotikLive =
-    device?.subtype === 'mikrotik' && !!device.mgmtHost
+    isMikrotikRouterOsDevice(device?.type, device?.subtype) && !!device?.mgmtHost
+  const isSwosLive =
+    isMikrotikSwosDevice(device?.type, device?.subtype) && !!device?.mgmtHost
   const isManagedOlt = isManagedOltDevice(device?.type, device?.subtype)
+  const isRosSwitch =
+    isSwitch && device?.subtype === 'mikrotik_routeros'
   const status = (device?.connectionStatus ??
     'unknown') as ConnectionStatus
   const subtypeLabel = device?.subtype
     ? isOlt
       ? oltSubtypeLabel[device.subtype as OltSubtype] ?? device.subtype
-      : routerSubtypeLabel[device.subtype as RouterSubtype] ?? device.subtype
+      : isSwitch
+        ? switchSubtypeLabel[device.subtype as SwitchSubtype] ?? device.subtype
+        : routerSubtypeLabel[device.subtype as RouterSubtype] ?? device.subtype
     : null
 
   function portNameClass(linkStatus?: string) {
@@ -399,6 +421,20 @@ export function DeviceDetailModal({
                   ].join(' ')}
                 >
                   Conexión
+                </button>
+              )}
+              {isRosSwitch && (
+                <button
+                  type="button"
+                  onClick={() => setTab('bridge')}
+                  className={[
+                    'shrink-0 border-b-2 px-2.5 py-2.5 text-xs whitespace-nowrap transition sm:px-3 sm:text-sm',
+                    tab === 'bridge'
+                      ? 'border-[var(--accent)] text-[var(--accent)]'
+                      : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text)]',
+                  ].join(' ')}
+                >
+                  Bridge / VLANs
                 </button>
               )}
               {isManagedOlt && (
@@ -832,9 +868,11 @@ export function DeviceDetailModal({
                   </div>
                 </div>
 
-                {device.subtype === 'mikrotik' &&
+                {(isMikrotikLive || isSwosLive) &&
                   status === 'connected' && (
                     <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 text-sm">
+                      {isMikrotikLive && (
+                        <>
                       <div className="rounded-lg border border-[var(--border)] p-3">
                         <dt className="text-xs text-[var(--text-muted)]">CPU</dt>
                         <dd className="mt-1 font-medium">
@@ -850,6 +888,8 @@ export function DeviceDetailModal({
                           {formatBytes(device.metricTotalMemory)}
                         </dd>
                       </div>
+                        </>
+                      )}
                       <div className="rounded-lg border border-[var(--border)] p-3">
                         <dt className="text-xs text-[var(--text-muted)]">
                           Uptime
@@ -858,6 +898,7 @@ export function DeviceDetailModal({
                           {device.metricUptime ?? '—'}
                         </dd>
                       </div>
+                      {isMikrotikLive && (
                       <div className="rounded-lg border border-[var(--border)] p-3">
                         <dt className="text-xs text-[var(--text-muted)]">
                           Temperatura
@@ -868,6 +909,7 @@ export function DeviceDetailModal({
                             : '—'}
                         </dd>
                       </div>
+                      )}
                       <div className="rounded-lg border border-[var(--border)] p-3">
                         <dt className="text-xs text-[var(--text-muted)]">
                           Modelo
@@ -879,6 +921,16 @@ export function DeviceDetailModal({
                             : ''}
                         </dd>
                       </div>
+                      {isSwosLive && (
+                      <div className="rounded-lg border border-[var(--border)] p-3">
+                        <dt className="text-xs text-[var(--text-muted)]">
+                          Firmware
+                        </dt>
+                        <dd className="mt-1 font-medium">
+                          {device.metricVersion ?? '—'}
+                        </dd>
+                      </div>
+                      )}
                     </dl>
                   )}
 
@@ -967,11 +1019,18 @@ export function DeviceDetailModal({
                   </dl>
                 )}
 
-                {device.subtype === 'mikrotik' ? (
+                {isMikrotikRouterOsDevice(device.type, device.subtype) ? (
                   <p className="text-xs text-[var(--text-muted)]">
                     Con credenciales guardadas, el sistema consulta el MikroTik
-                    cada pocos segundos: métricas, puertos Ethernet físicos y
-                    su estado (Up/Down). Los puertos son de solo lectura.
+                    RouterOS cada pocos segundos: métricas, puertos Ethernet y
+                    bridge VLANs. Los puertos son de solo lectura en Red; edita
+                    VLANs en Bridge / VLANs.
+                  </p>
+                ) : isMikrotikSwosDevice(device.type, device.subtype) ? (
+                  <p className="text-xs text-[var(--text-muted)]">
+                    SwitchOS no tiene API oficial: el panel habla con la web del
+                    switch (HTTP Digest). Lectura de identidad, puertos y VLANs;
+                    la escritura se añadirá después.
                   </p>
                 ) : isOlt ? (
                   <p className="text-xs text-[var(--text-muted)]">
@@ -1191,6 +1250,71 @@ export function DeviceDetailModal({
                             className={inputClass}
                             value={snmpPort}
                             onChange={(e) => setSnmpPort(e.target.value)}
+                            disabled={!canWrite}
+                          />
+                        </label>
+                      </>
+                    ) : isMikrotikSwosDevice(device.type, device.subtype) ? (
+                      <>
+                        <label className="block text-sm sm:col-span-2">
+                          <span className="mb-1 block text-[var(--text-muted)]">
+                            IP / host
+                          </span>
+                          <input
+                            className={inputClass}
+                            value={mgmtHost}
+                            onChange={(e) => setMgmtHost(e.target.value)}
+                            placeholder="192.168.88.1"
+                            disabled={!canWrite}
+                          />
+                        </label>
+                        <label className="block text-sm">
+                          <span className="mb-1 block text-[var(--text-muted)]">
+                            Puerto HTTP
+                          </span>
+                          <input
+                            type="number"
+                            className={inputClass}
+                            value={mgmtPort}
+                            onChange={(e) => setMgmtPort(e.target.value)}
+                            disabled={!canWrite}
+                          />
+                        </label>
+                        <label className="block text-sm">
+                          <span className="mb-1 block text-[var(--text-muted)]">
+                            Protocolo
+                          </span>
+                          <select
+                            className={inputClass}
+                            value="http"
+                            disabled
+                          >
+                            <option value="http">HTTP Digest (SwOS)</option>
+                          </select>
+                        </label>
+                        <label className="block text-sm">
+                          <span className="mb-1 block text-[var(--text-muted)]">
+                            Usuario
+                          </span>
+                          <input
+                            className={inputClass}
+                            value={mgmtUsername}
+                            onChange={(e) => setMgmtUsername(e.target.value)}
+                            autoComplete="username"
+                            disabled={!canWrite}
+                            placeholder="admin"
+                          />
+                        </label>
+                        <label className="block text-sm sm:col-span-2">
+                          <span className="mb-1 block text-[var(--text-muted)]">
+                            Contraseña (dejar vacío para no cambiar)
+                          </span>
+                          <input
+                            type="password"
+                            className={inputClass}
+                            value={mgmtPassword}
+                            onChange={(e) => setMgmtPassword(e.target.value)}
+                            autoComplete="new-password"
                             disabled={!canWrite}
                           />
                         </label>
@@ -1458,6 +1582,13 @@ export function DeviceDetailModal({
                   </div>
                 )}
               </div>
+            )}
+
+            {device && tab === 'bridge' && isRosSwitch && deviceId && (
+              <SwitchBridgeVlansPanel
+                deviceId={deviceId}
+                canWrite={canWrite}
+              />
             )}
 
             {device && tab === 'pon' && isManagedOlt && deviceId && (

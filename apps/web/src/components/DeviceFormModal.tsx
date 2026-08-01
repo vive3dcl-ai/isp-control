@@ -10,9 +10,19 @@ import {
   ZTE_C6XX_SUBTYPES,
   ROUTER_SUBTYPES,
   routerSubtypeLabel,
+  SWITCH_VENDORS,
+  switchVendorLabel,
+  SWITCH_MIKROTIK_OS,
+  switchMikrotikOsLabel,
+  switchSubtypeFromUi,
+  switchVendorFromSubtype,
+  switchOsFromSubtype,
+  isManagedSwitch,
   type NetworkDeviceType,
   type OltSubtype,
   type RouterSubtype,
+  type SwitchVendor,
+  type SwitchMikrotikOs,
   type TopologyDevice,
 } from '../lib/topology'
 import { ModalPortal } from './ModalPortal'
@@ -33,6 +43,8 @@ export function DeviceFormModal({
   const [name, setName] = useState('')
   const [type, setType] = useState<NetworkDeviceType>('router')
   const [routerSubtype, setRouterSubtype] = useState<RouterSubtype>('mikrotik')
+  const [switchVendor, setSwitchVendor] = useState<SwitchVendor>('generic')
+  const [switchOs, setSwitchOs] = useState<SwitchMikrotikOs>('routeros')
   const [oltSubtype, setOltSubtype] = useState<OltSubtype>('zte_c320')
   const [note, setNote] = useState('')
   const [isActive, setIsActive] = useState(true)
@@ -46,6 +58,9 @@ export function DeviceFormModal({
       if (device.type === 'olt') {
         const sub = (device.subtype as OltSubtype) || 'zte_c320'
         setOltSubtype(sub === 'zte_c3xx' ? 'zte_c320' : sub)
+      } else if (device.type === 'switch') {
+        setSwitchVendor(switchVendorFromSubtype(device.subtype))
+        setSwitchOs(switchOsFromSubtype(device.subtype) ?? 'routeros')
       } else {
         setRouterSubtype((device.subtype as RouterSubtype) || 'mikrotik')
       }
@@ -55,6 +70,8 @@ export function DeviceFormModal({
       setName('')
       setType('router')
       setRouterSubtype('mikrotik')
+      setSwitchVendor('generic')
+      setSwitchOs('routeros')
       setOltSubtype('zte_c320')
       setNote('')
       setIsActive(true)
@@ -71,8 +88,19 @@ export function DeviceFormModal({
     return () => window.removeEventListener('keydown', onKey)
   }, [open, onClose])
 
+  const switchSubtype = switchSubtypeFromUi(
+    switchVendor,
+    switchVendor === 'mikrotik' ? switchOs : null,
+  )
+
   const subtypeForPayload =
-    type === 'router' ? routerSubtype : type === 'olt' ? oltSubtype : null
+    type === 'router'
+      ? routerSubtype
+      : type === 'olt'
+        ? oltSubtype
+        : type === 'switch'
+          ? switchSubtype
+          : null
 
   const mutation = useMutation({
     mutationFn: () => {
@@ -104,7 +132,8 @@ export function DeviceFormModal({
           isActive,
           initialPortCount:
             (type === 'router' && routerSubtype === 'mikrotik') ||
-            type === 'olt'
+            type === 'olt' ||
+            isManagedSwitch(type, switchSubtype)
               ? 0
               : Number(initialPortCount) || 0,
         }),
@@ -129,7 +158,9 @@ export function DeviceFormModal({
   }
 
   const hidePorts =
-    (type === 'router' && routerSubtype === 'mikrotik') || type === 'olt'
+    (type === 'router' && routerSubtype === 'mikrotik') ||
+    type === 'olt' ||
+    isManagedSwitch(type, switchSubtype)
 
   return (
     <ModalPortal><div className="fixed inset-0 z-[110] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/60 sm:items-center sm:p-4">
@@ -205,6 +236,53 @@ export function DeviceFormModal({
                   </select>
                 </label>
               )}
+              {type === 'switch' && (
+                <>
+                  <label className="block text-sm">
+                    <span className="mb-1 block text-[var(--text-muted)]">
+                      Fabricante
+                    </span>
+                    <select
+                      className={inputClass}
+                      value={switchVendor}
+                      onChange={(e) =>
+                        setSwitchVendor(e.target.value as SwitchVendor)
+                      }
+                    >
+                      {SWITCH_VENDORS.map((v) => (
+                        <option key={v} value={v}>
+                          {switchVendorLabel[v]}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  {switchVendor === 'mikrotik' && (
+                    <label className="block text-sm">
+                      <span className="mb-1 block text-[var(--text-muted)]">
+                        Sistema operativo
+                      </span>
+                      <select
+                        className={inputClass}
+                        value={switchOs}
+                        onChange={(e) =>
+                          setSwitchOs(e.target.value as SwitchMikrotikOs)
+                        }
+                      >
+                        {SWITCH_MIKROTIK_OS.map((os) => (
+                          <option key={os} value={os}>
+                            {switchMikrotikOsLabel[os]}
+                          </option>
+                        ))}
+                      </select>
+                      <span className="mt-1 block text-xs text-[var(--text-muted)]">
+                        {switchOs === 'swos'
+                          ? 'SwitchOS: gestión por HTTP (web). Lectura de puertos/VLANs.'
+                          : 'RouterOS: misma API que los routers (bridge + VLANs tagged/untagged).'}
+                      </span>
+                    </label>
+                  )}
+                </>
+              )}
               {type === 'olt' && (
                 <label className="block text-sm">
                   <span className="mb-1 block text-[var(--text-muted)]">
@@ -279,6 +357,12 @@ export function DeviceFormModal({
               (solo lectura).
             </p>
           )}
+          {!device && isManagedSwitch(type, switchSubtype) && (
+            <p className="text-xs text-[var(--text-muted)]">
+              Configura la conexión en el detalle del switch; los puertos se
+              sincronizan desde el equipo.
+            </p>
+          )}
           {!device && type === 'olt' && (
             <p className="text-xs text-[var(--text-muted)]">
               Configura la conexión Telnet/SSH en el detalle del OLT (solo
@@ -319,10 +403,10 @@ export function DeviceFormModal({
             </button>
             <button
               type="submit"
-              disabled={mutation.isPending}
-              className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white hover:bg-[var(--accent-hover)] disabled:opacity-60"
+              disabled={mutation.isPending || !name.trim()}
+              className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
             >
-              {mutation.isPending ? 'Guardando…' : 'Guardar'}
+              {mutation.isPending ? 'Guardando…' : device ? 'Guardar' : 'Crear'}
             </button>
           </div>
         </form>

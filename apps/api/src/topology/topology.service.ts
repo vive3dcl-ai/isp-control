@@ -23,8 +23,16 @@ import {
   UpdateNetworkDeviceDto,
   UpdateNetworkPortDto,
 } from './dto/topology.dto';
+import {
+  isManagedSwitch,
+  isMikrotikRouterOsDevice,
+  isMikrotikSwosDevice,
+  isSwitchSubtype,
+  DEFAULT_SWOS_MGMT_PORT,
+} from './switch.constants';
 import { saveDeviceIfPresent } from './device-persist.util';
 import { MikrotikClient } from './mikrotik.client';
+import { SwosClient } from './swos.client';
 import { ZteOltClient } from './zte-olt.client';
 import { ZteOltSnmpClient } from './zte-olt-snmp.client';
 import { HuaweiOltClient } from './huawei-olt.client';
@@ -103,6 +111,7 @@ export class TopologyService {
   constructor(
     private readonly tenantConnections: TenantConnectionService,
     private readonly mikrotik: MikrotikClient,
+    private readonly swos: SwosClient,
     private readonly zteOlt: ZteOltClient,
     private readonly zteSnmp: ZteOltSnmpClient,
     private readonly huaweiOlt: HuaweiOltClient,
@@ -283,10 +292,21 @@ export class TopologyService {
     if (dto.type === 'olt' && !dto.subtype) {
       throw new BadRequestException('OLT subtype is required');
     }
-    if (dto.subtype && dto.type !== 'router' && dto.type !== 'olt') {
+    if (dto.type === 'switch' && !dto.subtype) {
+      dto.subtype = 'generic';
+    }
+    if (
+      dto.subtype &&
+      dto.type !== 'router' &&
+      dto.type !== 'olt' &&
+      dto.type !== 'switch'
+    ) {
       throw new BadRequestException(
-        'Subtype is only valid for routers and OLTs',
+        'Subtype is only valid for routers, switches and OLTs',
       );
+    }
+    if (dto.type === 'switch' && dto.subtype && !isSwitchSubtype(dto.subtype)) {
+      throw new BadRequestException(`Invalid switch subtype: ${dto.subtype}`);
     }
 
     const schema = this.requireSchema(user);
@@ -299,8 +319,8 @@ export class TopologyService {
         name: dto.name.trim(),
         type: dto.type as NetworkDeviceType,
         subtype:
-          dto.type === 'router' || dto.type === 'olt'
-            ? (dto.subtype ?? null)
+          dto.type === 'router' || dto.type === 'olt' || dto.type === 'switch'
+            ? (dto.subtype ?? (dto.type === 'switch' ? 'generic' : null))
             : null,
         note: dto.note?.trim() ?? '',
         isActive: dto.isActive ?? true,
@@ -310,11 +330,11 @@ export class TopologyService {
     );
 
     const count =
-      dto.type === 'router' && dto.subtype === 'mikrotik'
+      isMikrotikRouterOsDevice(dto.type, dto.subtype) ||
+      isMikrotikSwosDevice(dto.type, dto.subtype) ||
+      dto.type === 'olt'
         ? 0
-        : dto.type === 'olt'
-          ? 0
-          : (dto.initialPortCount ?? 0);
+        : (dto.initialPortCount ?? 0);
     if (count > 0) {
       const created = [];
       for (let i = 1; i <= count; i++) {
@@ -355,13 +375,26 @@ export class TopologyService {
         throw new BadRequestException('Cannot change type to Internet');
       }
       device.type = dto.type as NetworkDeviceType;
-      if (dto.type !== 'router' && dto.type !== 'olt') device.subtype = null;
+      if (dto.type !== 'router' && dto.type !== 'olt' && dto.type !== 'switch') {
+        device.subtype = null;
+      }
     }
     if (dto.subtype !== undefined) {
-      if (device.type !== 'router' && device.type !== 'olt') {
+      if (
+        device.type !== 'router' &&
+        device.type !== 'olt' &&
+        device.type !== 'switch'
+      ) {
         throw new BadRequestException(
-          'Subtype is only valid for routers and OLTs',
+          'Subtype is only valid for routers, switches and OLTs',
         );
+      }
+      if (
+        device.type === 'switch' &&
+        dto.subtype != null &&
+        !isSwitchSubtype(dto.subtype)
+      ) {
+        throw new BadRequestException(`Invalid switch subtype: ${dto.subtype}`);
       }
       device.subtype = dto.subtype;
     }
@@ -459,7 +492,10 @@ export class TopologyService {
     const device = await devices.findOne({ where: { id: deviceId } });
     if (!device) return;
     const isManagedOlt = isManagedOltDevice(device.type, device.subtype);
-    const probeable = device.subtype === 'mikrotik' || isManagedOlt;
+    const probeable =
+      isMikrotikRouterOsDevice(device.type, device.subtype) ||
+      isMikrotikSwosDevice(device.type, device.subtype) ||
+      isManagedOlt;
     if (!probeable) return;
     if (!device.mgmtHost) return;
     if (!isManagedOlt && (!device.mgmtUsername || !device.mgmtPassword)) return;
@@ -484,6 +520,8 @@ export class TopologyService {
     const targets = await devices.find({
       where: [
         { type: 'router', subtype: 'mikrotik', isActive: true },
+        { type: 'switch', subtype: 'mikrotik_routeros', isActive: true },
+        { type: 'switch', subtype: 'mikrotik_swos', isActive: true },
         {
           type: 'olt',
           subtype: In([...OLT_SELECTABLE_SUBTYPES, 'zte_c3xx']),
@@ -520,15 +558,22 @@ export class TopologyService {
       await this.tenantConnections.getNetworkDeviceRepository(schema);
     const device = await devices.findOne({ where: { id } });
     if (!device) throw new NotFoundException('Device not found');
-    if (device.type !== 'router' && device.type !== 'olt') {
+    if (
+      device.type !== 'router' &&
+      device.type !== 'olt' &&
+      !isManagedSwitch(device.type, device.subtype)
+    ) {
       throw new BadRequestException(
-        'Management connection is only available for routers and OLTs',
+        'Management connection is only available for routers, managed switches and OLTs',
       );
     }
 
-    // Seed / datos viejos: router sin subtype → MikroTik; OLT → ZTE genérico
+    // Seed / datos viejos: router sin subtype → MikroTik; switch → generic; OLT → ZTE
     if (device.type === 'router' && !device.subtype) {
       device.subtype = 'mikrotik';
+    }
+    if (device.type === 'switch' && !device.subtype) {
+      device.subtype = 'generic';
     }
     if (device.type === 'olt' && !device.subtype) {
       device.subtype = 'zte_c3xx';
@@ -561,12 +606,22 @@ export class TopologyService {
       device.ponType = dto.ponType?.trim() || null;
     }
 
-    // Defaults for MikroTik
-    if (device.subtype === 'mikrotik') {
-      if (!device.mgmtProtocol) device.mgmtProtocol = 'api_ssl';
+    // Defaults for MikroTik RouterOS (router or switch)
+    if (isMikrotikRouterOsDevice(device.type, device.subtype)) {
+      if (!device.mgmtProtocol || device.mgmtProtocol === 'http') {
+        device.mgmtProtocol = 'api_ssl';
+      }
       if (!device.mgmtPort) {
         device.mgmtPort = device.mgmtProtocol === 'rest_https' ? 443 : 8729;
       }
+    }
+
+    // Defaults for SwitchOS
+    if (isMikrotikSwosDevice(device.type, device.subtype)) {
+      if (!device.mgmtProtocol || device.mgmtProtocol !== 'http') {
+        device.mgmtProtocol = 'http';
+      }
+      if (!device.mgmtPort) device.mgmtPort = DEFAULT_SWOS_MGMT_PORT;
     }
 
     // Defaults for ZTE OLT
@@ -597,6 +652,9 @@ export class TopologyService {
       if (!device.mgmtPort || device.mgmtPort === 8729) {
         device.mgmtPort = 443;
       }
+    }
+    if (dto.mgmtProtocol === 'http' && dto.mgmtPort == null) {
+      device.mgmtPort = DEFAULT_SWOS_MGMT_PORT;
     }
     if (dto.mgmtProtocol === 'telnet' && dto.mgmtPort == null) {
       device.mgmtPort = DEFAULT_OLT_PORTS.telnet;
@@ -2029,8 +2087,10 @@ export class TopologyService {
       await this.tenantConnections.getNetworkDeviceRepository(schema);
     const device = await devices.findOne({ where: { id } });
     if (!device) throw new NotFoundException('Device not found');
-    if (device.subtype !== 'mikrotik') {
-      throw new BadRequestException('Device is not a MikroTik router');
+    if (!isMikrotikRouterOsDevice(device.type, device.subtype)) {
+      throw new BadRequestException(
+        'Device is not a MikroTik RouterOS device',
+      );
     }
     if (!device.mgmtHost || !device.mgmtUsername || !device.mgmtPassword) {
       throw new BadRequestException('Management credentials not configured');
@@ -2113,8 +2173,16 @@ export class TopologyService {
       device.subtype = 'mikrotik';
       await this.persistProbedDevice(devices, device);
     }
+    if (device.type === 'switch' && !device.subtype) {
+      device.subtype = 'generic';
+      await this.persistProbedDevice(devices, device);
+    }
 
-    if (device.subtype !== 'mikrotik') {
+    if (isMikrotikSwosDevice(device.type, device.subtype)) {
+      return this.probeAndPersistSwos(schema, device);
+    }
+
+    if (!isMikrotikRouterOsDevice(device.type, device.subtype)) {
       device.connectionStatus = 'error';
       device.lastError = `Probe not implemented for subtype ${device.subtype ?? 'unknown'} yet`;
       device.lastCheckedAt = new Date();
@@ -2219,6 +2287,84 @@ export class TopologyService {
       }
     }
 
+    return device;
+  }
+
+  /** SwitchOS probe via HTTP digest `.b` endpoints (read-only). */
+  private async probeAndPersistSwos(schema: string, device: NetworkDevice) {
+    if (!this.acquireProbeSlot(device.id)) return device;
+    try {
+      return await this.probeAndPersistSwosUnlocked(schema, device);
+    } finally {
+      this.releaseProbeSlot(device.id);
+    }
+  }
+
+  private async probeAndPersistSwosUnlocked(
+    schema: string,
+    device: NetworkDevice,
+  ) {
+    const devices =
+      await this.tenantConnections.getNetworkDeviceRepository(schema);
+    if (!device.mgmtHost || !device.mgmtUsername || !device.mgmtPassword) {
+      device.connectionStatus = 'disconnected';
+      device.lastError = 'Missing host, username or password';
+      device.lastCheckedAt = new Date();
+      await this.persistProbedDevice(devices, device);
+      return device;
+    }
+
+    const result = await this.withTimeout(
+      this.swos.probe({
+        host: device.mgmtHost,
+        port: device.mgmtPort ?? DEFAULT_SWOS_MGMT_PORT,
+        username: device.mgmtUsername,
+        password: device.mgmtPassword,
+      }),
+      25_000,
+      `SwOS probe ${device.mgmtHost}`,
+    ).catch((err) => ({
+      ok: false as const,
+      error: err instanceof Error ? err.message : String(err),
+    }));
+
+    device.lastCheckedAt = new Date();
+    if (result.ok) {
+      this.probeFailStreak.delete(device.id);
+      device.connectionStatus = 'connected';
+      device.lastError = null;
+      device.metricIdentity = result.identity ?? null;
+      device.metricVersion = result.version ?? null;
+      device.metricBoardName = result.boardName ?? null;
+      device.metricUptime = result.uptime ?? null;
+      device.metricCpuLoad = null;
+      device.metricFreeMemory = null;
+      device.metricTotalMemory = null;
+      device.metricTemperature = null;
+      if (!(await this.persistProbedDevice(devices, device))) return device;
+      if (result.physicalPorts?.length) {
+        try {
+          await this.syncMikrotikPhysicalPorts(
+            schema,
+            device.id,
+            result.physicalPorts,
+          );
+        } catch {
+          /* port sync best-effort */
+        }
+      }
+    } else {
+      const streak = (this.probeFailStreak.get(device.id) ?? 0) + 1;
+      this.probeFailStreak.set(device.id, streak);
+      const errMsg = result.error ?? 'Connection failed';
+      if (device.connectionStatus === 'connected' && streak < 3) {
+        device.lastError = `Inestable (${streak}/3): ${errMsg}`;
+      } else {
+        device.connectionStatus = 'disconnected';
+        device.lastError = errMsg;
+      }
+      await this.persistProbedDevice(devices, device);
+    }
     return device;
   }
 
@@ -2999,7 +3145,11 @@ export class TopologyService {
       await this.tenantConnections.getNetworkDeviceRepository(schema);
     const device = await devices.findOne({ where: { id: dto.deviceId } });
     if (!device) throw new NotFoundException('Device not found');
-    if (device.subtype === 'mikrotik' && device.mgmtHost) {
+    if (
+      (isMikrotikRouterOsDevice(device.type, device.subtype) ||
+        isMikrotikSwosDevice(device.type, device.subtype)) &&
+      device.mgmtHost
+    ) {
       throw new BadRequestException(
         'Los puertos de MikroTik se sincronizan automáticamente desde el equipo (solo lectura)',
       );
@@ -3069,7 +3219,7 @@ export class TopologyService {
     const targetLabel = iface || port.name;
 
     if (
-      device.subtype === 'mikrotik' &&
+      isMikrotikRouterOsDevice(device.type, device.subtype) &&
       device.mgmtHost &&
       device.mgmtUsername &&
       device.mgmtPassword
@@ -3165,7 +3315,7 @@ export class TopologyService {
     const isVlanIface = iface !== port.name;
 
     if (
-      device.subtype === 'mikrotik' &&
+      isMikrotikRouterOsDevice(device.type, device.subtype) &&
       device.mgmtHost &&
       device.mgmtUsername &&
       device.mgmtPassword
@@ -3258,13 +3408,13 @@ export class TopologyService {
     if (!device) throw new NotFoundException('Device not found');
 
     if (
-      device.subtype !== 'mikrotik' ||
+      !isMikrotikRouterOsDevice(device.type, device.subtype) ||
       !device.mgmtHost ||
       !device.mgmtUsername ||
       !device.mgmtPassword
     ) {
       throw new BadRequestException(
-        'Solo se pueden crear VLANs en equipos MikroTik conectados',
+        'Solo se pueden crear VLANs L3 en equipos MikroTik RouterOS conectados',
       );
     }
 
@@ -3340,7 +3490,7 @@ export class TopologyService {
     }
 
     if (
-      device.subtype === 'mikrotik' &&
+      isMikrotikRouterOsDevice(device.type, device.subtype) &&
       device.mgmtHost &&
       device.mgmtUsername &&
       device.mgmtPassword
@@ -3551,5 +3701,138 @@ export class TopologyService {
         ports: freeByDevice.get(d.id) ?? [],
       }))
       .filter((d) => d.ports.length > 0);
+  }
+
+  private requireRouterOsMikrotik(device: NetworkDevice) {
+    if (!isMikrotikRouterOsDevice(device.type, device.subtype)) {
+      throw new BadRequestException(
+        'Solo disponible en equipos MikroTik RouterOS',
+      );
+    }
+    if (!device.mgmtHost || !device.mgmtUsername || !device.mgmtPassword) {
+      throw new BadRequestException('Management credentials not configured');
+    }
+    return {
+      host: device.mgmtHost,
+      port:
+        device.mgmtPort ?? (device.mgmtProtocol === 'rest_https' ? 443 : 8729),
+      username: device.mgmtUsername,
+      password: device.mgmtPassword,
+      protocol: device.mgmtProtocol ?? 'api_ssl',
+    };
+  }
+
+  async getDeviceBridgeConfig(user: AuthUser, id: string) {
+    const schema = this.requireSchema(user);
+    const devices =
+      await this.tenantConnections.getNetworkDeviceRepository(schema);
+    const device = await devices.findOne({ where: { id } });
+    if (!device) throw new NotFoundException('Device not found');
+    const conn = this.requireRouterOsMikrotik(device);
+    const result = await this.withTimeout(
+      this.mikrotik.getBridgeConfig(conn),
+      45_000,
+      'bridge config',
+    );
+    if (!result.ok) {
+      throw new BadRequestException(result.error || 'No se pudo leer bridge');
+    }
+    return result;
+  }
+
+  async ensureDeviceBridge(
+    user: AuthUser,
+    id: string,
+    dto: { name?: string },
+  ) {
+    const schema = this.requireSchema(user);
+    const devices =
+      await this.tenantConnections.getNetworkDeviceRepository(schema);
+    const device = await devices.findOne({ where: { id } });
+    if (!device) throw new NotFoundException('Device not found');
+    const conn = this.requireRouterOsMikrotik(device);
+    const result = await this.withTimeout(
+      this.mikrotik.ensureBridge({
+        ...conn,
+        name: dto.name,
+        vlanFiltering: true,
+      }),
+      30_000,
+      'ensure bridge',
+    );
+    if (!result.ok) {
+      throw new BadRequestException(result.error || 'No se pudo crear bridge');
+    }
+    await this.probeAndPersist(schema, id).catch(() => undefined);
+    return result;
+  }
+
+  async setDeviceBridgePort(
+    user: AuthUser,
+    id: string,
+    dto: { interfaceName: string; bridge: string; pvid?: number },
+  ) {
+    const schema = this.requireSchema(user);
+    const devices =
+      await this.tenantConnections.getNetworkDeviceRepository(schema);
+    const device = await devices.findOne({ where: { id } });
+    if (!device) throw new NotFoundException('Device not found');
+    const conn = this.requireRouterOsMikrotik(device);
+    const result = await this.withTimeout(
+      this.mikrotik.setBridgePort({
+        ...conn,
+        interfaceName: dto.interfaceName.trim(),
+        bridge: dto.bridge.trim(),
+        pvid: dto.pvid,
+      }),
+      30_000,
+      'set bridge port',
+    );
+    if (!result.ok) {
+      throw new BadRequestException(
+        result.error || 'No se pudo asignar el puerto al bridge',
+      );
+    }
+    await this.probeAndPersist(schema, id).catch(() => undefined);
+    return result;
+  }
+
+  async upsertDeviceBridgeVlan(
+    user: AuthUser,
+    id: string,
+    dto: {
+      bridge: string;
+      vlanId: number;
+      tagged: string[];
+      untagged: string[];
+    },
+  ) {
+    const schema = this.requireSchema(user);
+    const devices =
+      await this.tenantConnections.getNetworkDeviceRepository(schema);
+    const device = await devices.findOne({ where: { id } });
+    if (!device) throw new NotFoundException('Device not found');
+    const conn = this.requireRouterOsMikrotik(device);
+    if (!Number.isInteger(dto.vlanId) || dto.vlanId < 1 || dto.vlanId > 4094) {
+      throw new BadRequestException('VLAN ID inválido (1–4094)');
+    }
+    const result = await this.withTimeout(
+      this.mikrotik.upsertBridgeVlan({
+        ...conn,
+        bridge: dto.bridge.trim(),
+        vlanId: dto.vlanId,
+        tagged: dto.tagged ?? [],
+        untagged: dto.untagged ?? [],
+      }),
+      30_000,
+      'upsert bridge vlan',
+    );
+    if (!result.ok) {
+      throw new BadRequestException(
+        result.error || 'No se pudo guardar la VLAN del bridge',
+      );
+    }
+    await this.probeAndPersist(schema, id).catch(() => undefined);
+    return result;
   }
 }

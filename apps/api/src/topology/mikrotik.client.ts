@@ -1502,4 +1502,457 @@ export class MikrotikClient {
       req.end();
     });
   }
+
+  private restRows(raw: unknown): Record<string, string>[] {
+    if (!Array.isArray(raw)) return [];
+    return raw.map((row) => {
+      const out: Record<string, string> = {};
+      if (!row || typeof row !== 'object') return out;
+      for (const [k, v] of Object.entries(row as Record<string, unknown>)) {
+        out[k] = v == null ? '' : String(v);
+      }
+      return out;
+    });
+  }
+
+  private restId(row: Record<string, string>): string | undefined {
+    const id = row['.id'] || row.id;
+    return id || undefined;
+  }
+
+  // —— Bridge / VLAN filtering (CRS / switch-mode RouterOS) ——
+
+  async getBridgeConfig(params: {
+    host: string;
+    port: number;
+    username: string;
+    password: string;
+    protocol?: string;
+  }): Promise<{
+    ok: boolean;
+    error?: string;
+    bridges?: Array<{
+      name: string;
+      vlanFiltering: boolean;
+      disabled: boolean;
+    }>;
+    ports?: Array<{
+      id?: string;
+      interface: string;
+      bridge: string;
+      pvid: number;
+      disabled: boolean;
+    }>;
+    vlans?: Array<{
+      id?: string;
+      vlanIds: number[];
+      bridge: string;
+      tagged: string[];
+      untagged: string[];
+    }>;
+  }> {
+    try {
+      return await this.withDeviceLock(params.host, params.port, async () => {
+        const protocol = params.protocol ?? 'api_ssl';
+        const parseIds = (raw: string) =>
+          raw
+            .split(/[,\s-]+/)
+            .map((s) => Number(s))
+            .filter((n) => Number.isFinite(n) && n >= 1 && n <= 4094);
+        const parseList = (raw?: string) =>
+          (raw ?? '')
+            .split(/[,\s]+/)
+            .map((s) => s.trim())
+            .filter(Boolean);
+
+        const asRows = (raw: unknown) => this.restRows(raw);
+        const str = (v: unknown) => (v == null ? '' : String(v));
+
+        if (protocol === 'rest_https') {
+          const base = `https://${params.host}:${params.port}/rest`;
+          const auth =
+            'Basic ' +
+            Buffer.from(`${params.username}:${params.password}`).toString(
+              'base64',
+            );
+          const [bridgesRaw, portsRaw, vlansRaw] = await Promise.all([
+            this.httpsGetJson(`${base}/interface/bridge`, auth).catch(
+              () => [] as unknown,
+            ),
+            this.httpsGetJson(`${base}/interface/bridge/port`, auth).catch(
+              () => [] as unknown,
+            ),
+            this.httpsGetJson(`${base}/interface/bridge/vlan`, auth).catch(
+              () => [] as unknown,
+            ),
+          ]);
+          const bridges = asRows(bridgesRaw);
+          const ports = asRows(portsRaw);
+          const vlans = asRows(vlansRaw);
+          return {
+            ok: true,
+            bridges: bridges.map((b) => ({
+              name: str(b.name),
+              vlanFiltering: this.isTruthy(b['vlan-filtering']),
+              disabled: this.isTruthy(b.disabled),
+            })),
+            ports: ports.map((p) => ({
+              id: str(p['.id'] || p.id) || undefined,
+              interface: str(p.interface),
+              bridge: str(p.bridge),
+              pvid: Number(p.pvid) || 1,
+              disabled: this.isTruthy(p.disabled),
+            })),
+            vlans: vlans.map((v) => ({
+              id: str(v['.id'] || v.id) || undefined,
+              vlanIds: parseIds(str(v['vlan-ids'])),
+              bridge: str(v.bridge),
+              tagged: parseList(str(v.tagged)),
+              untagged: parseList(str(v.untagged)),
+            })),
+          };
+        }
+
+        const useTls = protocol !== 'api_plain';
+        const client = new RouterOsApiClient(params.host, params.port, useTls);
+        try {
+          await client.connect();
+          await client.login(params.username, params.password);
+          const bridges = await client.print('/interface/bridge');
+          const ports = await client
+            .print('/interface/bridge/port')
+            .catch(() => [] as Record<string, string>[]);
+          const vlans = await client
+            .print('/interface/bridge/vlan')
+            .catch(() => [] as Record<string, string>[]);
+          return {
+            ok: true,
+            bridges: bridges.map((b) => ({
+              name: b.name || '',
+              vlanFiltering: this.isTruthy(b['vlan-filtering']),
+              disabled: this.isTruthy(b.disabled),
+            })),
+            ports: ports.map((p) => ({
+              id: p['.id'],
+              interface: p.interface || '',
+              bridge: p.bridge || '',
+              pvid: Number(p.pvid) || 1,
+              disabled: this.isTruthy(p.disabled),
+            })),
+            vlans: vlans.map((v) => ({
+              id: v['.id'],
+              vlanIds: parseIds(v['vlan-ids'] || ''),
+              bridge: v.bridge || '',
+              tagged: parseList(v.tagged),
+              untagged: parseList(v.untagged),
+            })),
+          };
+        } finally {
+          await client.close().catch(() => undefined);
+        }
+      });
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
+
+  async ensureBridge(params: {
+    host: string;
+    port: number;
+    username: string;
+    password: string;
+    protocol?: string;
+    name?: string;
+    vlanFiltering?: boolean;
+  }): Promise<{ ok: boolean; error?: string; name?: string }> {
+    const name = params.name?.trim() || 'bridge';
+    try {
+      return await this.withDeviceLock(params.host, params.port, async () => {
+        const protocol = params.protocol ?? 'api_ssl';
+        const vlanFiltering = params.vlanFiltering !== false;
+
+        if (protocol === 'rest_https') {
+          const base = `https://${params.host}:${params.port}/rest/interface/bridge`;
+          const auth =
+            'Basic ' +
+            Buffer.from(`${params.username}:${params.password}`).toString(
+              'base64',
+            );
+          const list = await this.httpsGetJson(base, auth).catch(
+            () => [] as unknown,
+          );
+          const rows = this.restRows(list);
+          const existing = rows.find((b) => b.name === name);
+          if (existing) {
+            const id = this.restId(existing);
+            if (
+              id &&
+              vlanFiltering &&
+              !this.isTruthy(existing['vlan-filtering'])
+            ) {
+              await this.httpsRequestJson(
+                `${base}/${encodeURIComponent(id)}`,
+                'PATCH',
+                params.username,
+                params.password,
+                { 'vlan-filtering': 'true' },
+              );
+            }
+            return { ok: true, name };
+          }
+          await this.httpsRequestJson(
+            base,
+            'PUT',
+            params.username,
+            params.password,
+            {
+              name,
+              'vlan-filtering': vlanFiltering ? 'true' : 'false',
+            },
+          );
+          return { ok: true, name };
+        }
+
+        const useTls = protocol !== 'api_plain';
+        const client = new RouterOsApiClient(params.host, params.port, useTls);
+        try {
+          await client.connect();
+          await client.login(params.username, params.password);
+          const bridges = await client.print('/interface/bridge');
+          const existing = bridges.find((b) => b.name === name);
+          if (existing?.['.id']) {
+            if (
+              vlanFiltering &&
+              !this.isTruthy(existing['vlan-filtering'])
+            ) {
+              await client.write([
+                '/interface/bridge/set',
+                `=.id=${existing['.id']}`,
+                '=vlan-filtering=yes',
+              ]);
+            }
+            return { ok: true, name };
+          }
+          await client.write([
+            '/interface/bridge/add',
+            `=name=${name}`,
+            `=vlan-filtering=${vlanFiltering ? 'yes' : 'no'}`,
+          ]);
+          return { ok: true, name };
+        } finally {
+          await client.close().catch(() => undefined);
+        }
+      });
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
+
+  async setBridgePort(params: {
+    host: string;
+    port: number;
+    username: string;
+    password: string;
+    protocol?: string;
+    interfaceName: string;
+    bridge: string;
+    pvid?: number;
+  }): Promise<{ ok: boolean; error?: string }> {
+    try {
+      return await this.withDeviceLock(params.host, params.port, async () => {
+        const protocol = params.protocol ?? 'api_ssl';
+        const pvid =
+          params.pvid != null && Number.isFinite(params.pvid)
+            ? params.pvid
+            : 1;
+
+        if (protocol === 'rest_https') {
+          const base = `https://${params.host}:${params.port}/rest/interface/bridge/port`;
+          const auth =
+            'Basic ' +
+            Buffer.from(`${params.username}:${params.password}`).toString(
+              'base64',
+            );
+          const list = await this.httpsGetJson(base, auth).catch(
+            () => [] as unknown,
+          );
+          const rows = this.restRows(list);
+          const existing = rows.find(
+            (p) => p.interface === params.interfaceName,
+          );
+          if (existing) {
+            const id = this.restId(existing);
+            await this.httpsRequestJson(
+              `${base}/${encodeURIComponent(id!)}`,
+              'PATCH',
+              params.username,
+              params.password,
+              {
+                bridge: params.bridge,
+                pvid: String(pvid),
+              },
+            );
+            return { ok: true };
+          }
+          await this.httpsRequestJson(
+            base,
+            'PUT',
+            params.username,
+            params.password,
+            {
+              interface: params.interfaceName,
+              bridge: params.bridge,
+              pvid: String(pvid),
+            },
+          );
+          return { ok: true };
+        }
+
+        const useTls = protocol !== 'api_plain';
+        const client = new RouterOsApiClient(params.host, params.port, useTls);
+        try {
+          await client.connect();
+          await client.login(params.username, params.password);
+          const ports = await client.print('/interface/bridge/port');
+          const existing = ports.find(
+            (p) => p.interface === params.interfaceName,
+          );
+          if (existing?.['.id']) {
+            await client.write([
+              '/interface/bridge/port/set',
+              `=.id=${existing['.id']}`,
+              `=bridge=${params.bridge}`,
+              `=pvid=${pvid}`,
+            ]);
+          } else {
+            await client.write([
+              '/interface/bridge/port/add',
+              `=interface=${params.interfaceName}`,
+              `=bridge=${params.bridge}`,
+              `=pvid=${pvid}`,
+            ]);
+          }
+          return { ok: true };
+        } finally {
+          await client.close().catch(() => undefined);
+        }
+      });
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
+
+  async upsertBridgeVlan(params: {
+    host: string;
+    port: number;
+    username: string;
+    password: string;
+    protocol?: string;
+    bridge: string;
+    vlanId: number;
+    tagged: string[];
+    untagged: string[];
+  }): Promise<{ ok: boolean; error?: string }> {
+    const vlanIds = String(params.vlanId);
+    const tagged = params.tagged.filter(Boolean).join(',');
+    const untagged = params.untagged.filter(Boolean).join(',');
+    try {
+      return await this.withDeviceLock(params.host, params.port, async () => {
+        const protocol = params.protocol ?? 'api_ssl';
+
+        if (protocol === 'rest_https') {
+          const base = `https://${params.host}:${params.port}/rest/interface/bridge/vlan`;
+          const auth =
+            'Basic ' +
+            Buffer.from(`${params.username}:${params.password}`).toString(
+              'base64',
+            );
+          const list = await this.httpsGetJson(base, auth).catch(
+            () => [] as unknown,
+          );
+          const rows = this.restRows(list);
+          const existing = rows.find((v) => {
+            const ids = (v['vlan-ids'] || '')
+              .split(/[,\s-]+/)
+              .map(Number);
+            return v.bridge === params.bridge && ids.includes(params.vlanId);
+          });
+          const body: Record<string, string> = {
+            bridge: params.bridge,
+            'vlan-ids': vlanIds,
+            tagged,
+            untagged,
+          };
+          if (existing) {
+            const id = this.restId(existing);
+            await this.httpsRequestJson(
+              `${base}/${encodeURIComponent(id!)}`,
+              'PATCH',
+              params.username,
+              params.password,
+              body,
+            );
+          } else {
+            await this.httpsRequestJson(
+              base,
+              'PUT',
+              params.username,
+              params.password,
+              body,
+            );
+          }
+          return { ok: true };
+        }
+
+        const useTls = protocol !== 'api_plain';
+        const client = new RouterOsApiClient(params.host, params.port, useTls);
+        try {
+          await client.connect();
+          await client.login(params.username, params.password);
+          const vlans = await client.print('/interface/bridge/vlan');
+          const existing = vlans.find((v) => {
+            const ids = (v['vlan-ids'] || '')
+              .split(/[,\s-]+/)
+              .map(Number);
+            return v.bridge === params.bridge && ids.includes(params.vlanId);
+          });
+          if (existing?.['.id']) {
+            await client.write([
+              '/interface/bridge/vlan/set',
+              `=.id=${existing['.id']}`,
+              `=bridge=${params.bridge}`,
+              `=vlan-ids=${vlanIds}`,
+              `=tagged=${tagged}`,
+              `=untagged=${untagged}`,
+            ]);
+          } else {
+            await client.write([
+              '/interface/bridge/vlan/add',
+              `=bridge=${params.bridge}`,
+              `=vlan-ids=${vlanIds}`,
+              `=tagged=${tagged}`,
+              `=untagged=${untagged}`,
+            ]);
+          }
+          return { ok: true };
+        } finally {
+          await client.close().catch(() => undefined);
+        }
+      });
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
 }
