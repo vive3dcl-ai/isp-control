@@ -673,10 +673,13 @@ const TOPOLOGY_ALTER = (schema: string) => `
     "description" varchar(255) NULL,
     "olt_ids" jsonb NOT NULL DEFAULT '[]',
     "router_ids" jsonb NOT NULL DEFAULT '[]',
+    "switch_ids" jsonb NOT NULL DEFAULT '[]',
     "created_at" TIMESTAMPTZ NOT NULL DEFAULT now(),
     "updated_at" TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT "uq_service_vlans_vlan_id" UNIQUE ("vlan_id")
   );
+  ALTER TABLE "${schema}"."service_vlans"
+    ADD COLUMN IF NOT EXISTS "switch_ids" jsonb NOT NULL DEFAULT '[]';
 
   -- v36: physical network nodes (sites) + device assignment
   CREATE TABLE IF NOT EXISTS "${schema}"."network_nodes" (

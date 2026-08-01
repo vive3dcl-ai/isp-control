@@ -10,6 +10,7 @@ import {
   isManagedOltDevice,
   DEFAULT_OLT_PORTS,
 } from './olt.constants';
+import { isMikrotikRouterOsDevice } from './switch.constants';
 import { saveDeviceIfPresent } from './device-persist.util';
 import type { NetworkDevice } from './entities/network-device.entity';
 import type { NetworkPort } from './entities/network-port.entity';
@@ -19,6 +20,7 @@ import { ZteOltClient } from './zte-olt.client';
 import { HuaweiOltClient } from './huawei-olt.client';
 import {
   CreateServiceVlanDto,
+  SyncServiceVlanDeviceDto,
   UpdateServiceVlanDto,
 } from './dto/service-vlan.dto';
 
@@ -42,13 +44,13 @@ export class ServiceVlanService {
 
   private mikrotikConn(device: NetworkDevice) {
     if (
-      device.subtype !== 'mikrotik' ||
+      !isMikrotikRouterOsDevice(device.type, device.subtype) ||
       !device.mgmtHost ||
       !device.mgmtUsername ||
       !device.mgmtPassword
     ) {
       throw new BadRequestException(
-        `Router ${device.name} no es MikroTik conectado`,
+        `${device.name} no es MikroTik RouterOS conectado`,
       );
     }
     return {
@@ -142,6 +144,7 @@ export class ServiceVlanService {
     opts: {
       olts: DeviceRef[];
       routers: DeviceRef[];
+      switches: DeviceRef[];
       syncMessages?: string[];
     },
   ) {
@@ -151,14 +154,20 @@ export class ServiceVlanService {
       description: row.description,
       oltIds: row.oltIds ?? [],
       routerIds: row.routerIds ?? [],
+      switchIds: row.switchIds ?? [],
       /** OLT(s) where this VLAN currently exists (blank if none). */
       olt: opts.olts.length ? opts.olts.map((d) => d.name).join(', ') : null,
       /** Router(s) where this VLAN currently exists (blank if none). */
       router: opts.routers.length
         ? opts.routers.map((d) => d.name).join(', ')
         : null,
+      /** Switch(es) where this VLAN currently exists (blank if none). */
+      switch: opts.switches.length
+        ? opts.switches.map((d) => d.name).join(', ')
+        : null,
       olts: opts.olts,
       routers: opts.routers,
+      switches: opts.switches,
       syncMessages: opts.syncMessages ?? [],
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
@@ -169,7 +178,12 @@ export class ServiceVlanService {
   private async discoverPresence(schema: string): Promise<{
     byVlan: Map<
       number,
-      { olts: DeviceRef[]; routers: DeviceRef[]; comments: string[] }
+      {
+        olts: DeviceRef[];
+        routers: DeviceRef[];
+        switches: DeviceRef[];
+        comments: string[];
+      }
     >;
     devices: NetworkDevice[];
   }> {
@@ -188,12 +202,17 @@ export class ServiceVlanService {
 
     const byVlan = new Map<
       number,
-      { olts: DeviceRef[]; routers: DeviceRef[]; comments: string[] }
+      {
+        olts: DeviceRef[];
+        routers: DeviceRef[];
+        switches: DeviceRef[];
+        comments: string[];
+      }
     >();
     const ensure = (vlanId: number) => {
       let row = byVlan.get(vlanId);
       if (!row) {
-        row = { olts: [], routers: [], comments: [] };
+        row = { olts: [], routers: [], switches: [], comments: [] };
         byVlan.set(vlanId, row);
       }
       return row;
@@ -202,6 +221,9 @@ export class ServiceVlanService {
     const olts = devices.filter((d) => isManagedOltDevice(d.type, d.subtype));
     const routers = devices.filter(
       (d) => d.type === 'router' && d.subtype === 'mikrotik',
+    );
+    const switches = devices.filter(
+      (d) => d.type === 'switch' && d.subtype === 'mikrotik_routeros',
     );
 
     for (const router of routers) {
@@ -213,6 +235,20 @@ export class ServiceVlanService {
           seen.add(v.vlanId);
           const row = ensure(v.vlanId);
           row.routers.push({ id: router.id, name: router.name });
+          if (v.comment?.trim()) row.comments.push(v.comment.trim());
+        }
+      }
+    }
+
+    for (const sw of switches) {
+      const devicePorts = portsByDevice.get(sw.id) ?? [];
+      const seen = new Set<number>();
+      for (const port of devicePorts) {
+        for (const v of port.vlans ?? []) {
+          if (!v.vlanId || seen.has(v.vlanId)) continue;
+          seen.add(v.vlanId);
+          const row = ensure(v.vlanId);
+          row.switches.push({ id: sw.id, name: sw.name });
           if (v.comment?.trim()) row.comments.push(v.comment.trim());
         }
       }
@@ -263,10 +299,11 @@ export class ServiceVlanService {
         const live = byVlan.get(vlanId);
         const olts = live?.olts ?? [];
         const routers = live?.routers ?? [];
+        const switches = live?.switches ?? [];
         const description =
           cat?.description ?? live?.comments.find((c) => !!c) ?? null;
         if (cat) {
-          return this.serialize(cat, { olts, routers });
+          return this.serialize(cat, { olts, routers, switches });
         }
         // Discovered only — not yet in catalog
         return {
@@ -275,10 +312,15 @@ export class ServiceVlanService {
           description,
           oltIds: olts.map((d) => d.id),
           routerIds: routers.map((d) => d.id),
+          switchIds: switches.map((d) => d.id),
           olt: olts.length ? olts.map((d) => d.name).join(', ') : null,
           router: routers.length ? routers.map((d) => d.name).join(', ') : null,
+          switch: switches.length
+            ? switches.map((d) => d.name).join(', ')
+            : null,
           olts,
           routers,
+          switches,
           syncMessages: [] as string[],
           createdAt: null as string | null,
           updatedAt: null as string | null,
@@ -304,9 +346,10 @@ export class ServiceVlanService {
         description: dto.description?.trim() || null,
         oltIds: [],
         routerIds: [],
+        switchIds: [],
       }),
     );
-    return this.serialize(row, { olts: [], routers: [] });
+    return this.serialize(row, { olts: [], routers: [], switches: [] });
   }
 
   async update(user: AuthUser, id: string, dto: UpdateServiceVlanDto) {
@@ -321,6 +364,7 @@ export class ServiceVlanService {
     }
     if (dto.oltIds !== undefined) row.oltIds = dto.oltIds;
     if (dto.routerIds !== undefined) row.routerIds = dto.routerIds;
+    if (dto.switchIds !== undefined) row.switchIds = dto.switchIds;
     row = await repo.save(row);
 
     const { byVlan } = await this.discoverPresence(schema);
@@ -328,6 +372,7 @@ export class ServiceVlanService {
     return this.serialize(row, {
       olts: live?.olts ?? [],
       routers: live?.routers ?? [],
+      switches: live?.switches ?? [],
     });
   }
 
@@ -350,6 +395,7 @@ export class ServiceVlanService {
           description: dto.description?.trim() || null,
           oltIds: dto.oltIds ?? [],
           routerIds: dto.routerIds ?? [],
+          switchIds: dto.switchIds ?? [],
         }),
       );
     } else {
@@ -359,6 +405,7 @@ export class ServiceVlanService {
       }
       if (dto.oltIds !== undefined) row.oltIds = dto.oltIds;
       if (dto.routerIds !== undefined) row.routerIds = dto.routerIds;
+      if (dto.switchIds !== undefined) row.switchIds = dto.switchIds;
       row = await repo.save(row);
     }
     const { byVlan } = await this.discoverPresence(schema);
@@ -366,6 +413,7 @@ export class ServiceVlanService {
     return this.serialize(row, {
       olts: live?.olts ?? [],
       routers: live?.routers ?? [],
+      switches: live?.switches ?? [],
     });
   }
 
@@ -378,12 +426,8 @@ export class ServiceVlanService {
     return { ok: true, message: `VLAN ${row.vlanId} eliminada del catálogo` };
   }
 
-  /** Ensure VLAN on one OLT or MikroTik (idempotent). */
-  async syncDevice(
-    user: AuthUser,
-    id: string,
-    dto: { deviceId: string; kind: 'olt' | 'router'; parentPortId?: string },
-  ) {
+  /** Ensure VLAN on one OLT, MikroTik router (L3) or switch (bridge). */
+  async syncDevice(user: AuthUser, id: string, dto: SyncServiceVlanDeviceDto) {
     const schema = this.requireSchema(user);
     const repo = await this.tenantConnections.getServiceVlanRepository(schema);
     const row = await repo.findOne({ where: { id } });
@@ -413,6 +457,36 @@ export class ServiceVlanService {
       };
     }
 
+    if (dto.kind === 'switch') {
+      if (device.type !== 'switch' || device.subtype !== 'mikrotik_routeros') {
+        throw new BadRequestException(
+          'Solo switches MikroTik RouterOS admiten push de VLAN (bridge)',
+        );
+      }
+      if (!(row.switchIds ?? []).includes(device.id)) {
+        row.switchIds = [...(row.switchIds ?? []), device.id];
+        await repo.save(row);
+      }
+      const portRepo =
+        await this.tenantConnections.getNetworkPortRepository(schema);
+      const ports = await portRepo.find({ where: { deviceId: device.id } });
+      const message = await this.ensureOnSwitch(
+        schema,
+        device,
+        ports,
+        row.vlanId,
+        row.description,
+        dto.bridge,
+        dto.ports,
+      );
+      return {
+        ok: true,
+        deviceId: device.id,
+        deviceName: device.name,
+        message,
+      };
+    }
+
     if (!(row.routerIds ?? []).includes(device.id)) {
       row.routerIds = [...(row.routerIds ?? []), device.id];
       await repo.save(row);
@@ -431,11 +505,11 @@ export class ServiceVlanService {
     return { ok: true, deviceId: device.id, deviceName: device.name, message };
   }
 
-  /** Remove VLAN from one OLT or MikroTik and unassign it. */
+  /** Remove VLAN from one OLT / MikroTik router / switch and unassign it. */
   async removeFromDevice(
     user: AuthUser,
     id: string,
-    dto: { deviceId: string; kind: 'olt' | 'router' },
+    dto: SyncServiceVlanDeviceDto,
   ) {
     const schema = this.requireSchema(user);
     const repo = await this.tenantConnections.getServiceVlanRepository(schema);
@@ -465,6 +539,14 @@ export class ServiceVlanService {
       await this.forgetOltVlan(schema, device, row.vlanId);
       row.oltIds = (row.oltIds ?? []).filter((x) => x !== device.id);
       message = result.message ?? 'eliminada de la OLT';
+    } else if (dto.kind === 'switch') {
+      message = await this.removeFromSwitch(
+        schema,
+        device,
+        row.vlanId,
+        dto.bridge,
+      );
+      row.switchIds = (row.switchIds ?? []).filter((x) => x !== device.id);
     } else {
       const result = await this.mikrotik.deleteVlanInterface({
         ...this.mikrotikConn(device),
@@ -510,10 +592,11 @@ export class ServiceVlanService {
     const live = byVlan.get(row.vlanId);
     const oltPresent = new Set((live?.olts ?? []).map((d) => d.id));
     const routerPresent = new Set((live?.routers ?? []).map((d) => d.id));
+    const switchPresent = new Set((live?.switches ?? []).map((d) => d.id));
 
     const checks: Array<{
       deviceId: string;
-      kind: 'olt' | 'router';
+      kind: 'olt' | 'router' | 'switch';
       ok: boolean;
       detail: string;
     }> = [];
@@ -559,6 +642,34 @@ export class ServiceVlanService {
       });
     }
 
+    const switchNames: string[] = [];
+    for (const switchId of row.switchIds ?? []) {
+      const device = byId.get(switchId);
+      let ok = switchPresent.has(switchId);
+      let detail = ok ? 'presente en switch' : 'no encontrada en el switch';
+      if (!ok && device) {
+        try {
+          const cfg = await this.mikrotik.getBridgeConfig(
+            this.mikrotikConn(device),
+          );
+          if (cfg.ok) {
+            ok = (cfg.vlans ?? []).some((v) => v.vlanIds.includes(row.vlanId));
+            detail = ok ? 'presente en switch' : 'no encontrada en el switch';
+          } else {
+            detail = cfg.error
+              ? `no se pudo leer el switch: ${cfg.error}`
+              : 'no se pudo leer el switch';
+          }
+        } catch (err) {
+          detail = `no se pudo leer el switch: ${
+            err instanceof Error ? err.message : String(err)
+          }`;
+        }
+      }
+      if (ok) switchNames.push(device?.name ?? switchId);
+      checks.push({ deviceId: switchId, kind: 'switch', ok, detail });
+    }
+
     const ok = checks.every((c) => c.ok);
     const missing = checks
       .filter((c) => !c.ok)
@@ -574,6 +685,7 @@ export class ServiceVlanService {
       router: live?.routers?.length
         ? live.routers.map((d) => d.name).join(', ')
         : null,
+      switch: switchNames.length ? switchNames.join(', ') : null,
     };
   }
 
@@ -673,5 +785,178 @@ export class ServiceVlanService {
     await portRepo.save(parent);
 
     return `creada (${ifaceName} en ${parent.name})`;
+  }
+
+  private async ensureOnSwitch(
+    schema: string,
+    device: NetworkDevice,
+    ports: NetworkPort[],
+    vlanId: number,
+    description: string | null,
+    bridgeName?: string,
+    membership?: Array<{ portId: string; mode: 'tagged' | 'untagged' }>,
+  ): Promise<string> {
+    if (!membership?.length) {
+      throw new BadRequestException(
+        'Selecciona al menos un puerto (tagged o untagged) en el switch',
+      );
+    }
+
+    const bridge = bridgeName?.trim() || 'bridge';
+    const conn = this.mikrotikConn(device);
+
+    const byId = new Map(ports.map((p) => [p.id, p]));
+    const tagged: string[] = [];
+    const untagged: string[] = [];
+    const selected: Array<{
+      port: NetworkPort;
+      mode: 'tagged' | 'untagged';
+    }> = [];
+
+    for (const m of membership) {
+      const port = byId.get(m.portId);
+      if (!port) {
+        throw new BadRequestException(`Puerto ${m.portId} no encontrado`);
+      }
+      if (/^vlan[_-]?/i.test(port.name) || /^lo$/i.test(port.name)) {
+        throw new BadRequestException(
+          `«${port.name}» no es un puerto físico válido para bridge VLAN`,
+        );
+      }
+      selected.push({ port, mode: m.mode });
+      if (m.mode === 'tagged') tagged.push(port.name);
+      else untagged.push(port.name);
+    }
+
+    // MikroTik expects the bridge itself in the tagged list when using
+    // vlan-filtering with CPU/management access to the VLAN.
+    if (!tagged.map((n) => n.toLowerCase()).includes(bridge.toLowerCase())) {
+      tagged.push(bridge);
+    }
+
+    const ensured = await this.mikrotik.ensureBridge({
+      ...conn,
+      name: bridge,
+      vlanFiltering: true,
+    });
+    if (!ensured.ok) {
+      throw new BadRequestException(
+        ensured.error || 'No se pudo asegurar el bridge',
+      );
+    }
+
+    const liveCfg = await this.mikrotik.getBridgeConfig(conn);
+    const livePorts = liveCfg.ok ? (liveCfg.ports ?? []) : [];
+
+    for (const { port, mode } of selected) {
+      const existing = livePorts.find(
+        (bp) => bp.interface.toLowerCase() === port.name.toLowerCase(),
+      );
+      // Untagged → this VLAN is PVID. Tagged → keep existing PVID if already
+      // on the bridge (don't clobber another access VLAN).
+      const pvid =
+        mode === 'untagged'
+          ? vlanId
+          : existing?.bridge?.toLowerCase() === bridge.toLowerCase()
+            ? existing.pvid || 1
+            : 1;
+      const set = await this.mikrotik.setBridgePort({
+        ...conn,
+        interfaceName: port.name,
+        bridge,
+        pvid,
+      });
+      if (!set.ok) {
+        throw new BadRequestException(
+          set.error || `No se pudo asignar ${port.name} al bridge`,
+        );
+      }
+    }
+
+    const vlanResult = await this.mikrotik.upsertBridgeVlan({
+      ...conn,
+      bridge,
+      vlanId,
+      tagged,
+      untagged,
+    });
+    if (!vlanResult.ok) {
+      throw new BadRequestException(
+        vlanResult.error || 'No se pudo configurar bridge VLAN',
+      );
+    }
+
+    const portRepo =
+      await this.tenantConnections.getNetworkPortRepository(schema);
+    for (const { port, mode } of selected) {
+      port.vlans = [
+        ...(port.vlans ?? []).filter((v) => v.vlanId !== vlanId),
+        {
+          vlanId,
+          mode,
+          comment: description ?? undefined,
+        },
+      ];
+      await portRepo.save(port);
+    }
+
+    const taggedLabel = tagged.filter((n) => n !== bridge).join(',') || '—';
+    const untaggedLabel = untagged.join(',') || '—';
+    return `bridge ${bridge}: tagged=[${taggedLabel}] untagged=[${untaggedLabel}]`;
+  }
+
+  private async removeFromSwitch(
+    schema: string,
+    device: NetworkDevice,
+    vlanId: number,
+    bridgeName?: string,
+  ): Promise<string> {
+    if (device.type !== 'switch' || device.subtype !== 'mikrotik_routeros') {
+      throw new BadRequestException(
+        'Solo switches MikroTik RouterOS admiten eliminar VLAN de bridge',
+      );
+    }
+    const bridge = bridgeName?.trim() || 'bridge';
+    const conn = this.mikrotikConn(device);
+
+    const cfg = await this.mikrotik.getBridgeConfig(conn);
+    if (cfg.ok) {
+      for (const bp of cfg.ports ?? []) {
+        if (bp.pvid === vlanId && bp.interface) {
+          await this.mikrotik.setBridgePort({
+            ...conn,
+            interfaceName: bp.interface,
+            bridge: bp.bridge || bridge,
+            pvid: 1,
+          });
+        }
+      }
+    }
+
+    const result = await this.mikrotik.removeBridgeVlan({
+      ...conn,
+      bridge,
+      vlanId,
+    });
+    if (!result.ok) {
+      throw new BadRequestException(
+        result.error || 'No se pudo eliminar la VLAN del switch',
+      );
+    }
+
+    const portRepo =
+      await this.tenantConnections.getNetworkPortRepository(schema);
+    const ports = await portRepo.find({ where: { deviceId: device.id } });
+    for (const port of ports) {
+      const next = (port.vlans ?? []).filter((v) => v.vlanId !== vlanId);
+      if (next.length !== (port.vlans ?? []).length) {
+        port.vlans = next;
+        await portRepo.save(port);
+      }
+    }
+
+    return result.missing
+      ? 'no existía en el switch'
+      : `eliminada del bridge ${bridge}`;
   }
 }

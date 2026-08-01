@@ -569,6 +569,11 @@ Los parsers se **ampliaron**, no se reemplazaron: `zte-olt-onu.util.ts`, `zte-ol
 - Router: `createPortVlan` → `/interface/vlan` (interfaz L3 `vlan_N`).
 - Switch RouterOS: `ensureBridge` + `setBridgePort` + `upsertBridgeVlan` → `/interface/bridge*`.
 
+### P7.3 Service VLAN → switches (Ajustes → VLANs)
+- Catálogo `service_vlans.switch_ids` + sync `kind: 'switch'` con `bridge` + `ports[{portId, mode: tagged|untagged}]`.
+- `ensureOnSwitch` / `removeFromSwitch` vía bridge helpers; verify consulta bridge live si la caché no tiene la VLAN.
+- UI `VlansSettingsTab`: sección Switches RouterOS con selector por puerto. SwitchOS write sigue en P7.1.
+
 ---
 
 ## Checklist de resolución (vacío — marcar al ir cerrando)
@@ -585,6 +590,7 @@ Los parsers se **ampliaron**, no se reemplazaron: `zte-olt-onu.util.ts`, `zte-ol
 | P6.3 | resuelto | delete VLAN silencioso + caché que la revivía |
 | P6.4 | parcial | auditoría CLI ZTE: 10 arreglados; enable-password, PON light y óptica de uplinks pendientes |
 | P7.1 | pendiente | SwitchOS write (API no oficial; solo lectura ahora) |
+| P7.3 | resuelto | push VLAN de catálogo a switch RouterOS con puertos tagged/untagged |
 | P0.1 | pendiente | TLS MikroTik |
 | P0.2 | pendiente | SSH host-key |
 | P0.3 | pendiente | SNMP RW unused |

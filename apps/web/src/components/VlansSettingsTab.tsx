@@ -20,10 +20,13 @@ type ServiceVlanRow = {
   description: string | null
   oltIds: string[]
   routerIds: string[]
+  switchIds: string[]
   olt: string | null
   router: string | null
+  switch: string | null
   olts: Array<{ id: string; name: string }>
   routers: Array<{ id: string; name: string }>
+  switches: Array<{ id: string; name: string }>
   discovered?: boolean
 }
 
@@ -31,9 +34,11 @@ type ModalMode = 'create' | 'edit'
 
 type PendingDelete = {
   device: TopologyDevice
-  kind: 'olt' | 'router'
+  kind: 'olt' | 'router' | 'switch'
   vlanId: number
 }
+
+type SwitchPortMode = 'tagged' | 'untagged'
 
 export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
   const queryClient = useQueryClient()
@@ -45,6 +50,12 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
   /** routerId → parent physical port id (only needed when creating) */
   const [routerParentPort, setRouterParentPort] = useState<
     Record<string, string>
+  >({})
+  /** switchId → bridge name (default bridge) */
+  const [switchBridge, setSwitchBridge] = useState<Record<string, string>>({})
+  /** switchId → portId → tagged|untagged */
+  const [switchPortModes, setSwitchPortModes] = useState<
+    Record<string, Record<string, SwitchPortMode | ''>>
   >({})
   const [error, setError] = useState<string | null>(null)
   const [msg, setMsg] = useState<string | null>(null)
@@ -89,6 +100,17 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
     [topologyQuery.data?.devices],
   )
 
+  const switches = useMemo(
+    () =>
+      (topologyQuery.data?.devices ?? []).filter(
+        (d) =>
+          d.type === 'switch' &&
+          d.subtype === 'mikrotik_routeros' &&
+          d.isActive,
+      ),
+    [topologyQuery.data?.devices],
+  )
+
   function invalidate() {
     void queryClient.invalidateQueries({
       queryKey: ['app', 'settings', 'vlans'],
@@ -102,6 +124,8 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
     setVlanId('')
     setDescription('')
     setRouterParentPort({})
+    setSwitchBridge({})
+    setSwitchPortModes({})
     setError(null)
   }
 
@@ -111,6 +135,8 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
     setVlanId(String(v.vlanId))
     setDescription(v.description ?? '')
     setRouterParentPort({})
+    setSwitchBridge({})
+    setSwitchPortModes({})
     setError(null)
   }
 
@@ -136,15 +162,36 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
     )
   }
 
-  function physicalPorts(router: TopologyDevice) {
-    return [...(router.ports ?? [])]
+  function switchHasVlan(sw: TopologyDevice, id: number): boolean {
+    if (editing?.switches?.some((s) => s.id === sw.id)) return true
+    return (sw.ports ?? []).some((p) =>
+      (p.vlans ?? []).some((v) => v.vlanId === id),
+    )
+  }
+
+  function physicalPorts(
+    device: TopologyDevice,
+    opts?: { excludeBridge?: boolean },
+  ) {
+    return [...(device.ports ?? [])]
       .filter(
         (p) =>
           !/^vlan[_-]?/i.test(p.name) &&
           !/^lo$/i.test(p.name) &&
-          !/^pppoe/i.test(p.name),
+          !/^pppoe/i.test(p.name) &&
+          !(opts?.excludeBridge && /^bridge/i.test(p.name)),
       )
       .sort((a, b) => a.name.localeCompare(b.name))
+  }
+
+  function switchSelectedPorts(switchId: string) {
+    const modes = switchPortModes[switchId] ?? {}
+    return Object.entries(modes)
+      .filter(([, mode]) => mode === 'tagged' || mode === 'untagged')
+      .map(([portId, mode]) => ({
+        portId,
+        mode: mode as SwitchPortMode,
+      }))
   }
 
   async function executeProgress(
@@ -199,6 +246,9 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
         ...created,
         olts: created.olts ?? [],
         routers: created.routers ?? [],
+        switches: created.switches ?? [],
+        switchIds: created.switchIds ?? [],
+        switch: created.switch ?? null,
       })
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -218,19 +268,33 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
     return upserted.id!
   }
 
-  function createOnDevice(device: TopologyDevice, kind: 'olt' | 'router') {
+  function createOnDevice(
+    device: TopologyDevice,
+    kind: 'olt' | 'router' | 'switch',
+  ) {
     if (kind === 'router' && !routerParentPort[device.id]) {
       setError(
         `Selecciona el puerto físico en «${device.name}» para crear vlan_${currentVlanId}`,
       )
       return
     }
+    if (kind === 'switch') {
+      const ports = switchSelectedPorts(device.id)
+      if (ports.length === 0) {
+        setError(
+          `Selecciona tagged/untagged en al menos un puerto de «${device.name}»`,
+        )
+        return
+      }
+    }
     setError(null)
+    const kindLabel =
+      kind === 'olt' ? 'OLT' : kind === 'router' ? 'Router' : 'Switch'
     const steps: ProgressStep[] = [
       { id: 'catalog', label: 'Guardar en catálogo', status: 'pending' },
       {
         id: 'device',
-        label: `${kind === 'olt' ? 'OLT' : 'Router'} · ${device.name} — crear VLAN`,
+        label: `${kindLabel} · ${device.name} — crear VLAN`,
         status: 'pending',
       },
       { id: 'verify', label: 'Verificar en equipos', status: 'pending' },
@@ -256,6 +320,11 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
               kind,
               parentPortId:
                 kind === 'router' ? routerParentPort[device.id] : undefined,
+              bridge:
+                kind === 'switch'
+                  ? switchBridge[device.id]?.trim() || 'bridge'
+                  : undefined,
+              ports: kind === 'switch' ? switchSelectedPorts(device.id) : undefined,
             }),
           },
         )
@@ -279,10 +348,12 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
     const { device, kind, vlanId: vid } = pendingDelete
     setPendingDelete(null)
     setDeleteConfirm('')
+    const kindLabel =
+      kind === 'olt' ? 'OLT' : kind === 'router' ? 'Router' : 'Switch'
     const steps: ProgressStep[] = [
       {
         id: 'device',
-        label: `${kind === 'olt' ? 'OLT' : 'Router'} · ${device.name} — eliminar VLAN`,
+        label: `${kindLabel} · ${device.name} — eliminar VLAN`,
         status: 'pending',
       },
       { id: 'verify', label: 'Verificar equipos restantes', status: 'pending' },
@@ -294,7 +365,14 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
           `/app/settings/vlans/${catalogId}/remove-device`,
           {
             method: 'POST',
-            body: JSON.stringify({ deviceId: device.id, kind }),
+            body: JSON.stringify({
+              deviceId: device.id,
+              kind,
+              bridge:
+                kind === 'switch'
+                  ? switchBridge[device.id]?.trim() || 'bridge'
+                  : undefined,
+            }),
           },
         )
         return r.message
@@ -348,9 +426,9 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
       </div>
 
       <p className="text-sm text-[var(--text-muted)]">
-        Catálogo de VLANs del sistema. OLT / Router muestran dónde existe hoy
-        (vacío si no está). Al editar puedes crearla o eliminarla en cada
-        equipo.
+        Catálogo de VLANs del sistema. OLT / Router / Switch muestran dónde
+        existe hoy (vacío si no está). Al editar puedes crearla o eliminarla en
+        cada equipo; en switches eliges puertos tagged/untagged del bridge.
       </p>
 
       {msg && <p className="text-sm text-emerald-500">{msg}</p>}
@@ -371,13 +449,14 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
 
       {vlans.length > 0 && (
         <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
-          <table className="w-full min-w-[640px] text-left text-sm">
+          <table className="w-full min-w-[720px] text-left text-sm">
             <thead className="border-b border-[var(--border)] bg-[var(--bg)] text-[var(--text-muted)]">
               <tr>
                 <th className="px-3 py-2 font-medium">VLAN</th>
                 <th className="px-3 py-2 font-medium">Descripción</th>
                 <th className="px-3 py-2 font-medium">OLT</th>
                 <th className="px-3 py-2 font-medium">Router</th>
+                <th className="px-3 py-2 font-medium">Switch</th>
                 <th className="px-3 py-2 font-medium">Acción</th>
               </tr>
             </thead>
@@ -398,6 +477,7 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
                   <td className="px-3 py-2.5">{v.description || '—'}</td>
                   <td className="px-3 py-2.5 text-xs">{v.olt || '—'}</td>
                   <td className="px-3 py-2.5 text-xs">{v.router || '—'}</td>
+                  <td className="px-3 py-2.5 text-xs">{v.switch || '—'}</td>
                   <td className="px-3 py-2.5">
                     {canWrite && (
                       <button
@@ -418,7 +498,7 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
 
       {modal && (
         <ModalPortal><div className="fixed inset-0 z-[100] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/50 sm:items-center sm:p-4">
-          <div className="h-[100dvh] max-h-[100dvh] w-full max-w-lg overflow-y-auto overscroll-contain rounded-none border-0 sm:h-auto sm:max-h-[min(92dvh,920px)] sm:rounded-xl sm:border border-[var(--border)] bg-[var(--bg-elevated)] p-5 text-[var(--text)] shadow-xl">
+          <div className="h-[100dvh] max-h-[100dvh] w-full max-w-xl overflow-y-auto overscroll-contain rounded-none border-0 sm:h-auto sm:max-h-[min(92dvh,920px)] sm:rounded-xl sm:border border-[var(--border)] bg-[var(--bg-elevated)] p-5 text-[var(--text)] shadow-xl">
             <h3 className="text-lg font-semibold">
               {modal === 'create'
                 ? 'Añadir VLAN'
@@ -612,6 +692,142 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
                       })}
                     </div>
                   </div>
+
+                  <div>
+                    <p className="mb-1 text-sm text-[var(--text-muted)]">
+                      Switches (MikroTik RouterOS)
+                    </p>
+                    <p className="mb-2 text-[11px] text-[var(--text-muted)]">
+                      Bridge VLAN filtering: elige tagged (trunk) o untagged
+                      (access / PVID) por puerto. SwitchOS no admite escritura
+                      aún.
+                    </p>
+                    <div className="divide-y divide-[var(--border)] rounded-lg border border-[var(--border)] bg-[var(--bg)]">
+                      {switches.length === 0 && (
+                        <p className="px-3 py-2 text-xs text-[var(--text-muted)]">
+                          Sin switches MikroTik RouterOS activos
+                        </p>
+                      )}
+                      {switches.map((sw) => {
+                        const exists = switchHasVlan(sw, currentVlanId)
+                        const ports = physicalPorts(sw, { excludeBridge: true })
+                        const selected = switchSelectedPorts(sw.id)
+                        return (
+                          <div key={sw.id} className="space-y-2 px-3 py-2">
+                            <div className="flex items-center justify-between gap-2 text-xs">
+                              <span>
+                                {sw.name}
+                                <span
+                                  className={
+                                    exists
+                                      ? 'ml-2 text-emerald-400'
+                                      : 'ml-2 text-[var(--text-muted)]'
+                                  }
+                                >
+                                  {exists ? 'creada' : 'no existe'}
+                                </span>
+                              </span>
+                              {canWrite &&
+                                (exists ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setDeleteConfirm('')
+                                      setPendingDelete({
+                                        device: sw,
+                                        kind: 'switch',
+                                        vlanId: currentVlanId,
+                                      })
+                                    }}
+                                    className="rounded-lg border border-[var(--danger)]/50 px-2 py-1 text-[var(--danger)] hover:bg-[var(--danger)]/10"
+                                  >
+                                    Eliminar
+                                  </button>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    disabled={selected.length === 0}
+                                    onClick={() => createOnDevice(sw, 'switch')}
+                                    className="rounded-lg bg-[var(--accent)] px-2 py-1 font-medium text-white hover:bg-[var(--accent-hover)] disabled:opacity-40"
+                                  >
+                                    Crear
+                                  </button>
+                                ))}
+                            </div>
+                            {!exists && canWrite && (
+                              <div className="space-y-2">
+                                <label className="block text-xs">
+                                  <span className="mb-1 block text-[var(--text-muted)]">
+                                    Bridge
+                                  </span>
+                                  <input
+                                    className={inputClass}
+                                    value={switchBridge[sw.id] ?? 'bridge'}
+                                    onChange={(e) =>
+                                      setSwitchBridge((prev) => ({
+                                        ...prev,
+                                        [sw.id]: e.target.value,
+                                      }))
+                                    }
+                                    placeholder="bridge"
+                                  />
+                                </label>
+                                {ports.length === 0 ? (
+                                  <span className="block text-[11px] text-amber-400">
+                                    Sin puertos en topología. Sincroniza el
+                                    switch primero.
+                                  </span>
+                                ) : (
+                                  <div className="max-h-48 space-y-1 overflow-y-auto rounded-md border border-[var(--border)] p-2">
+                                    {ports.map((p) => {
+                                      const mode =
+                                        switchPortModes[sw.id]?.[p.id] ?? ''
+                                      return (
+                                        <div
+                                          key={p.id}
+                                          className="flex items-center justify-between gap-2 text-xs"
+                                        >
+                                          <span className="truncate font-mono">
+                                            {p.name}
+                                            {p.comment
+                                              ? ` — ${p.comment}`
+                                              : ''}
+                                          </span>
+                                          <select
+                                            className="rounded border border-[var(--border)] bg-[var(--bg-elevated)] px-2 py-1 text-xs"
+                                            value={mode}
+                                            onChange={(e) => {
+                                              const value = e.target
+                                                .value as SwitchPortMode | ''
+                                              setSwitchPortModes((prev) => ({
+                                                ...prev,
+                                                [sw.id]: {
+                                                  ...(prev[sw.id] ?? {}),
+                                                  [p.id]: value,
+                                                },
+                                              }))
+                                            }}
+                                          >
+                                            <option value="">—</option>
+                                            <option value="tagged">
+                                              tagged
+                                            </option>
+                                            <option value="untagged">
+                                              untagged
+                                            </option>
+                                          </select>
+                                        </div>
+                                      )
+                                    })}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
                 </>
               )}
 
@@ -701,7 +917,9 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
               (
               {pendingDelete.kind === 'olt'
                 ? `no vlan ${pendingDelete.vlanId}`
-                : `interface vlan_${pendingDelete.vlanId}`}
+                : pendingDelete.kind === 'switch'
+                  ? `bridge vlan ${pendingDelete.vlanId}`
+                  : `interface vlan_${pendingDelete.vlanId}`}
               ). Puede cortar servicio. Escribe el VLAN-ID para confirmar.
             </p>
             <input

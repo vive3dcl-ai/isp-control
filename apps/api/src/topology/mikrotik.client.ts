@@ -1955,4 +1955,78 @@ export class MikrotikClient {
       };
     }
   }
+
+  /** Remove a bridge VLAN filtering entry (idempotent if missing). */
+  async removeBridgeVlan(params: {
+    host: string;
+    port: number;
+    username: string;
+    password: string;
+    protocol?: string;
+    bridge: string;
+    vlanId: number;
+  }): Promise<{ ok: boolean; error?: string; missing?: boolean }> {
+    try {
+      return await this.withDeviceLock(params.host, params.port, async () => {
+        const protocol = params.protocol ?? 'api_ssl';
+        const matchRow = (bridge: string, vlanIdsRaw: string) => {
+          const ids = vlanIdsRaw
+            .split(/[,\s-]+/)
+            .map(Number)
+            .filter((n) => Number.isFinite(n));
+          return bridge === params.bridge && ids.includes(params.vlanId);
+        };
+
+        if (protocol === 'rest_https') {
+          const base = `https://${params.host}:${params.port}/rest/interface/bridge/vlan`;
+          const auth =
+            'Basic ' +
+            Buffer.from(`${params.username}:${params.password}`).toString(
+              'base64',
+            );
+          const list = await this.httpsGetJson(base, auth).catch(
+            () => [] as unknown,
+          );
+          const rows = this.restRows(list);
+          const existing = rows.find((v) =>
+            matchRow(String(v.bridge || ''), String(v['vlan-ids'] || '')),
+          );
+          if (!existing) return { ok: true, missing: true };
+          const id = this.restId(existing);
+          if (!id) return { ok: true, missing: true };
+          await this.httpsRequestJson(
+            `${base}/${encodeURIComponent(id)}`,
+            'DELETE',
+            params.username,
+            params.password,
+          );
+          return { ok: true };
+        }
+
+        const useTls = protocol !== 'api_plain';
+        const client = new RouterOsApiClient(params.host, params.port, useTls);
+        try {
+          await client.connect();
+          await client.login(params.username, params.password);
+          const vlans = await client.print('/interface/bridge/vlan');
+          const existing = vlans.find((v) =>
+            matchRow(v.bridge || '', v['vlan-ids'] || ''),
+          );
+          if (!existing?.['.id']) return { ok: true, missing: true };
+          await client.write([
+            '/interface/bridge/vlan/remove',
+            `=.id=${existing['.id']}`,
+          ]);
+          return { ok: true };
+        } finally {
+          await client.close().catch(() => undefined);
+        }
+      });
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
 }

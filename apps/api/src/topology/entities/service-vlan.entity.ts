@@ -31,6 +31,10 @@ export class ServiceVlan {
   @Column({ name: 'router_ids', type: 'jsonb', default: () => "'[]'" })
   routerIds: string[];
 
+  /** MikroTik RouterOS switch device UUIDs this VLAN should exist on. */
+  @Column({ name: 'switch_ids', type: 'jsonb', default: () => "'[]'" })
+  switchIds: string[];
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 
