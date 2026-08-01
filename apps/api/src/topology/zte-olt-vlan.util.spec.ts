@@ -1,4 +1,5 @@
 import {
+  interpretNoVlanOutput,
   mergeVlanCatalogs,
   parseVlansFromRunningConfig,
   parseVlansFromShowVlan,
@@ -46,5 +47,32 @@ vlan 20
 `);
     expect(bare.length).toBeGreaterThan(1);
     expect(bare.every((v) => v.vlanId === 1 || !v.description)).toBe(true);
+  });
+
+  describe('interpretNoVlanOutput', () => {
+    it('accepts a clean removal', () => {
+      const r = interpretNoVlanOutput('no vlan 401\r\nZXAN(config)#');
+      expect(r).toEqual({ ok: true, absent: false, detail: null });
+    });
+
+    it('treats a missing vlan as already removed', () => {
+      const r = interpretNoVlanOutput(
+        'no vlan 401\r\n%Error 1002: vlan 401 does not exist\r\nZXAN(config)#',
+      );
+      expect(r.ok).toBe(true);
+      expect(r.absent).toBe(true);
+    });
+
+    it('fails when the OLT rejects the removal', () => {
+      const r = interpretNoVlanOutput(
+        'no vlan 401\r\n%Error: vlan 401 is used by service-port 12\r\nZXAN(config)#',
+      );
+      expect(r.ok).toBe(false);
+      expect(r.detail).toContain('service-port 12');
+    });
+
+    it('fails on a bare invalid input', () => {
+      expect(interpretNoVlanOutput('% Invalid input detected').ok).toBe(false);
+    });
   });
 });

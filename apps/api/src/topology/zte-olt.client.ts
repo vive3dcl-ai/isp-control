@@ -25,6 +25,7 @@ import {
   parseOnuOpticalTable,
   parseOnuRxByIf,
   parseOnuStateRows,
+  countUncfgDataLines,
   parseOnuUncfg,
   parseRemoteOnuEquip,
   parseRemoteOnuLanPorts,
@@ -61,6 +62,7 @@ import {
   type ZtePonPortRaw,
 } from './zte-olt-pon.util';
 import {
+  interpretNoVlanOutput,
   mergeVlanCatalogs,
   parseVlansFromRunningConfig,
   parseVlansFromShowVlan,
@@ -207,9 +209,19 @@ export class ZteOltClient {
     return `${host}:${port}`;
   }
 
-  private rememberFwFamily(host: string, port: number, family: ZteFwFamily) {
+  /** Dos OLTs distintas pueden compartir host:port detrás de NAT/VPN. */
+  private fwKey(host: string, port: number, subtypeHint?: string | null) {
+    return `${this.cliKey(host, port)}|${subtypeHint ?? ''}`;
+  }
+
+  private rememberFwFamily(
+    host: string,
+    port: number,
+    family: ZteFwFamily,
+    subtypeHint?: string | null,
+  ) {
     if (family === 'unknown') return;
-    this.fwCache.set(this.cliKey(host, port), {
+    this.fwCache.set(this.fwKey(host, port, subtypeHint), {
       family,
       atMs: Date.now(),
     });
@@ -223,19 +235,31 @@ export class ZteOltClient {
     productHint?: string | null;
     cardTypes?: string[];
   }): ZteFwFamily {
-    const cached = this.fwCache.get(this.cliKey(params.host, params.port));
-    if (cached && Date.now() - cached.atMs < 5 * 60_000) {
-      return cached.family;
-    }
-    const family = detectZteFwFamily({
+    // Un subtype declarado es más confiable que la caché: solo se usa la caché
+    // cuando la detección no puede resolver por sí sola.
+    const detected = detectZteFwFamily({
       subtype: params.subtypeHint,
       product: params.productHint ?? params.firmwareHint,
       softVer: params.firmwareHint,
       versionText: params.firmwareHint,
       cardTypes: params.cardTypes,
     });
-    this.rememberFwFamily(params.host, params.port, family);
-    return family;
+    if (detected !== 'unknown') {
+      this.rememberFwFamily(
+        params.host,
+        params.port,
+        detected,
+        params.subtypeHint,
+      );
+      return detected;
+    }
+    const cached = this.fwCache.get(
+      this.fwKey(params.host, params.port, params.subtypeHint),
+    );
+    if (cached && Date.now() - cached.atMs < 5 * 60_000) {
+      return cached.family;
+    }
+    return 'unknown';
   }
 
   private cliOnuIf(onuIf: string, family: ZteFwFamily): string {
@@ -672,7 +696,7 @@ export class ZteOltClient {
           try {
             const onuIfCli = this.cliOnuIf(onuIf, fw);
             await send(`show interface ${onuIfCli}`);
-            const text = await read(8_000);
+            const text = await read(12_000);
             const parsed = parseOnuInterfaceRates(text);
             out.push({
               onuIf,
@@ -863,8 +887,9 @@ export class ZteOltClient {
             }
             await step('exit', 5_000);
           }
-          // C6xx Titan fallback: vport interface
-          if (family === 'c6xx' || family === 'unknown') {
+          // C6xx Titan fallback: vport interface. Con `unknown` el resto del
+          // cliente asume c3xx, así que acá tampoco se manda un ifName Titan.
+          if (family === 'c6xx') {
             const vportIf = buildZteC6xxVportIf(
               toZteCanonicalOnuIf(params.onuIf),
               2,
@@ -897,17 +922,13 @@ export class ZteOltClient {
         if (!params.enable) {
           await step('tr069-mgmt 1 state lock');
         } else {
-          if (
-            !params.acsEndpoint?.trim() ||
-            !params.acsUsername?.trim() ||
-            !params.acsPassword?.trim()
-          ) {
-            throw new Error(
-              'acsEndpoint, acsUsername y acsPassword son requeridos para activar TR069',
-            );
+          if (!params.acsEndpoint?.trim()) {
+            throw new Error('acsEndpoint es requerido para activar TR069');
           }
-          const user = params.acsUsername.replace(/"/g, '');
-          const pass = params.acsPassword.replace(/"/g, '');
+          // Perfiles ACS sin credenciales son válidos (auth por SN/OUI): el
+          // usuario/clave son placeholders, no un motivo para no aprovisionar.
+          const user = (params.acsUsername?.trim() || 'acs').replace(/"/g, '');
+          const pass = (params.acsPassword?.trim() || 'acs').replace(/"/g, '');
           const ep = params.acsEndpoint.trim().replace(/^https?:\/\//i, '');
           // Huawei HG / ZTE: ACS URL with http:// is what actually triggers Inform.
           out = await step(
@@ -1997,12 +2018,9 @@ export class ZteOltClient {
           await read(8_000);
         }
 
-        await send('exit');
-        await read(8_000);
-        await send('write');
-        await read(25_000);
-        await send('exit');
-        await read(8_000);
+        // `write` desde el submodo `pon` es Invalid command: hay que salir
+        // hasta EXEC privilegiado, que es justo lo que hace este helper.
+        await this.persistRunningConfig(send, read);
 
         return {
           ok: true,
@@ -2056,7 +2074,8 @@ export class ZteOltClient {
     };
 
     // Global first (SmartOLT-style) — one/two commands vs tens of per-port loops.
-    let globalHit = false;
+    let globalRows = false;
+    let globalDropped = false;
     for (const family of ['gpon', 'epon'] as const) {
       try {
         await send(`show ${family} onu uncfg`);
@@ -2065,15 +2084,27 @@ export class ZteOltClient {
           continue;
         }
         const rows = parseOnuUncfg(uncfgOut);
-        if (!rows.length) continue;
-        globalHit = true;
+        const dataLines = countUncfgDataLines(uncfgOut);
+        if (!rows.length) {
+          if (dataLines > 0) globalDropped = true;
+          continue;
+        }
+        globalRows = true;
         this.logger.log(`ONU uncfg global ${family}: ${rows.length} row(s)`);
         for (const row of rows) await attachSuggestedId(row);
+        // Sin oltIf, el formato SN-only del comando global no se puede parsear:
+        // si quedaron líneas sin interpretar hay que barrer puerto por puerto.
+        if (rows.length < dataLines) {
+          globalDropped = true;
+          this.logger.warn(
+            `ONU uncfg global ${family}: ${rows.length}/${dataLines} líneas parseadas; se completa por puerto`,
+          );
+        }
       } catch {
         /* try next family / fall through */
       }
     }
-    if (globalHit) {
+    if (globalRows && !globalDropped) {
       this.logger.log(`ONU uncfg found: ${found.length} (global)`);
       return found;
     }
@@ -2087,7 +2118,12 @@ export class ZteOltClient {
       softVer: params.firmwareHint,
       versionText: params.firmwareHint,
     });
-    this.rememberFwFamily(params.host, params.port, dialect);
+    this.rememberFwFamily(
+      params.host,
+      params.port,
+      dialect,
+      params.subtypeHint,
+    );
 
     for (const card of cards) {
       const family = isPonLineCard(card.cfgType, card.realType);
@@ -2107,7 +2143,7 @@ export class ZteOltClient {
           await send(
             `show ${family} onu uncfg ${this.cliOltIf(oltIf, dialect)}`,
           );
-          const uncfgOut = await read(8_000);
+          const uncfgOut = await read(15_000);
           const rows = parseOnuUncfg(uncfgOut, oltIf);
           if (!rows.length) continue;
           for (const row of rows) await attachSuggestedId(row);
@@ -2178,8 +2214,10 @@ export class ZteOltClient {
         if (restrict && !restrict.has(oltIf.toLowerCase())) continue;
         const oltIfCli = this.cliOltIf(oltIf, dialect);
         try {
+          // Un puerto PON lleno tarda >15 s en firmwares V1.2: recortar este
+          // presupuesto hacía perder puertos enteros del inventario.
           await send(`show ${family} onu state ${oltIfCli}`);
-          const stateOut = await read(15_000);
+          const stateOut = await read(25_000);
           let stateRows = parseOnuStateRows(stateOut, oltIf);
           if (!stateRows.length) {
             const counts = parseOnuStateCounts(stateOut);
@@ -2223,7 +2261,7 @@ export class ZteOltClient {
           }
 
           await send(`show ${family} onu baseinfo ${oltIfCli}`);
-          const baseOut = await read(15_000);
+          const baseOut = await read(25_000);
           const baseByIf = new Map(
             parseOnuBaseInfo(baseOut, oltIf).map((b) => [
               b.onuIf.toLowerCase(),
@@ -2234,7 +2272,7 @@ export class ZteOltClient {
           let rxByIf = new Map<string, number>();
           if (stateRows.some((r) => r.online)) {
             await send(`show pon power onu-rx ${oltIfCli}`);
-            const rxOut = await read(12_000);
+            const rxOut = await read(20_000);
             rxByIf = parseOnuRxByIf(rxOut, oltIf);
           }
 
@@ -2352,14 +2390,10 @@ export class ZteOltClient {
       try {
         await send(`show pon power onu-rx ${oltIf}`);
         const rxOut = await read(12_000);
+        // `onu-rx` lista el puerto completo: si la ONU pedida no está en el
+        // mapa hay que dejarlo en null. Tomar “el primer número del texto”
+        // devolvía la lectura de otra ONU (o un dígito del ifName).
         onuRxDbm = parseOnuRxByIf(rxOut, ctx.oltIfCanon).get(onuIf) ?? null;
-        if (onuRxDbm == null) {
-          const m = rxOut.match(/(-?\d+(?:\.\d+)?)/);
-          if (m) {
-            const n = Number(m[1]);
-            if (Number.isFinite(n) && n > -50 && n < 10) onuRxDbm = n;
-          }
-        }
       } catch {
         /* optional */
       }
@@ -3239,9 +3273,12 @@ export class ZteOltClient {
       const uplinks = await this.runConfigWrite(params, async (send, read) => {
         await send('show running-config');
         const cfg = await read(120_000);
+        // Un `#` dentro de una description corta el volcado antes de tiempo.
+        // Se avisa, pero se sigue: si de verdad no hay nada, el chequeo de
+        // `names` de abajo es el que aborta y protege la caché.
         if (!looksCompleteRunningConfig(cfg)) {
-          throw new Error(
-            'running-config incompleto o truncado (uplinks); reintente sincronizar',
+          this.logger.warn(
+            'running-config parece truncado (uplinks); se parsea lo recibido',
           );
         }
         const blocks = extractAllInterfaceBlocks(cfg);
@@ -3768,15 +3805,28 @@ export class ZteOltClient {
       return await this.runConfigWrite(params, async (send, read) => {
         await send('configure terminal');
         await read(12_000);
+        // La VLAN puede no ser multicast: el error de esta línea no importa.
         await send(`no igmp mvlan ${id}`);
         await read(8_000);
         await send(`no vlan ${id}`);
-        await read(12_000);
+        const out = await read(12_000);
         await send('exit');
         await read(8_000);
+
+        const verdict = interpretNoVlanOutput(out);
+        if (!verdict.ok) {
+          return {
+            ok: false,
+            error: `la OLT rechazó \`no vlan ${id}\`: ${
+              verdict.detail ?? 'sin detalle'
+            }`,
+          };
+        }
         return {
           ok: true,
-          message: `VLAN ${id} eliminada de la OLT`,
+          message: verdict.absent
+            ? `VLAN ${id} no existía en la OLT`
+            : `VLAN ${id} eliminada de la OLT`,
         };
       });
     } catch (err) {
@@ -3942,8 +3992,8 @@ export class ZteOltClient {
       await send('show running-config');
       const cfg = await read(120_000);
       if (!looksCompleteRunningConfig(cfg)) {
-        throw new Error(
-          'running-config incompleto o truncado (PON); reintente sincronizar',
+        this.logger.warn(
+          'running-config parece truncado (PON); se parsea lo recibido',
         );
       }
       blocks = extractAllInterfaceBlocks(cfg);
@@ -4110,7 +4160,7 @@ export class ZteOltClient {
               }),
             );
             await send(`show running-config interface ${ifCli}`);
-            const cfg = await read(8_000);
+            const cfg = await read(12_000);
             await pushPort(ifName, card, family, String(p), cfg);
           } catch (e) {
             this.logger.warn(
@@ -4945,11 +4995,12 @@ class TelnetSession {
       const timer = setTimeout(() => {
         const idx = this.waiters.indexOf(entry);
         if (idx >= 0) this.waiters.splice(idx, 1);
-        reject(
-          new Error(
-            `Timeout waiting for ${re}; got: ${this.buffer.slice(-200)}`,
-          ),
-        );
+        const tail = this.buffer.slice(-200);
+        // Descartar lo leído a medias: si queda en el buffer, la respuesta
+        // atrasada de este comando se entrega como respuesta del siguiente y
+        // toda la sesión queda desfasada.
+        this.buffer = '';
+        reject(new Error(`Timeout waiting for ${re}; got: ${tail}`));
       }, timeoutMs);
       const entry = { re, resolve, reject, timer };
       this.waiters.push(entry);
@@ -5060,11 +5111,10 @@ class StreamReader {
       const timer = setTimeout(() => {
         const idx = this.waiters.indexOf(entry);
         if (idx >= 0) this.waiters.splice(idx, 1);
-        reject(
-          new Error(
-            `Timeout waiting for ${re}; got: ${this.buffer.slice(-200)}`,
-          ),
-        );
+        const tail = this.buffer.slice(-200);
+        // Igual que en telnet: sin limpiar, el siguiente comando lee esto.
+        this.buffer = '';
+        reject(new Error(`Timeout waiting for ${re}; got: ${tail}`));
       }, timeoutMs);
       const entry = { re, resolve, reject, timer };
       this.waiters.push(entry);

@@ -84,9 +84,10 @@ export function extractAllInterfaceBlocks(
       continue;
     }
     if (!current) continue;
-    // End only on next interface or CLI prompt — do not cut on section `!`
-    // (some firmwares emit `!` mid-block / aesthetic separators).
-    if (/^[\w-]+#/.test(line)) {
+    // Cierra en el prompt o en un `!` a columna 0 (separador de sección). Un
+    // `!` indentado es decorativo y no debe cortar el bloque; sin cerrar en el
+    // de columna 0, el último bloque se tragaba la config global que sigue.
+    if (/^[\w-]+#/.test(line) || /^!\s*$/.test(line)) {
       flush();
       continue;
     }

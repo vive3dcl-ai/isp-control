@@ -57,6 +57,22 @@ ZXAN#`;
     expect(parsed.description).toBe('A');
     expect(parsed.taggedVlans).toEqual([10]);
   });
+
+  it('does not absorb trailing global config into the last block', () => {
+    const trailing = `
+interface gei_1/1/1
+ description A
+!
+shutdown
+description GLOBAL
+!
+ZXAN#`;
+    const parsed = parseUplinkConfigBlock(
+      extractAllInterfaceBlocks(trailing).get('gei_1/1/1') || '',
+    );
+    expect(parsed.description).toBe('A');
+    expect(parsed.adminEnabled).toBe(true);
+  });
 });
 
 describe('zte-olt-pon.util normalize', () => {

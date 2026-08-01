@@ -933,6 +933,24 @@ export function parseOnuUncfg(
   return rows;
 }
 
+/**
+ * Cuántas líneas de `show ... onu uncfg` parecen filas de datos. Sirve para
+ * detectar que el parser dejó filas afuera (por ejemplo el formato SN-only,
+ * que necesita un oltIf y el comando global no lo trae) y así saber si hace
+ * falta completar con el escaneo por puerto.
+ */
+export function countUncfgDataLines(text: string): number {
+  let n = 0;
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    if (/^OnuIndex|^----|^Total|^show\s/i.test(trimmed)) continue;
+    if (/^\S+(?:\([^)]*\))?[#>]\s*$/.test(trimmed)) continue;
+    if (/(?:^|\s)[A-Za-z0-9]{8,16}(?:\s|$)/.test(trimmed)) n += 1;
+  }
+  return n;
+}
+
 /** Next free ONU id given occupied ids (1-based). Caps at maxOnus. */
 export function suggestNextOnuId(
   occupiedIds: Array<string | number>,

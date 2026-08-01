@@ -114,6 +114,29 @@ export class ServiceVlanService {
     await saveDeviceIfPresent(deviceRepo, device);
   }
 
+  /** Contraparte de `rememberOltVlan`: borra meta y caché para que deje de listarse. */
+  private async forgetOltVlan(
+    schema: string,
+    device: NetworkDevice,
+    vlanId: number,
+  ): Promise<void> {
+    const deviceRepo =
+      await this.tenantConnections.getNetworkDeviceRepository(schema);
+    const meta = {
+      ...((device.oltVlanMeta ?? {}) as Record<string, { isolated?: boolean }>),
+    };
+    delete meta[String(vlanId)];
+    device.oltVlanMeta = meta;
+    const cache = device.oltInventoryCache;
+    if (cache?.vlans?.length) {
+      device.oltInventoryCache = {
+        ...cache,
+        vlans: cache.vlans.filter((v) => v.vlanId !== vlanId),
+      };
+    }
+    await saveDeviceIfPresent(deviceRepo, device);
+  }
+
   private serialize(
     row: ServiceVlan,
     opts: {
@@ -439,12 +462,7 @@ export class ServiceVlanService {
           result.error || 'No se pudo eliminar la VLAN de la OLT',
         );
       }
-      const meta = {
-        ...((device.oltVlanMeta ?? {}) as Record<string, unknown>),
-      };
-      delete meta[String(row.vlanId)];
-      device.oltVlanMeta = meta as typeof device.oltVlanMeta;
-      await saveDeviceIfPresent(deviceRepo, device);
+      await this.forgetOltVlan(schema, device, row.vlanId);
       row.oltIds = (row.oltIds ?? []).filter((x) => x !== device.id);
       message = result.message ?? 'eliminada de la OLT';
     } else {

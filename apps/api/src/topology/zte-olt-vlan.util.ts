@@ -19,6 +19,31 @@ export type OltVlanMetaFlags = {
 
 export type OltVlanMetaMap = Record<string, OltVlanMetaFlags>;
 
+/**
+ * Lee la respuesta de `no vlan N`. La OLT la rechaza si la VLAN está en uso
+ * (service-port, interfaz, uplink) y sin mirar la salida el panel informaba
+ * “eliminada” con la VLAN todavía configurada.
+ */
+export function interpretNoVlanOutput(out: string): {
+  ok: boolean;
+  /** La VLAN ya no estaba: borrar es idempotente. */
+  absent: boolean;
+  detail: string | null;
+} {
+  const absent = /not\s+exist|no\s+such|not\s+found/i.test(out);
+  const rejected =
+    /%\s*\w*\s*Error|Invalid input|Unknown command|Incomplete|Failed|is\s+used|in\s+use/i.test(
+      out,
+    );
+  if (absent || !rejected) return { ok: true, absent, detail: null };
+  const detail =
+    out
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find((line) => /%|error|invalid|fail|used|in use/i.test(line)) ?? null;
+  return { ok: false, absent: false, detail };
+}
+
 /** Extract `vlan N` blocks + related global flags from running-config. */
 export function parseVlansFromRunningConfig(cfg: string): ZteVlanRaw[] {
   const byId = new Map<number, ZteVlanRaw>();

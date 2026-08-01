@@ -1887,6 +1887,14 @@ export class TopologyService {
     delete meta[String(vlanId)];
     device.oltVlanMeta = meta as NetworkDevice['oltVlanMeta'];
     await saveDeviceIfPresent(deviceRepo, device);
+    // Si el refresh de abajo falla, la VLAN borrada no puede seguir listándose
+    // desde la caché.
+    const cached = this.inventoryCache(device);
+    if (cached.vlans?.length) {
+      await this.saveInventoryCache(schema, device, {
+        vlans: cached.vlans.filter((v) => v.vlanId !== vlanId),
+      });
+    }
     try {
       await this.refreshVlansViaCli(schema, device, 'interactive');
     } catch {

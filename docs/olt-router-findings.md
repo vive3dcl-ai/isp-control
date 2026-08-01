@@ -505,11 +505,50 @@ Contexto: todo funcionaba con ZTE C320 hasta `b3e49a7` (“Harden platform secur
 - **Qué:** Antes de `b3e49a7`, `discoverPresence` abría Telnet y leía las VLANs de cada OLT (`listVlans`), así que `verify` las encontraba. El commit lo cambió a leer **solo** `oltVlanMeta` (“Do NOT open Telnet here… Live OLT VLAN scrape stays on explicit sync/verify actions”), pero `verify` sigue usando `discoverPresence` y **ningún** paso del asistente de VLANs escribe `oltVlanMeta`: `ensureOnOlt` confirma/crea por CLI y no anota nada. Resultado: el paso 2 daba OK (“ya existía en la OLT”) y el 3 fallaba siempre con “VLAN N: faltan equipos”. El camino del panel de la OLT (`topology.upsertDeviceVlan`) sí anotaba la meta, de ahí que pareciera aleatorio. La lista de VLANs también mostraba la columna OLT vacía.
 - **Fix:** (1) `ensureOnOlt` anota la VLAN en `oltVlanMeta` vía `rememberOltVlan` tanto si la creó como si ya existía; (2) `discoverPresence` suma `oltInventoryCache.vlans` (sigue siendo DB-only, sin Telnet); (3) si esas dos fuentes no la conocen, `verify` sí consulta la OLT por CLI y, cuando la encuentra, actualiza la meta; (4) el mensaje de error ahora nombra el equipo y el motivo (“no encontrada en la OLT”, “no se pudo leer la OLT: …”) en vez de “faltan equipos”.
 
+### P6.3 “Eliminar VLAN” decía OK y la VLAN seguía en la OLT — RESUELTO
+- **Archivos:** `zte-olt.client.ts` `deleteVlan`, `zte-olt-vlan.util.ts` (`interpretNoVlanOutput` + spec), `service-vlan.service.ts` (`forgetOltVlan`), `topology.service.ts` (`deleteDeviceVlan`)
+- **Qué:** `deleteVlan` mandaba `no igmp mvlan N` + `no vlan N` y devolvía `ok: true` **sin mirar la salida**. La C320 rechaza `no vlan` si la VLAN está en uso (service-port de una ONU, interfaz, uplink), así que el panel informaba “VLAN N eliminada de la OLT” y la VLAN seguía configurada — y al refrescar volvía a aparecer. Segundo efecto, del arreglo de P6.1: al sumar `oltInventoryCache.vlans` como fuente de presencia, borrar solo `oltVlanMeta` dejaba la VLAN listada igual.
+- **Fix:** `interpretNoVlanOutput` (testeado, 4 casos) distingue borrado limpio, “does not exist” (idempotente, se acepta) y rechazo (`%Error…`, `is used by…`) devolviendo el motivo de la OLT; `deleteVlan` ahora falla con ese texto. `forgetOltVlan` borra meta **y** entrada de la caché en el mismo save; `deleteDeviceVlan` purga la caché antes del `refreshVlansViaCli` para que un refresh fallido no reviva la fila.
+- **Huawei:** no afectado — `config()` llama `throwIfCliError` tras cada comando, así que `undo vlan N` ya lanzaba.
+
 ### P6.2 Aislamiento de VLAN: 3 comandos a ciegas y el rechazo se reporta como éxito
 - **Archivo:** `zte-olt.client.ts` `upsertVlan` (~3695)
 - **Qué:** Prueba `no all-to-all` → `isolate enable` → `isolate` (o los inversos) y si los tres fallan devuelve `ok: true` con el aviso “la OLT rechazó el comando de aislamiento (revisa el firmware)”. Es previo a `b3e49a7` (no es regresión), pero es el mensaje de “comando mal estructurado” que ve el operador y deja la VLAN sin el aislamiento pedido sin fallar.
 - **Acción:** confirmar la sintaxis real por dialecto (C320 V1.2/V2.1 vs C6xx) y usar una sola, o al menos reflejar en el resultado que el aislamiento no se aplicó.
 - **Relacionado:** P1.15 y P3.8 (se fuerza `isolated: true` en todos los create).
+
+### P6.4 Auditoría CLI ZTE completa: `9fd0a47` → HEAD
+
+Se comparó comando por comando toda la superficie CLI ZTE contra el último commit bueno.
+
+**Conclusión previa importante:** el dialecto de ifName **no** es la regresión de la C320. Todos los caminos c3xx siguen emitiendo `gpon-olt_1/2/1` / `gpon-onu_1/2/1:5`, y `unknown` cae a c3xx. Los ifName en el cable son idénticos antes y después. El daño está en otras cuatro áreas.
+
+#### Resueltos en esta pasada
+
+| # | Qué | Archivo |
+|---|-----|---------|
+| 1 | **El lector se desfasaba tras un timeout.** `readUntil` (telnet y SSH) rechazaba sin limpiar `this.buffer`, así que la respuesta atrasada del comando N se entregaba como respuesta del N+1 durante el resto de la sesión: estados de ONU, SN y potencias mal atribuidos, o puertos enteros perdidos. Es la causa raíz de los síntomas “datos raros” intermitentes. | `zte-olt.client.ts` (ambos `readUntil`) |
+| 2 | **Timeouts de lectura recortados ~40%.** `show gpon onu state` 25→15 s, `baseinfo` 25→15 s, `pon power onu-rx` 20→12 s, `onu uncfg` por puerto 15→8 s, `show interface` 12→8 s, `show running-config interface` 12→8 s. Un puerto PON lleno en V1.2 pasa de 15 s. Restaurados. | `zte-olt.client.ts` |
+| 3 | **`looksCompleteRunningConfig` convertía degradación en error.** Rechazaba el volcado si la última línea no era un prompt; como `readUntil` resuelve con el primer `#` que aparece, un `#` dentro de una `description` truncaba el dump y las pestañas Uplinks / PON fallaban por completo. Ahora avisa y parsea lo recibido: el chequeo de “cero interfaces” que ya existía debajo es el que protege la caché. | `zte-olt.client.ts` (`listUplinks`, PON light) |
+| 4 | **Señal inventada.** En el fallback de RX, si la ONU pedida no estaba en el mapa se tomaba “el primer número del texto” del puerto completo: devolvía la lectura de otra ONU o un dígito del propio ifName (típico `1 dBm`). Eliminado; ahora queda `null`. | `zte-olt.client.ts` |
+| 5 | **`!` no cerraba el bloque de interfaz.** El último bloque del volcado se tragaba la config global que sigue, y un `shutdown`/`description` global se atribuía al último uplink o puerto PON. Ahora cierra en `!` a columna 0 y sigue ignorando el `!` indentado (decorativo). | `zte-olt-uplink.util.ts` + spec |
+| 6 | **TR069 exigía usuario y clave de ACS.** Antes tenían default `'acs'`; cualquier perfil ACS sin credenciales (auth por SN/OUI) dejó de aprovisionar. Defaults restaurados; el endpoint sigue siendo obligatorio. | `zte-olt.client.ts` |
+| 7 | **`show gpon onu uncfg` global podía ocultar ONUs.** Se parsea sin `defaultOltIf`, así que el formato SN-only queda afuera; y con ≥1 fila parseada se hacía `return` y el barrido por puerto no corría. Ahora se compara filas parseadas contra líneas de datos (`countUncfgDataLines`) y, si se perdió alguna, se completa por puerto (el dedupe por SN ya existía). | `zte-olt.client.ts`, `zte-olt-onu.util.ts` + spec |
+| 8 | **ifName Titan hacia una C320.** El fallback `interface vport-…` de TR069 corría con `family === 'unknown'`, cuando todo el resto del cliente asume c3xx en ese caso. Ahora solo con `c6xx`. | `zte-olt.client.ts` |
+| 9 | **`write` desde submodo.** `ensureOnuTypeOnOlt` salía un solo `exit` del submodo `pon` y mandaba `write` crudo, que en ZTE es Invalid command; ahora usa `persistRunningConfig` (`end` + `write`). | `zte-olt.client.ts` |
+| 10 | **La caché de dialecto le ganaba al modelo declarado.** Una entrada de 5 min por `host:port` cortocircuitaba la detección antes de leer el `subtype`; dos OLTs detrás del mismo NAT/VPN compartían dialecto. Ahora el subtype declarado manda, la caché solo se usa cuando la detección da `unknown`, y la clave incluye el subtype. | `zte-olt.client.ts` |
+
+#### Pendientes (necesitan decisión o la OLT del usuario)
+
+- **Contraseña de enable:** `b3e49a7` reemplazó el `zxr10` hardcodeado por la contraseña de login. Quitar el default fue correcto; perder el campo no: `NetworkDevice.mgmtEnablePassword` existe pero `topology.service.ts:168` lo descarta explícitamente y el cliente nunca lo recibe. Una C320 con usuario que no sea privilegio 15 y enable de fábrica se queda en EXEC de usuario y todo falla después. Falla con timeout (no corrompe), y el setup documentado es privilegio 15 sin enable, así que el alcance es limitado. Arreglo: pasar `mgmtEnablePassword` por los `zteConn()` y usar `enablePassword ?? password` en los 4 sitios de enable (toca ~46 firmas de método, por eso no se hizo acá).
+- **`listPonPorts` en modo light no lee ONUs ni óptica:** solo `show card` + un `show running-config`. `onuOnline`, `onuTotal`, `avgSignalDbm`, `txPowerDbm` quedan en 0/null y `status` es solo `adminEnabled ? 'Up' : 'Down'`. `topology.service.ts` lo compensa con el overlay SNMP, así que en una OLT **sin** SNMP la pestaña Puertos muestra todo Up con 0 ONUs. Arreglo: caer al camino completo por puerto cuando no hay overlay, o exponer `light: false` en el refresh manual.
+- **`listUplinks` dejó de leer cada interfaz:** se quitaron `show interface <if>` y `show interface optical-module-info <if>`, así que `negotiation`, `wavelengthNm`, `signalDbm` y `tempC` son `null` fijos y `parseInterfaceStatus` / `parseOpticalUplink` quedaron sin llamador. Arreglo: reemitirlos cuando `priority === 'interactive'`.
+- **Comandos a ciegas que devuelven `ok: true` sin mirar la respuesta** (previos a `b3e49a7`, no regresiones): `setRogueDetect`, `configureUplink`, `configurePonPort`, `enableAllPonPorts`, los `onu-type-if` de `ensureOnuTypeOnOlt`, el `name`/`description` de `authorizeOnu` y los `ip-host` de TR069. Mismo patrón que causó P6.3.
+- **Sin verificar contra hardware:** la salida real de `show vlan` y `show gpon onu uncfg` en una C320 V1.2/V2.1 (no hay capturas en el repo; el regex nuevo de `show vlan` solo se prueba contra un fixture sintético), y si `show running-config | include …` lo acepta el firmware del usuario.
+
+#### Sin regresión (verificado)
+
+Los parsers se **ampliaron**, no se reemplazaron: `zte-olt-onu.util.ts`, `zte-olt-pon.util.ts`, `zte-olt-speed.util.ts` y `zte-olt-onu-type.util.ts` siguen matcheando el formato clásico de la C320 (los alternantes Titan se sumaron con `|`). `zte-olt-vlan.util.ts` sigue siendo c3xx-only en su escaneo de tags PON/ONU: si algo rompe ahí, rompe en C6xx, no en C320. La anidación de `configure terminal` está balanceada en todos los bloques.
 
 ---
 
@@ -524,6 +563,8 @@ Contexto: todo funcionaba con ZTE C320 hasta `b3e49a7` (“Harden platform secur
 | P5.5 | resuelto | saveDeviceIfPresent en escrituras lentas |
 | P6.1 | resuelto | verify VLAN en OLT (regresión multi-vendor) |
 | P6.2 | pendiente | aislamiento VLAN ZTE: comandos a ciegas |
+| P6.3 | resuelto | delete VLAN silencioso + caché que la revivía |
+| P6.4 | parcial | auditoría CLI ZTE: 10 arreglados; enable-password, PON light y óptica de uplinks pendientes |
 | P0.1 | pendiente | TLS MikroTik |
 | P0.2 | pendiente | SSH host-key |
 | P0.3 | pendiente | SNMP RW unused |
