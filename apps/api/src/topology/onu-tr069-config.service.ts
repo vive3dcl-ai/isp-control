@@ -1529,13 +1529,16 @@ export class OnuTr069ConfigService {
       const dns = wan.wanDns2 ? `${wan.wanDns1},${wan.wanDns2}` : wan.wanDns1;
       // Hojas estándar TR-098. NATEnabled es lo que hace que LAN y WiFi salgan
       // por la IP WAN; sin él la ONU enruta pero nadie traduce.
+      //
+      // SubnetMask va en un SPV aparte: en Huawei HG8245W5 el lote completo
+      // puede responder 200 y dejar la máscara en blanco. Sin máscara el CPE
+      // declara Connected, no envía unicast y no aparece en ARP.
       const core: Array<[string, string | number | boolean, string?]> = [
         [`${conn}.Enable`, true, 'xsd:boolean'],
         [`${conn}.ConnectionType`, 'IP_Routed', 'xsd:string'],
         [`${conn}.NATEnabled`, true, 'xsd:boolean'],
         [`${conn}.AddressingType`, 'Static', 'xsd:string'],
         [`${conn}.ExternalIPAddress`, wan.wanIp, 'xsd:string'],
-        [`${conn}.SubnetMask`, wan.wanMask, 'xsd:string'],
         [`${conn}.DefaultGateway`, wan.wanGateway, 'xsd:string'],
         [`${conn}.DNSServers`, dns, 'xsd:string'],
       ];
@@ -1544,6 +1547,14 @@ export class OnuTr069ConfigService {
       if (result.status === 200) notes.push('WAN estática aplicada por TR069');
       else if (result.status === 202) notes.push('WAN encolada en ACS');
       else notes.push(`WAN TR069 status ${result.status}`);
+
+      const maskNote = await this.ensureWanSubnetMask(
+        client,
+        deviceId,
+        conn,
+        wan.wanMask,
+      );
+      if (maskNote) notes.push(maskNote);
 
       // La VLAN va en una hoja propietaria distinta por fabricante y sólo se
       // manda si el árbol la expone: SetParameterValues es atómico, así que una
@@ -1580,6 +1591,54 @@ export class OnuTr069ConfigService {
       return notes.join(' · ');
     } catch (e) {
       return `WAN en DB; TR069 falló: ${e instanceof Error ? e.message : e}`;
+    }
+  }
+
+  /**
+   * Empuja SubnetMask en un SPV propio y, si el CPE la deja en blanco, lo
+   * reintenta una vez. Algunos Huawei aceptan el resto del lote WAN y borran
+   * la máscara: el resultado es Connected sin ARP.
+   */
+  private async ensureWanSubnetMask(
+    client: GenieAcsNbiClient,
+    deviceId: string,
+    conn: string,
+    wanMask: string,
+  ): Promise<string | null> {
+    const path = `${conn}.SubnetMask`;
+    try {
+      const first = await client.setParameterValues(deviceId, [
+        [path, wanMask, 'xsd:string'],
+      ]);
+      if (first.status !== 200 && first.status !== 202) {
+        return `máscara WAN status ${first.status}`;
+      }
+
+      // Solo podemos verificar al momento si la escritura fue síncrona.
+      if (first.status === 202) {
+        return `máscara ${wanMask} encolada`;
+      }
+
+      try {
+        await client.refreshObject(deviceId, conn);
+      } catch {
+        /* si no refresca, al menos ya la escribimos */
+      }
+      const rows = await client.findDevices({ _id: deviceId });
+      const device = rows[0];
+      const got = device ? strVal(genieGet(device, path)) : null;
+      if (got && got === wanMask) {
+        return `máscara ${wanMask}`;
+      }
+
+      const retry = await client.setParameterValues(deviceId, [
+        [path, wanMask, 'xsd:string'],
+      ]);
+      return retry.status === 200
+        ? `máscara ${wanMask} (reintento; antes=${got || 'vacía'})`
+        : `máscara reintento status ${retry.status} (antes=${got || 'vacía'})`;
+    } catch (e) {
+      return `máscara WAN: ${e instanceof Error ? e.message : String(e)}`;
     }
   }
 
