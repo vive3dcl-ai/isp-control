@@ -1,9 +1,12 @@
 import {
+  CONN_REQ_INFORM_INTERVAL_S,
   CONN_REQ_USERNAME,
   buildConnReqParameterValues,
   connReqCredentials,
   connReqPassword,
   detectDataModelRoot,
+  shouldShortenInformInterval,
+  shouldWriteConnReqCredentials,
 } from './onu-connreq-credentials.util';
 
 describe('credenciales de petición de conexión', () => {
@@ -54,6 +57,40 @@ describe('raíz del modelo de datos', () => {
   it('ante la duda asume TR-098, que es lo que usan estas ONUs', () => {
     expect(detectDataModelRoot(null)).toBe('InternetGatewayDevice');
     expect(detectDataModelRoot({})).toBe('InternetGatewayDevice');
+  });
+});
+
+describe('cuándo reescribir las credenciales', () => {
+  it('las escribe si el CPE no tiene ninguna', () => {
+    expect(shouldWriteConnReqCredentials(null)).toBe(true);
+    expect(shouldWriteConnReqCredentials('')).toBe(true);
+    expect(shouldWriteConnReqCredentials('   ')).toBe(true);
+  });
+
+  it('las reescribe si son de otro sistema, como las migradas de SmartOLT', () => {
+    expect(shouldWriteConnReqCredentials('RMS')).toBe(true);
+    expect(shouldWriteConnReqCredentials('admin')).toBe(true);
+  });
+
+  it('no las toca si ya son las nuestras: la clave no se puede releer', () => {
+    expect(shouldWriteConnReqCredentials(CONN_REQ_USERNAME)).toBe(false);
+    expect(shouldWriteConnReqCredentials(` ${CONN_REQ_USERNAME} `)).toBe(false);
+  });
+});
+
+describe('intervalo de inform', () => {
+  it('lo acorta cuando el CPE llega con un intervalo largo', () => {
+    expect(shouldShortenInformInterval(43200)).toBe(true);
+  });
+
+  it('lo pone si el CPE no declara ninguno', () => {
+    expect(shouldShortenInformInterval(null)).toBe(true);
+    expect(shouldShortenInformInterval(Number.NaN)).toBe(true);
+  });
+
+  it('no lo alarga si el CPE ya informa más seguido', () => {
+    expect(shouldShortenInformInterval(60)).toBe(false);
+    expect(shouldShortenInformInterval(CONN_REQ_INFORM_INTERVAL_S)).toBe(false);
   });
 });
 

@@ -27,8 +27,19 @@ import {
 import { stripHuaweiDialectTag } from './huawei-olt-firmware.util';
 import {
   buildConnReqParameterValues,
+  connReqPassword,
+  CONN_REQ_INFORM_INTERVAL_S,
   detectDataModelRoot,
+  shouldShortenInformInterval,
+  shouldWriteConnReqCredentials,
 } from './onu-connreq-credentials.util';
+import {
+  buildDigestAuthorization,
+  DigestChallenge,
+  factoryConnReqCandidates,
+  newCnonce,
+  parseDigestChallenge,
+} from './onu-connreq-kick.util';
 import {
   pickServiceWanConnection,
   type WanConnectionCandidate,
@@ -1647,8 +1658,10 @@ export class OnuTr069ConfigService {
    *
    * Sin estas credenciales el CPE responde 401 a la petición de conexión y todo
    * lo que mandemos se queda en cola hasta el siguiente Inform periódico, que en
-   * algunos modelos pasa de la hora. Se fija una sola vez por equipo y a partir
-   * de ahí las órdenes se aplican al momento.
+   * algunos modelos pasa de la hora.
+   *
+   * Las ONUs migradas llegan con las credenciales del sistema anterior, así que
+   * no basta con mirar si hay usuario: hay que comprobar que sea el nuestro.
    */
   private async ensureConnReqCredentials(
     client: GenieAcsNbiClient,
@@ -1660,8 +1673,8 @@ export class OnuTr069ConfigService {
     const base = `${root}.ManagementServer`;
     const usernamePath = `${base}.ConnectionRequestUsername`;
 
-    // Si ya hay usuario puesto, damos por hecho que la clave la pusimos con él.
-    if (strVal(genieGet(device, usernamePath))) return null;
+    const current = strVal(genieGet(device, usernamePath));
+    if (!shouldWriteConnReqCredentials(current)) return null;
 
     // El nodo tiene que existir en el árbol: escribir a ciegas sólo genera un
     // fallo que GenieACS reintenta para siempre.
@@ -1679,11 +1692,119 @@ export class OnuTr069ConfigService {
         deviceId,
         buildConnReqParameterValues(serial, root),
       );
-      return r.status === 200
-        ? 'credenciales de conexión fijadas'
-        : `credenciales de conexión encoladas (status ${r.status})`;
+      const note =
+        r.status === 200
+          ? 'credenciales de conexión fijadas'
+          : `credenciales de conexión encoladas (status ${r.status})`;
+      const informNote = await this.ensureInformInterval(
+        client,
+        deviceId,
+        device,
+        base,
+      );
+      // Encoladas quiere decir que el CPE nos rechazó: hay que despertarlo con
+      // las suyas o esperaría al Inform con la WAN todavía sin configurar.
+      const kickNote =
+        r.status === 200
+          ? null
+          : await this.kickWithFactoryCredentials(device, base, current, serial);
+
+      return [note, informNote, kickNote].filter(Boolean).join(' · ');
     } catch (e) {
       return `credenciales de conexión: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  /**
+   * Llama al CPE por su cuenta con las credenciales que trae de fábrica.
+   *
+   * El ACS sólo sabe usar las que tiene guardadas, así que con un equipo
+   * migrado siempre recibe 401. Una única llamada con las del sistema anterior
+   * basta para que abra sesión y aplique de golpe lo que haya en cola, incluidas
+   * las credenciales nuestras; a partir de ahí ya no hace falta.
+   */
+  private async kickWithFactoryCredentials(
+    device: Record<string, unknown>,
+    base: string,
+    currentUsername: string | null,
+    serial: string,
+  ): Promise<string | null> {
+    const url = strVal(genieGet(device, `${base}.ConnectionRequestURL`));
+    if (!url) return null;
+
+    let path: string;
+    try {
+      const parsed = new URL(url);
+      path = `${parsed.pathname}${parsed.search}`;
+    } catch {
+      return null;
+    }
+
+    for (const cred of factoryConnReqCandidates(
+      currentUsername,
+      connReqPassword(serial),
+    )) {
+      let challenge: DigestChallenge | null;
+      try {
+        const first = await fetch(url, { signal: AbortSignal.timeout(8_000) });
+        if (first.status < 300) return 'CPE despertado sin autenticación';
+        challenge = parseDigestChallenge(
+          first.headers.get('www-authenticate'),
+        );
+      } catch {
+        return 'no hay ruta hacia el CPE para despertarlo';
+      }
+      if (!challenge) return null;
+
+      try {
+        const res = await fetch(url, {
+          headers: {
+            Authorization: buildDigestAuthorization({
+              challenge,
+              uri: path,
+              username: cred.username,
+              password: cred.password,
+              cnonce: newCnonce(),
+            }),
+          },
+          signal: AbortSignal.timeout(8_000),
+        });
+        if (res.status < 300) return 'CPE despertado con sus credenciales';
+      } catch {
+        return 'no hay ruta hacia el CPE para despertarlo';
+      }
+    }
+    return 'el CPE no acepta ninguna credencial conocida: se aplicará en su próximo Inform';
+  }
+
+  /**
+   * Acorta el Inform periódico del CPE. Es lo que limita cuánto tarda en
+   * aplicarse una orden si la petición de conexión falla: las ONUs migradas
+   * llegan con 12 horas.
+   */
+  private async ensureInformInterval(
+    client: GenieAcsNbiClient,
+    deviceId: string,
+    device: Record<string, unknown>,
+    base: string,
+  ): Promise<string | null> {
+    const path = `${base}.PeriodicInformInterval`;
+    if (!genieNodeExists(device, path)) return null;
+
+    const raw = genieGet(device, path);
+    const current = typeof raw === 'number' ? raw : Number(strVal(raw));
+    if (!shouldShortenInformInterval(current)) return null;
+
+    try {
+      const r = await client.setParameterValues(deviceId, [
+        [`${base}.PeriodicInformEnable`, true, 'xsd:boolean'],
+        [path, CONN_REQ_INFORM_INTERVAL_S, 'xsd:unsignedInt'],
+      ]);
+      return r.status === 200 || r.status === 202
+        ? `inform cada ${CONN_REQ_INFORM_INTERVAL_S}s`
+        : `inform status ${r.status}`;
+    } catch (e) {
+      return `inform: ${e instanceof Error ? e.message : String(e)}`;
     }
   }
 

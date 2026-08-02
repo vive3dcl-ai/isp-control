@@ -38,6 +38,37 @@ export function connReqCredentials(serial: string): {
 }
 
 /**
+ * ¿Hay que (re)escribir las credenciales de petición de conexión?
+ *
+ * La clave no se puede leer del CPE, así que lo único fiable es el usuario: si
+ * es el nuestro, la clave la pusimos nosotros y sirve. Cualquier otro valor
+ * viene de fábrica o del sistema anterior — las ONUs migradas llegan con las de
+ * SmartOLT (`RMS`) — y con ellas el ACS recibe 401 y todo se queda en cola.
+ */
+export function shouldWriteConnReqCredentials(
+  currentUsername: string | null | undefined,
+): boolean {
+  return (currentUsername ?? '').trim() !== CONN_REQ_USERNAME;
+}
+
+/**
+ * Intervalo de Inform que dejamos en el CPE, en segundos.
+ *
+ * Es la red de seguridad: cuando la petición de conexión falla, todo lo que
+ * mande el ACS espera al siguiente Inform. Las ONUs migradas llegan con 43200
+ * (12 h), que convierte cualquier reintento en una avería de medio día.
+ */
+export const CONN_REQ_INFORM_INTERVAL_S = 300;
+
+/** Sólo se acorta; si el CPE ya informa seguido, no se toca. */
+export function shouldShortenInformInterval(
+  current: number | null | undefined,
+): boolean {
+  if (current == null || !Number.isFinite(current)) return true;
+  return current > CONN_REQ_INFORM_INTERVAL_S;
+}
+
+/**
  * Raíz del modelo de datos del CPE: los TR-098 cuelgan de
  * `InternetGatewayDevice`, los TR-181 de `Device`.
  */
