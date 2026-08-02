@@ -668,7 +668,7 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
                             key={o.id}
                             className="flex items-center justify-between gap-2 px-3 py-2 text-xs"
                           >
-                            <span>
+                            <span className="min-w-0 flex-1 truncate">
                               {o.name}
                               <span
                                 className={
@@ -692,7 +692,7 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
                                       vlanId: currentVlanId,
                                     })
                                   }}
-                                  className="rounded-lg border border-[var(--danger)]/50 px-2 py-1 text-[var(--danger)] hover:bg-[var(--danger)]/10"
+                                  className="shrink-0 rounded-lg border border-[var(--danger)]/50 px-2 py-1 text-[var(--danger)] hover:bg-[var(--danger)]/10"
                                 >
                                   Eliminar
                                 </button>
@@ -700,7 +700,7 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
                                 <button
                                   type="button"
                                   onClick={() => createOnDevice(o, 'olt')}
-                                  className="rounded-lg bg-[var(--accent)] px-2 py-1 font-medium text-white hover:bg-[var(--accent-hover)]"
+                                  className="shrink-0 rounded-lg bg-[var(--accent)] px-2 py-1 font-medium text-white hover:bg-[var(--accent-hover)]"
                                 >
                                   Crear
                                 </button>
@@ -727,7 +727,7 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
                         return (
                           <div key={r.id} className="space-y-2 px-3 py-2">
                             <div className="flex items-center justify-between gap-2 text-xs">
-                              <span>
+                              <span className="min-w-0 flex-1 truncate">
                                 {r.name}
                                 <span
                                   className={
@@ -751,7 +751,7 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
                                         vlanId: currentVlanId,
                                       })
                                     }}
-                                    className="rounded-lg border border-[var(--danger)]/50 px-2 py-1 text-[var(--danger)] hover:bg-[var(--danger)]/10"
+                                    className="shrink-0 rounded-lg border border-[var(--danger)]/50 px-2 py-1 text-[var(--danger)] hover:bg-[var(--danger)]/10"
                                   >
                                     Eliminar
                                   </button>
@@ -760,7 +760,7 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
                                     type="button"
                                     disabled={!routerParentPort[r.id]}
                                     onClick={() => createOnDevice(r, 'router')}
-                                    className="rounded-lg bg-[var(--accent)] px-2 py-1 font-medium text-white hover:bg-[var(--accent-hover)] disabled:opacity-40"
+                                    className="shrink-0 rounded-lg bg-[var(--accent)] px-2 py-1 font-medium text-white hover:bg-[var(--accent-hover)] disabled:opacity-40"
                                   >
                                     Crear
                                   </button>
@@ -825,7 +825,7 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
                         return (
                           <div key={sw.id} className="space-y-2 px-3 py-2">
                             <div className="flex items-center justify-between gap-2 text-xs">
-                              <span>
+                              <span className="min-w-0 flex-1 truncate">
                                 {sw.name}
                                 <span
                                   className={
@@ -918,23 +918,19 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
                                           placeholder="nombre del bridge nuevo"
                                         />
                                       )}
-                                      {info?.failed ? (
-                                        <span className="mt-1 block text-[11px] text-amber-400">
-                                          No se pudieron leer los bridges del
-                                          switch. Con «Automático» el servidor
-                                          usa el de los puertos elegidos.
-                                        </span>
-                                      ) : choice === NEW_BRIDGE ? (
-                                        <span className="mt-1 block text-[11px] text-amber-400">
-                                          Solo puertos que hoy no estén en otro
-                                          bridge: mover uno cortaría su tráfico.
-                                        </span>
-                                      ) : (
-                                        <span className="mt-1 block text-[11px] text-[var(--text-muted)]">
-                                          La VLAN se suma al bridge existente
-                                          sin mover los puertos.
-                                        </span>
-                                      )}
+                                      <span
+                                        className={`mt-1 block min-h-[28px] text-[11px] ${
+                                          info?.failed || choice === NEW_BRIDGE
+                                            ? 'text-amber-400'
+                                            : 'text-[var(--text-muted)]'
+                                        }`}
+                                      >
+                                        {info?.failed
+                                          ? 'No se pudieron leer los bridges. «Automático» usa el de los puertos elegidos.'
+                                          : choice === NEW_BRIDGE
+                                            ? 'Solo puertos libres: sacar uno de otro bridge cortaría su tráfico.'
+                                            : 'La VLAN se suma al bridge existente sin mover los puertos.'}
+                                      </span>
                                     </label>
                                   )
                                 })()}
@@ -953,7 +949,7 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
                                           key={p.id}
                                           className="flex items-center justify-between gap-2 text-xs"
                                         >
-                                          <span className="truncate">
+                                          <span className="min-w-0 flex-1 truncate">
                                             <span className="font-mono">
                                               {p.name}
                                             </span>
@@ -974,7 +970,7 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
                                               : ''}
                                           </span>
                                           <select
-                                            className="rounded border border-[var(--border)] bg-[var(--bg-elevated)] px-2 py-1 text-xs"
+                                            className="w-28 shrink-0 rounded border border-[var(--border)] bg-[var(--bg-elevated)] px-2 py-1 text-xs"
                                             value={mode}
                                             onChange={(e) => {
                                               const value = e.target

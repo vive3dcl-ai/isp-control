@@ -12,6 +12,7 @@ import {
 } from './olt.constants';
 import { isMikrotikRouterOsDevice } from './switch.constants';
 import { portMoveError, resolveSwitchBridge } from './switch-bridge.util';
+import { withVlanInCache } from './olt-vlan-cache.util';
 import { saveDeviceIfPresent } from './device-persist.util';
 import type { NetworkDevice } from './entities/network-device.entity';
 import type { NetworkPort } from './entities/network-port.entity';
@@ -101,6 +102,7 @@ export class ServiceVlanService {
     device: NetworkDevice,
     vlanId: number,
     isolated?: boolean,
+    description?: string | null,
   ): Promise<void> {
     const deviceRepo =
       await this.tenantConnections.getNetworkDeviceRepository(schema);
@@ -108,12 +110,27 @@ export class ServiceVlanService {
       ...((device.oltVlanMeta ?? {}) as Record<string, { isolated?: boolean }>),
     };
     const prev = meta[String(vlanId)];
-    if (prev && (isolated === undefined || prev.isolated === isolated)) return;
-    meta[String(vlanId)] = {
-      ...(prev ?? {}),
-      ...(isolated === undefined ? {} : { isolated }),
-    };
-    device.oltVlanMeta = meta;
+    const metaChanged =
+      !prev || (isolated !== undefined && prev.isolated !== isolated);
+    if (metaChanged) {
+      meta[String(vlanId)] = {
+        ...(prev ?? {}),
+        ...(isolated === undefined ? {} : { isolated }),
+      };
+      device.oltVlanMeta = meta;
+    }
+
+    // Counterpart of forgetOltVlan: VLAN pickers (IP pools) are built from the
+    // inventory cache, and it only refreshes every OLT_INVENTORY_CONFIG_TTL_MS
+    // in the background. Without this the VLAN exists on the OLT but stays
+    // invisible in those pickers for up to half an hour.
+    const nextCache = withVlanInCache(device.oltInventoryCache, vlanId, {
+      isolated,
+      description,
+    });
+    if (nextCache) device.oltInventoryCache = nextCache;
+
+    if (!metaChanged && !nextCache) return;
     await saveDeviceIfPresent(deviceRepo, device);
   }
 
@@ -619,7 +636,15 @@ export class ServiceVlanService {
           if (scan.ok) {
             ok = scan.vlans.some((v) => v.vlanId === row.vlanId);
             detail = ok ? 'presente en OLT' : 'no encontrada en la OLT';
-            if (ok) await this.rememberOltVlan(schema, device, row.vlanId);
+            if (ok) {
+              await this.rememberOltVlan(
+                schema,
+                device,
+                row.vlanId,
+                undefined,
+                row.description,
+              );
+            }
           } else {
             detail = scan.error
               ? `no se pudo leer la OLT: ${scan.error}`
@@ -700,7 +725,13 @@ export class ServiceVlanService {
     const conn = this.zteConn(olt);
     const live = await this.oltCli(olt).listVlans(conn);
     if (live.ok && live.vlans.some((v) => v.vlanId === vlanId)) {
-      await this.rememberOltVlan(schema, olt, vlanId);
+      await this.rememberOltVlan(
+        schema,
+        olt,
+        vlanId,
+        undefined,
+        description,
+      );
       return 'ya existía en la OLT';
     }
     const result = await this.oltCli(olt).upsertVlan({
@@ -712,7 +743,7 @@ export class ServiceVlanService {
     if (!result.ok) {
       throw new BadRequestException(result.error || 'No se pudo crear en OLT');
     }
-    await this.rememberOltVlan(schema, olt, vlanId, true);
+    await this.rememberOltVlan(schema, olt, vlanId, true, description);
     return result.message ?? 'creada en la OLT';
   }
 

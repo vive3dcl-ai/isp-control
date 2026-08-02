@@ -45,6 +45,11 @@ export type IpPoolAddressesResponse = {
   total: number
   assigned: number
   available: number
+  /** Wide pools are paged: the API caps how many hosts it enumerates. */
+  offset: number
+  limit: number
+  returned: number
+  truncated: boolean
   addresses: IpPoolAddressRow[]
 }
 

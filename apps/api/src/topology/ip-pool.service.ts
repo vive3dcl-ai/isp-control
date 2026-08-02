@@ -10,7 +10,14 @@ import type { IpPool } from './entities/ip-pool.entity';
 import type { NetworkDevice } from './entities/network-device.entity';
 import type { Onu } from './entities/onu.entity';
 import { CreateIpPoolDto, UpdateIpPoolDto } from './dto/ip-pool.dto';
-import { computeIpNetwork, firstFreeIp, isIpInUsable } from './ip-pool.util';
+import {
+  computeIpNetwork,
+  enumerateUsableHosts,
+  firstFreeIp,
+  isIpInUsable,
+  MAX_ENUMERATED_HOSTS,
+  type IpNetworkInfo,
+} from './ip-pool.util';
 import { MikrotikClient } from './mikrotik.client';
 
 @Injectable()
@@ -191,16 +198,14 @@ export class IpPoolService {
   }
 
   /** Same as poolStats but never throws (for list rendering). */
-  private poolStatsSafe(
-    gateway: string,
-    prefix: number,
-  ): { totalUsable: number; network: string; gateway: string; prefix: number } {
+  private poolStatsSafe(gateway: string, prefix: number): IpNetworkInfo {
     try {
       return computeIpNetwork(gateway, prefix);
     } catch {
       return {
         totalUsable: 0,
         network: gateway || '',
+        broadcast: gateway || '',
         gateway: gateway || '',
         prefix: prefix || 0,
       };
@@ -347,7 +352,7 @@ export class IpPoolService {
         await this.tenantConnections.getIpPoolAllocationRepository(schema);
       const allocs = await allocRepo.find({ where: { poolId: existing.id } });
       for (const a of allocs) {
-        if (!isIpInUsable(a.ipAddress, net.usableHosts)) {
+        if (!isIpInUsable(a.ipAddress, net)) {
           throw new BadRequestException(
             `Ya existe el pool ${dto.purpose} VLAN ${dto.vlanId}, pero no se puede actualizar la red: la IP asignada ${a.ipAddress} quedaría fuera de ${net.gateway}/${net.prefix}`,
           );
@@ -471,7 +476,7 @@ export class IpPoolService {
       await this.tenantConnections.getIpPoolAllocationRepository(schema);
     const allocs = await allocRepo.find({ where: { poolId: id } });
     for (const a of allocs) {
-      if (!isIpInUsable(a.ipAddress, net.usableHosts)) {
+      if (!isIpInUsable(a.ipAddress, net)) {
         throw new BadRequestException(
           `No se puede cambiar la red: la IP asignada ${a.ipAddress} quedaría fuera del nuevo rango`,
         );
@@ -603,13 +608,21 @@ export class IpPoolService {
     return { ok: true };
   }
 
-  async listAddresses(user: AuthUser, id: string) {
+  async listAddresses(
+    user: AuthUser,
+    id: string,
+    page?: { offset?: number; limit?: number },
+  ) {
     const schema = this.requireSchema(user);
     const repo = await this.tenantConnections.getIpPoolRepository(schema);
     const p = await repo.findOne({ where: { id } });
     if (!p) throw new NotFoundException('IP pool not found');
 
-    await this.reclaimOrphanAllocations(schema, id);
+    try {
+      await this.reclaimOrphanAllocations(schema, id);
+    } catch {
+      // Viewing the pool must still work if orphan cleanup fails.
+    }
 
     const net = this.poolStats(p.gateway, p.prefix);
     const allocRepo =
@@ -629,7 +642,12 @@ export class IpPoolService {
         : [];
     const onuById = new Map(onus.map((o) => [o.id, o]));
 
-    const addresses = net.usableHosts.map((ip) => {
+    const offset = Math.max(0, Math.trunc(page?.offset ?? 0));
+    const limit = Math.min(
+      MAX_ENUMERATED_HOSTS,
+      Math.max(1, Math.trunc(page?.limit ?? MAX_ENUMERATED_HOSTS)),
+    );
+    const addresses = enumerateUsableHosts(net, { offset, limit }).map((ip) => {
       const a = byIp.get(ip);
       const onu = a?.onuId ? onuById.get(a.onuId) : null;
       return {
@@ -651,6 +669,10 @@ export class IpPoolService {
       total: net.totalUsable,
       assigned: allocs.length,
       available: net.totalUsable - allocs.length,
+      offset,
+      limit,
+      returned: addresses.length,
+      truncated: offset + addresses.length < net.totalUsable,
       addresses,
     };
   }
@@ -754,14 +776,17 @@ export class IpPoolService {
     }
     // Must use .from(...) — bare createQueryBuilder().delete() throws and
     // used to break GET /ip-pools (UI showed an empty list).
+    //
+    // Keep this uncorrelated: `onus` has its own `onu_id` column (the varchar
+    // ONU index), so an unqualified `onu_id` inside a subquery binds to that
+    // one and Postgres rejects the statement with
+    // "operator does not exist: uuid = character varying".
     const qb = allocRepo
       .createQueryBuilder()
       .delete()
       .from(allocRepo.metadata.target)
       .where('onu_id IS NOT NULL')
-      .andWhere(
-        `NOT EXISTS (SELECT 1 FROM "${schema}"."onus" o WHERE o.id = onu_id)`,
-      );
+      .andWhere(`onu_id NOT IN (SELECT o.id FROM "${schema}"."onus" o)`);
     if (poolId) {
       qb.andWhere('pool_id = :poolId', { poolId });
     }
@@ -773,7 +798,7 @@ export class IpPoolService {
     schema: string,
     poolId: string,
     onuId: string,
-    usableHosts: string[],
+    net: IpNetworkInfo,
   ) {
     const allocRepo =
       await this.tenantConnections.getIpPoolAllocationRepository(schema);
@@ -785,7 +810,7 @@ export class IpPoolService {
       const assigned = new Set(
         allocs.filter((a) => a.onuId).map((a) => a.ipAddress),
       );
-      const free = firstFreeIp(usableHosts, assigned);
+      const free = firstFreeIp(net, assigned);
       if (!free) {
         throw new BadRequestException('El pool no tiene IPs libres');
       }
@@ -888,12 +913,7 @@ export class IpPoolService {
     await this.deleteOnuAllocationsForPurpose(schema, onu.id, 'management');
 
     const net = this.poolStats(pool.gateway, pool.prefix);
-    const row = await this.allocateLowestFreeIp(
-      schema,
-      pool.id,
-      onu.id,
-      net.usableHosts,
-    );
+    const row = await this.allocateLowestFreeIp(schema, pool.id, onu.id, net);
     const free = row.ipAddress;
 
     onu.mgmtIp = free;
@@ -991,12 +1011,7 @@ export class IpPoolService {
 
     if (!keep) {
       const net = this.poolStats(pool.gateway, pool.prefix);
-      keep = await this.allocateLowestFreeIp(
-        schema,
-        pool.id,
-        onu.id,
-        net.usableHosts,
-      );
+      keep = await this.allocateLowestFreeIp(schema, pool.id, onu.id, net);
     }
 
     onu.wanIp = keep.ipAddress;

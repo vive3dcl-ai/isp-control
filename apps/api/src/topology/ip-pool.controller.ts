@@ -47,8 +47,13 @@ export class IpPoolController {
   listAddresses(
     @CurrentUser() user: AuthUser,
     @Param('id', ParseUUIDPipe) id: string,
+    @Query('offset') offset?: string,
+    @Query('limit') limit?: string,
   ) {
-    return this.ipPools.listAddresses(user, id);
+    return this.ipPools.listAddresses(user, id, {
+      offset: offset != null ? Number(offset) : undefined,
+      limit: limit != null ? Number(limit) : undefined,
+    });
   }
 
   @Post()

@@ -19,6 +19,9 @@ const inputClass =
 type PurposeTab = IpPoolPurpose
 type FormModal = 'create' | 'edit' | null
 
+/** Anything wider is unusual for a client pool and only the API pages it. */
+const MIN_RECOMMENDED_PREFIX = 20
+
 export function IpPoolsSettingsTab({ canWrite }: { canWrite: boolean }) {
   const queryClient = useQueryClient()
   const { confirm } = useNotify()
@@ -172,6 +175,11 @@ export function IpPoolsSettingsTab({ canWrite }: { canWrite: boolean }) {
     return previewNetwork(gateway, p)
   }, [gateway, prefix])
 
+  const prefixTooWide = useMemo(() => {
+    const p = Number(prefix)
+    return Number.isInteger(p) && p >= 8 && p < MIN_RECOMMENDED_PREFIX
+  }, [prefix])
+
   function invalidate() {
     void queryClient.invalidateQueries({
       queryKey: ['app', 'settings', 'ip-pools'],
@@ -256,6 +264,18 @@ export function IpPoolsSettingsTab({ canWrite }: { canWrite: boolean }) {
   })
 
   const vlanSelectReady = !!oltId && !!routerId
+
+  /** The OLT VLAN list is cached for 30 min; let the user force a CLI read. */
+  const refreshVlans = useMutation({
+    mutationFn: () =>
+      apiFetch<OltVlansResponse>(
+        `/app/topology/devices/${oltId}/vlans?refresh=1`,
+      ),
+    onSuccess: (data) => {
+      queryClient.setQueryData(['app', 'topology', 'vlans', oltId], data)
+    },
+    onError: (e: Error) => setError(e.message),
+  })
 
   /** Another catalog pool already uses this router + VLAN + gateway. */
   const gatewayAlreadyInCatalog = useMemo(() => {
@@ -555,8 +575,20 @@ export function IpPoolsSettingsTab({ canWrite }: { canWrite: boolean }) {
                 )}
               </label>
               <label className="block text-sm">
-                <span className="mb-1 block text-[var(--text-muted)]">
-                  VLAN
+                <span className="mb-1 flex items-center justify-between gap-2">
+                  <span className="text-[var(--text-muted)]">VLAN</span>
+                  {formModal === 'create' && !!oltId && (
+                    <button
+                      type="button"
+                      className="text-xs text-[var(--accent)] hover:underline disabled:opacity-50"
+                      disabled={refreshVlans.isPending}
+                      onClick={() => refreshVlans.mutate()}
+                    >
+                      {refreshVlans.isPending
+                        ? 'Leyendo OLT…'
+                        : 'Releer desde la OLT'}
+                    </button>
+                  )}
                 </span>
                 {formModal === 'edit' ? (
                   <input
@@ -596,6 +628,18 @@ export function IpPoolsSettingsTab({ canWrite }: { canWrite: boolean }) {
                     No se pudieron leer VLANs de la OLT.
                   </span>
                 )}
+                {formModal === 'create' &&
+                  vlanSelectReady &&
+                  !vlansQuery.isLoading &&
+                  !vlansQuery.isError && (
+                    <span className="mt-1 block text-xs text-[var(--text-muted)]">
+                      {vlansQuery.data?.vlans.length ?? 0} VLANs en la OLT
+                      {vlansQuery.data?.syncedAt
+                        ? ` · leídas ${new Date(vlansQuery.data.syncedAt).toLocaleString()}`
+                        : ''}
+                      . Si falta alguna, usa “Releer desde la OLT”.
+                    </span>
+                  )}
               </label>
               {!routerId && formModal === 'edit' && (
                 <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
@@ -654,13 +698,19 @@ export function IpPoolsSettingsTab({ canWrite }: { canWrite: boolean }) {
                   <input
                     className={inputClass}
                     type="number"
-                    min={8}
+                    min={MIN_RECOMMENDED_PREFIX}
                     max={30}
                     value={prefix}
                     onChange={(e) => setPrefix(e.target.value)}
                     disabled={formModal === 'create' ? !routerHasVlan : !routerId}
                   />
                 </div>
+                {prefixTooWide && (
+                  <p className="mt-1 text-xs text-amber-400">
+                    /{prefix} son {preview.totalUsable} IPs. Para pools de
+                    clientes usa /{MIN_RECOMMENDED_PREFIX} o más específico.
+                  </p>
+                )}
               </label>
               <label className="block text-sm">
                 <span className="mb-1 block text-[var(--text-muted)]">
@@ -768,11 +818,20 @@ export function IpPoolsSettingsTab({ canWrite }: { canWrite: boolean }) {
                   : ''}
               </p>
               {addressesQuery.data && (
-                <p className="mt-1 text-xs text-[var(--text-muted)]">
-                  {addressesQuery.data.assigned} asignadas ·{' '}
-                  {addressesQuery.data.available} disponibles · gateway{' '}
-                  {addressesQuery.data.gateway} (excluido)
-                </p>
+                <>
+                  <p className="mt-1 text-xs text-[var(--text-muted)]">
+                    {addressesQuery.data.assigned} asignadas ·{' '}
+                    {addressesQuery.data.available} disponibles · gateway{' '}
+                    {addressesQuery.data.gateway} (excluido)
+                  </p>
+                  {addressesQuery.data.truncated && (
+                    <p className="mt-1 text-xs text-amber-400">
+                      Red muy amplia: se muestran{' '}
+                      {addressesQuery.data.returned} de{' '}
+                      {addressesQuery.data.total} IPs.
+                    </p>
+                  )}
+                </>
               )}
             </div>
             <div className="flex-1 overflow-y-auto px-5 py-3">
