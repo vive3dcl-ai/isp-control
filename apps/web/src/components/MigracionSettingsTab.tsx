@@ -6,16 +6,33 @@ import type { IpPoolsResponse } from '../lib/ip-pools'
 import type { Tr069ProfilesResponse } from '../lib/tr069'
 import {
   filterBySourceVlan,
+  matchesSearch,
   scanMigrationOlts,
   type MigrationCandidate,
   type MigrationSegmentConfig,
 } from '../lib/onu-migration'
 import { MigrationWizardModal } from './MigrationWizardModal'
 
+/** Subset of the VLAN catalog (Ajustes → VLANs) needed to label the segment. */
+type CatalogVlan = {
+  vlanId: number
+  description: string | null
+  oltIds: string[]
+}
+
+type SourceVlanOption = {
+  vlanId: number
+  description: string | null
+  candidates: number
+  /** Present in the VLAN catalog, not just detected on an ONU. */
+  inCatalog: boolean
+}
+
 export function MigracionSettingsTab({ canWrite }: { canWrite: boolean }) {
   const queryClient = useQueryClient()
   const [oltId, setOltId] = useState('')
   const [sourceVlan, setSourceVlan] = useState<string>('')
+  const [search, setSearch] = useState('')
   const [mgmtVlanPick, setMgmtVlanPick] = useState('')
   const [wanVlanPick, setWanVlanPick] = useState('')
   const [tr069ProfilePick, setTr069ProfilePick] = useState('')
@@ -69,6 +86,11 @@ export function MigracionSettingsTab({ canWrite }: { canWrite: boolean }) {
       apiFetch<Tr069ProfilesResponse>('/app/settings/tr069/profiles'),
     enabled: !!oltId,
   })
+  const catalogVlansQuery = useQuery({
+    queryKey: ['app', 'settings', 'vlans'],
+    queryFn: () =>
+      apiFetch<{ vlans: CatalogVlan[] }>('/app/settings/vlans'),
+  })
 
   const mgmtPools = mgmtPoolsQuery.data?.pools ?? []
   const wanPools = wanPoolsQuery.data?.pools ?? []
@@ -80,18 +102,57 @@ export function MigracionSettingsTab({ canWrite }: { canWrite: boolean }) {
 
   const sourceVlanNum = sourceVlan ? Number(sourceVlan) : null
 
-  const pending = useMemo(() => {
-    const list = scan?.candidates ?? []
-    const filtered = filterBySourceVlan(list, sourceVlanNum)
-    return filtered.filter((c) => !migratedIfs.has(c.onuIf))
-  }, [scan, sourceVlanNum, migratedIfs])
+  const segmentCandidates = useMemo(
+    () => filterBySourceVlan(scan?.candidates ?? [], sourceVlanNum),
+    [scan, sourceVlanNum],
+  )
 
-  const segmentTotal = useMemo(() => {
-    const list = scan?.candidates ?? []
-    return filterBySourceVlan(list, sourceVlanNum).length
-  }, [scan, sourceVlanNum])
+  const pending = useMemo(
+    () => segmentCandidates.filter((c) => !migratedIfs.has(c.onuIf)),
+    [segmentCandidates, migratedIfs],
+  )
 
+  const segmentTotal = segmentCandidates.length
   const segmentDone = segmentTotal - pending.length
+
+  /** Search only narrows the table; progress stays on the whole segment. */
+  const visibleCandidates = useMemo(
+    () => segmentCandidates.filter((c) => matchesSearch(c, search)),
+    [segmentCandidates, search],
+  )
+
+  const sourceVlanOptions = useMemo<SourceVlanOption[]>(() => {
+    const counts = new Map<number, number>()
+    for (const c of scan?.candidates ?? []) {
+      const ids = new Set<number>(c.vlans ?? [])
+      if (c.vlan != null) ids.add(c.vlan)
+      for (const id of ids) counts.set(id, (counts.get(id) ?? 0) + 1)
+    }
+
+    const byId = new Map<number, SourceVlanOption>()
+    for (const v of scan?.sourceVlans ?? []) {
+      byId.set(v, {
+        vlanId: v,
+        description: null,
+        candidates: counts.get(v) ?? 0,
+        inCatalog: false,
+      })
+    }
+    // The scan only reports VLANs it saw on candidate ONUs, so VLANs created in
+    // the system are missing until an ONU actually uses them. Merge the catalog
+    // in (skipping VLANs pushed only to other OLTs) so they can be picked.
+    for (const v of catalogVlansQuery.data?.vlans ?? []) {
+      if (oltId && v.oltIds?.length && !v.oltIds.includes(oltId)) continue
+      const prev = byId.get(v.vlanId)
+      byId.set(v.vlanId, {
+        vlanId: v.vlanId,
+        description: v.description ?? prev?.description ?? null,
+        candidates: prev?.candidates ?? counts.get(v.vlanId) ?? 0,
+        inCatalog: true,
+      })
+    }
+    return [...byId.values()].sort((a, b) => a.vlanId - b.vlanId)
+  }, [scan, catalogVlansQuery.data?.vlans, oltId])
 
   const busy = inventoryQuery.isFetching
 
@@ -174,6 +235,7 @@ export function MigracionSettingsTab({ canWrite }: { canWrite: boolean }) {
               setWanVlanPick('')
               setTr069ProfilePick('')
               setSourceVlan('')
+              setSearch('')
             }}
           >
             <option value="">Seleccionar…</option>
@@ -192,19 +254,30 @@ export function MigracionSettingsTab({ canWrite }: { canWrite: boolean }) {
           <select
             className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2"
             value={sourceVlan}
-            disabled={!scan}
+            disabled={!oltId}
             onChange={(e) => {
               setSourceVlan(e.target.value)
               setMigratedIfs(new Set())
             }}
           >
             <option value="">Todas las candidatas</option>
-            {(scan?.sourceVlans ?? []).map((v) => (
-              <option key={v} value={String(v)}>
-                VLAN {v}
+            {sourceVlanOptions.map((v) => (
+              <option key={v.vlanId} value={String(v.vlanId)}>
+                VLAN {v.vlanId}
+                {v.description ? ` — ${v.description}` : ''}
+                {v.candidates > 0
+                  ? ` · ${v.candidates} candidata${v.candidates === 1 ? '' : 's'}`
+                  : ' · sin candidatas'}
+                {v.inCatalog ? '' : ' · fuera del catálogo'}
               </option>
             ))}
           </select>
+          {sourceVlanOptions.length === 0 && !!oltId && (
+            <span className="mt-1 block text-xs text-[var(--text-muted)]">
+              Sin VLANs detectadas ni en el catálogo. Créalas en Ajustes →
+              VLANs.
+            </span>
+          )}
         </label>
 
         <label className="block text-sm">
@@ -299,6 +372,29 @@ export function MigracionSettingsTab({ canWrite }: { canWrite: boolean }) {
             </button>
           </div>
 
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              className="min-w-0 flex-1 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm outline-none ring-[var(--accent)] focus:ring-2"
+              placeholder="Buscar cliente, SN, ONU, VLAN…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+            {search.trim() && (
+              <>
+                <span className="shrink-0 text-xs text-[var(--text-muted)]">
+                  {visibleCandidates.length} de {segmentTotal}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setSearch('')}
+                  className="shrink-0 rounded-lg border border-[var(--border)] px-2 py-1 text-xs hover:border-[var(--accent)] hover:text-[var(--accent)]"
+                >
+                  Limpiar
+                </button>
+              </>
+            )}
+          </div>
+
           <div>
             <div className="mb-1 flex justify-between text-[11px] text-[var(--text-muted)]">
               <span>
@@ -328,7 +424,7 @@ export function MigracionSettingsTab({ canWrite }: { canWrite: boolean }) {
                 </tr>
               </thead>
               <tbody>
-                {filterBySourceVlan(scan.candidates, sourceVlanNum).map(
+                {visibleCandidates.map(
                   (c) => {
                     const done = migratedIfs.has(c.onuIf)
                     return (
@@ -410,14 +506,15 @@ export function MigracionSettingsTab({ canWrite }: { canWrite: boolean }) {
                     )
                   },
                 )}
-                {filterBySourceVlan(scan.candidates, sourceVlanNum).length ===
-                  0 && (
+                {visibleCandidates.length === 0 && (
                   <tr>
                     <td
                       colSpan={7}
                       className="px-3 py-6 text-center text-[var(--text-muted)]"
                     >
-                      No hay candidatas en este segmento.
+                      {search.trim()
+                        ? `Ninguna candidata coincide con «${search.trim()}».`
+                        : 'No hay candidatas en este segmento.'}
                     </td>
                   </tr>
                 )}

@@ -68,6 +68,44 @@ export function filterBySourceVlan(
   })
 }
 
+/** Lowercase and strip accents so «Muñoz» matches a plain «munoz». */
+function normalizeSearch(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+}
+
+/** Free-text match over every field the migration table shows. */
+export function matchesSearch(
+  candidate: MigrationCandidate,
+  query: string,
+): boolean {
+  const needle = normalizeSearch(query)
+  if (!needle) return true
+  const terms = needle.split(/\s+/)
+  const haystack = normalizeSearch(
+    [
+      candidate.onuIf,
+      candidate.sn,
+      candidate.name,
+      candidate.description,
+      candidate.suggestedClientName,
+      candidate.suggestedFirstName,
+      candidate.suggestedLastName,
+      candidate.suggestedServiceName,
+      candidate.onuType,
+      ...(candidate.vlans ?? []).map(String),
+      candidate.vlan != null ? String(candidate.vlan) : '',
+    ]
+      .filter(Boolean)
+      .join(' '),
+  )
+  // Every term must appear, so «juan casa» narrows instead of widening.
+  return terms.every((t) => haystack.includes(t))
+}
+
 const SERVICE_SUFFIXES = new Set(
   [
     'casa',
