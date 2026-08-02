@@ -15,6 +15,13 @@ import {
   parseWalkIndexes,
   rawOpticalToDbm,
 } from './zte-olt-snmp.oids';
+import {
+  ZTE_HEALTH_OIDS,
+  readOltHealthSnmp,
+  type OltHealthCandidates,
+  type OltHealthMetrics,
+  type OltHealthOidCache,
+} from './olt-snmp-health.util';
 
 export type ZteSnmpConn = {
   host: string;
@@ -58,6 +65,8 @@ export type ZteSnmpProbeResult = {
   /** Whether the SNMPv2 IF-MIB ifXTable can be walked on this firmware. */
   ifTableV2Compatible?: boolean;
   warning?: string;
+  /** CPU / RAM / temperature when the OLT exposes them over SNMP. */
+  health?: OltHealthMetrics;
 };
 
 export type ZteSnmpPortRow = {
@@ -111,6 +120,8 @@ export class ZteOltSnmpClient {
   /** Per-host SNMP serialization (OLT agents dislike concurrent walks/GETs). */
   private readonly snmpBusy = new Set<string>();
   private readonly snmpWaiters = new Map<string, SnmpLockWaiter[]>();
+  /** Resolved CPU/RAM/temperature leaf OIDs per host (see olt-snmp-health). */
+  private readonly healthOids = new Map<string, OltHealthOidCache>();
 
   private ifIndexKey(host: string, onuIf: string) {
     return `${host.trim().toLowerCase()}|${onuIf.trim().toLowerCase()}`;
@@ -387,6 +398,7 @@ export class ZteOltSnmpClient {
           sysUpTimeTicks: ticks ?? undefined,
           ifTableV2Compatible: !warning,
           warning,
+          health: await this.readHealth(session, params.host),
         };
       } finally {
         session.close();
@@ -396,6 +408,37 @@ export class ZteOltSnmpClient {
         ok: false,
         error: err instanceof Error ? err.message : String(err),
       };
+    }
+  }
+
+  protected healthCandidates(): OltHealthCandidates {
+    return ZTE_HEALTH_OIDS;
+  }
+
+  /** CPU / RAM / temperature on the session already open for the probe. */
+  protected async readHealth(
+    session: Session,
+    host: string,
+  ): Promise<OltHealthMetrics | undefined> {
+    const key = this.hostKey(host);
+    let cache = this.healthOids.get(key);
+    if (!cache) {
+      cache = {};
+      this.healthOids.set(key, cache);
+    }
+    try {
+      const health = await readOltHealthSnmp({
+        candidates: this.healthCandidates(),
+        get: (oid) => this.getOne(session, oid),
+        walk: (oid) => this.subtree(session, oid),
+        cache,
+      });
+      return Object.keys(health).length ? health : undefined;
+    } catch (err) {
+      this.logger.debug(
+        `readHealth(${host}): ${err instanceof Error ? err.message : err}`,
+      );
+      return undefined;
     }
   }
 

@@ -97,6 +97,9 @@ export function RouterMetricsModal({
   const board =
     historyQuery.data?.boardName ?? device.metricBoardName ?? null
   const isOlt = device.type === 'olt'
+  // OLTs are polled over SNMP only, so a missing RO community means no samples.
+  const needsSnmp =
+    isOlt && /SNMP sin community/i.test(device.metricSummary ?? '')
   const img = isOlt
     ? oltBoardImageUrl(device.subtype, board)
     : mikrotikBoardImageUrl(board) ?? '/mikrotik-generic.svg'
@@ -181,8 +184,9 @@ export function RouterMetricsModal({
 
           {chartData.length === 0 && !historyQuery.isLoading ? (
             <p className="text-sm text-[var(--text-muted)]">
-              Aún no hay muestras históricas. Se irán llenando con el poller
-              (~cada 15 s).
+              {needsSnmp
+                ? 'Sin community SNMP de solo lectura no se pueden tomar muestras. Configúrala en Topología para habilitar los gráficos.'
+                : 'Aún no hay muestras históricas. Se irán llenando con el poller (~cada 15 s).'}
             </p>
           ) : (
             <div className="space-y-6">

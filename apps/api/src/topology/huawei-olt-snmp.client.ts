@@ -19,6 +19,12 @@ import type {
   ZteSnmpProbeResult,
 } from './zte-olt-snmp.client';
 import { canonicalizeHuaweiPonIfName } from './huawei-olt-onu.util';
+import {
+  HUAWEI_HEALTH_OIDS,
+  readOltHealthSnmp,
+  type OltHealthMetrics,
+  type OltHealthOidCache,
+} from './olt-snmp-health.util';
 
 export type HuaweiSnmpConn = {
   host: string;
@@ -50,6 +56,8 @@ export class HuaweiOltSnmpClient {
   private readonly ifIndexCache = new Map<string, number>();
   private readonly snmpBusy = new Set<string>();
   private readonly snmpWaiters = new Map<string, SnmpLockWaiter[]>();
+  /** Resolved CPU/RAM/temperature leaf OIDs per host (see olt-snmp-health). */
+  private readonly healthOids = new Map<string, OltHealthOidCache>();
 
   private ifIndexKey(host: string, onuIf: string) {
     return `${host.trim().toLowerCase()}|${onuIf.trim().toLowerCase()}`;
@@ -195,7 +203,11 @@ export class HuaweiOltSnmpClient {
       if (ticks == null) {
         return { ok: false, error: 'SNMP sysUpTime unavailable' };
       }
-      return { ok: true, sysUpTimeTicks: ticks };
+      return {
+        ok: true,
+        sysUpTimeTicks: ticks,
+        health: await this.readHealth(session, params.host),
+      };
     } catch (err) {
       return {
         ok: false,
@@ -207,6 +219,33 @@ export class HuaweiOltSnmpClient {
       } catch {
         /* ignore */
       }
+    }
+  }
+
+  /** CPU / RAM / temperature on the session already open for the probe. */
+  private async readHealth(
+    session: Session,
+    host: string,
+  ): Promise<OltHealthMetrics | undefined> {
+    const key = this.hostKey(host);
+    let cache = this.healthOids.get(key);
+    if (!cache) {
+      cache = {};
+      this.healthOids.set(key, cache);
+    }
+    try {
+      const health = await readOltHealthSnmp({
+        candidates: HUAWEI_HEALTH_OIDS,
+        get: (oid) => this.getOne(session, oid),
+        walk: (oid) => this.subtree(session, oid),
+        cache,
+      });
+      return Object.keys(health).length ? health : undefined;
+    } catch (err) {
+      this.logger.debug(
+        `readHealth(${host}): ${err instanceof Error ? err.message : err}`,
+      );
+      return undefined;
     }
   }
 

@@ -8,6 +8,7 @@ import { PanelShell } from '../components/PanelShell'
 import {
   OltDeviceCard,
   RouterDeviceCard,
+  SwitchDeviceCard,
 } from '../components/DashboardNetworkCards'
 import { RouterMetricsModal } from '../components/RouterMetricsModal'
 import type { TopologyDevice } from '../lib/topology'
@@ -57,11 +58,12 @@ export function TenantDashboardPage() {
     placeholderData: (prev) => prev,
   })
 
-  const { routers, olts } = useMemo(() => {
+  const { routers, olts, switches } = useMemo(() => {
     const devices = topologyQuery.data?.devices ?? []
     return {
       routers: devices.filter((d) => d.type === 'router' && d.isActive),
       olts: devices.filter((d) => d.type === 'olt' && d.isActive),
+      switches: devices.filter((d) => d.type === 'switch' && d.isActive),
     }
   }, [topologyQuery.data?.devices])
 
@@ -209,6 +211,34 @@ export function TenantDashboardPage() {
                 <div className="grid gap-3">
                   {olts.map((d) => (
                     <OltDeviceCard
+                      key={d.id}
+                      device={d}
+                      onClick={() => setMetricsDevice(d)}
+                    />
+                  ))}
+                </div>
+              )}
+            </section>
+
+            <section className="rounded-xl border border-[var(--border)] bg-[var(--bg)] p-4">
+              <div className="mb-3">
+                <h2 className="text-base font-semibold">Switches</h2>
+                <p className="text-sm text-[var(--text-muted)]">
+                  Recursos en vivo · clic para ver gráficos
+                </p>
+              </div>
+              {!topologyQuery.isLoading && switches.length === 0 && (
+                <p className="rounded-lg border border-dashed border-[var(--border)] px-4 py-8 text-center text-sm text-[var(--text-muted)]">
+                  No hay switches registrados aún.{' '}
+                  <Link to="/app/topology" className="text-[var(--accent)]">
+                    Agregar en Topología
+                  </Link>
+                </p>
+              )}
+              {switches.length > 0 && (
+                <div className="grid gap-3">
+                  {switches.map((d) => (
+                    <SwitchDeviceCard
                       key={d.id}
                       device={d}
                       onClick={() => setMetricsDevice(d)}

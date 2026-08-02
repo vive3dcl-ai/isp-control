@@ -2342,6 +2342,14 @@ export class TopologyService {
       device.metricTotalMemory = null;
       device.metricTemperature = null;
       if (!(await this.persistProbedDevice(devices, device))) return device;
+      // SwOS exposes no CPU/RAM, but uptime alone keeps the graph alive.
+      try {
+        await this.recordMetricSample(schema, device, {
+          uptime: result.uptime ?? undefined,
+        });
+      } catch {
+        /* history best-effort */
+      }
       if (result.physicalPorts?.length) {
         try {
           await this.syncMikrotikPhysicalPorts(
@@ -2421,7 +2429,40 @@ export class TopologyService {
           const s = sec % 60;
           device.metricUptime = `${d} Days, ${h} Hours, ${m} Minutes, ${s} Seconds`;
         }
-        await this.persistProbedDevice(devices, device);
+
+        // CPU/RAM/temp only when SNMP exposes them; keep the last CLI probe
+        // values otherwise instead of blanking the card.
+        const health = snmp.health;
+        let freeMemory: number | undefined;
+        let totalMemory: number | undefined;
+        if (health?.cpuLoad != null) device.metricCpuLoad = health.cpuLoad;
+        if (health?.temperature != null) {
+          device.metricTemperature = health.temperature;
+        }
+        if (health?.memoryUsedPct != null && health.totalMemoryBytes != null) {
+          totalMemory = health.totalMemoryBytes;
+          freeMemory =
+            totalMemory -
+            Math.round((totalMemory * health.memoryUsedPct) / 100);
+          device.metricTotalMemory = String(totalMemory);
+          device.metricFreeMemory = String(freeMemory);
+        }
+        if (!(await this.persistProbedDevice(devices, device))) return;
+
+        // Dashboard graphs live off these samples — record even when the OLT
+        // only answers sysUpTime, so the series is never empty.
+        try {
+          await this.recordMetricSample(schema, device, {
+            cpuLoad: health?.cpuLoad,
+            temperature: health?.temperature,
+            memoryUsedPct: health?.memoryUsedPct,
+            freeMemory,
+            totalMemory,
+            uptime: device.metricUptime ?? undefined,
+          });
+        } catch {
+          // History is best-effort — never fail liveness on it
+        }
         return;
       }
 
@@ -2822,6 +2863,8 @@ export class TopologyService {
       totalMemory?: number;
       temperature?: number;
       uptime?: string;
+      /** Used when the source reports a percentage instead of free/total. */
+      memoryUsedPct?: number;
     },
   ) {
     const samples =
@@ -2837,6 +2880,11 @@ export class TopologyService {
       total > 0
     ) {
       memoryUsedPct = Math.round(((total - free) / total) * 1000) / 10;
+    } else if (
+      result.memoryUsedPct != null &&
+      Number.isFinite(result.memoryUsedPct)
+    ) {
+      memoryUsedPct = Math.round(result.memoryUsedPct * 10) / 10;
     }
     const uptimeSeconds = this.parseUptimeSeconds(result.uptime);
     await samples.save(
