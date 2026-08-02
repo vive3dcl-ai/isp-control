@@ -28,11 +28,25 @@ import { ZteOltClient } from './zte-olt.client';
 import { HuaweiOltClient } from './huawei-olt.client';
 import {
   CreateServiceVlanDto,
+  SERVICE_VLAN_PURPOSES,
   SyncServiceVlanDeviceDto,
   UpdateServiceVlanDto,
+  type ServiceVlanPurpose,
 } from './dto/service-vlan.dto';
 
 type DeviceRef = { id: string; name: string };
+
+function normalizePurpose(
+  value: string | null | undefined,
+): ServiceVlanPurpose {
+  if (
+    value &&
+    (SERVICE_VLAN_PURPOSES as readonly string[]).includes(value)
+  ) {
+    return value as ServiceVlanPurpose;
+  }
+  return 'internet';
+}
 
 @Injectable()
 export class ServiceVlanService {
@@ -190,6 +204,7 @@ export class ServiceVlanService {
       id: row.id,
       vlanId: row.vlanId,
       description: row.description,
+      purpose: normalizePurpose(row.purpose),
       oltIds: row.oltIds ?? [],
       routerIds: row.routerIds ?? [],
       switchIds: row.switchIds ?? [],
@@ -318,7 +333,7 @@ export class ServiceVlanService {
     return { byVlan, devices };
   }
 
-  async list(user: AuthUser) {
+  async list(user: AuthUser, opts?: { purpose?: ServiceVlanPurpose }) {
     const schema = this.requireSchema(user);
     const repo = await this.tenantConnections.getServiceVlanRepository(schema);
     const catalog = await repo.find({ order: { vlanId: 'ASC' } });
@@ -327,7 +342,7 @@ export class ServiceVlanService {
     const catalogByVlan = new Map(catalog.map((c) => [c.vlanId, c]));
     const allIds = new Set<number>([
       ...catalog.map((c) => c.vlanId),
-      ...byVlan.keys(),
+      ...(opts?.purpose ? [] : byVlan.keys()),
     ]);
 
     const rows = [...allIds]
@@ -348,6 +363,7 @@ export class ServiceVlanService {
           id: null as string | null,
           vlanId,
           description,
+          purpose: 'internet' as ServiceVlanPurpose,
           oltIds: olts.map((d) => d.id),
           routerIds: routers.map((d) => d.id),
           switchIds: switches.map((d) => d.id),
@@ -364,7 +380,10 @@ export class ServiceVlanService {
           updatedAt: null as string | null,
           discovered: true,
         };
-      });
+      })
+      .filter((row) =>
+        opts?.purpose ? row.purpose === opts.purpose : true,
+      );
 
     return { vlans: rows };
   }
@@ -382,6 +401,7 @@ export class ServiceVlanService {
       repo.create({
         vlanId: dto.vlanId,
         description: dto.description?.trim() || null,
+        purpose: normalizePurpose(dto.purpose),
         oltIds: [],
         routerIds: [],
         switchIds: [],
@@ -399,6 +419,9 @@ export class ServiceVlanService {
     if (dto.description !== undefined) {
       row.description =
         dto.description === null ? null : dto.description.trim() || null;
+    }
+    if (dto.purpose !== undefined) {
+      row.purpose = normalizePurpose(dto.purpose);
     }
     if (dto.oltIds !== undefined) row.oltIds = dto.oltIds;
     if (dto.routerIds !== undefined) row.routerIds = dto.routerIds;
@@ -431,6 +454,7 @@ export class ServiceVlanService {
         repo.create({
           vlanId,
           description: dto.description?.trim() || null,
+          purpose: normalizePurpose(dto.purpose),
           oltIds: dto.oltIds ?? [],
           routerIds: dto.routerIds ?? [],
           switchIds: dto.switchIds ?? [],
@@ -440,6 +464,9 @@ export class ServiceVlanService {
       if (dto.description !== undefined) {
         row.description =
           dto.description === null ? null : dto.description.trim() || null;
+      }
+      if (dto.purpose !== undefined) {
+        row.purpose = normalizePurpose(dto.purpose);
       }
       if (dto.oltIds !== undefined) row.oltIds = dto.oltIds;
       if (dto.routerIds !== undefined) row.routerIds = dto.routerIds;

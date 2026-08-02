@@ -808,10 +808,16 @@ const TOPOLOGY_ALTER = (schema: string) => `
     ADD COLUMN IF NOT EXISTS "migrated_at" TIMESTAMPTZ NULL;
   CREATE INDEX IF NOT EXISTS "idx_onus_migration_progress"
     ON "${schema}"."onus" ("olt_id", "migration_source_vlan", "migrated_at");
+
+  -- v48: tipo semántico de VLAN de servicio (Internet / Mgmt / TV)
+  ALTER TABLE "${schema}"."service_vlans"
+    ADD COLUMN IF NOT EXISTS "purpose" varchar(20) NOT NULL DEFAULT 'internet';
+  CREATE INDEX IF NOT EXISTS "idx_service_vlans_purpose"
+    ON "${schema}"."service_vlans" ("purpose");
 `;
 
 /** Bump when tenant DDL adds new tables/columns so existing processes re-apply. */
-const TENANT_SCHEMA_VERSION = 47;
+const TENANT_SCHEMA_VERSION = 48;
 
 @Injectable()
 export class TenantConnectionService implements OnModuleDestroy {

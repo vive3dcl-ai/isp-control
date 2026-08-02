@@ -2,6 +2,11 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { apiFetch } from "../lib/api";
 import type { AcsServiceStatus, Tr069StatusResponse } from "../lib/tr069";
+import {
+  OperationProgressModal,
+  runProgressSteps,
+  type ProgressStep,
+} from "./OperationProgressModal";
 
 function ServiceBadge({
   label,
@@ -66,6 +71,12 @@ export function Tr069StatusView() {
   const [manualTests, setManualTests] = useState<
     Record<string, { status: "running" | "ok" | "fail"; message: string }>
   >({});
+  const [checkOpen, setCheckOpen] = useState(false);
+  const [checkTitle, setCheckTitle] = useState("Test manual");
+  const [checkSteps, setCheckSteps] = useState<ProgressStep[]>([]);
+  const [checkRunning, setCheckRunning] = useState(false);
+  const [checkFailed, setCheckFailed] = useState(false);
+  const [checkDone, setCheckDone] = useState(false);
 
   const statusQuery = useQuery({
     queryKey: ["app", "settings", "tr069", "status"],
@@ -113,35 +124,131 @@ export function Tr069StatusView() {
     activeFaults: 0,
   };
 
-  async function runManualTest(onuId: string) {
-    setManualTests((prev) => ({
-      ...prev,
-      [onuId]: { status: "running", message: "Verificando…" },
-    }));
-    try {
-      const result = await apiFetch<{
-        ok: boolean;
-        verifyStatus: string;
-        message?: string;
-      }>(`/app/onus/${onuId}/verify/run`, { method: "POST" });
+  async function executeManualTest(
+    onuId: string,
+    steps: ProgressStep[],
+    runners: Record<string, () => Promise<string | void>>,
+  ) {
+    setCheckRunning(true);
+    setCheckFailed(false);
+    setCheckDone(false);
+    const result = await runProgressSteps(steps, setCheckSteps, runners);
+    setCheckRunning(false);
+    if (result.ok) {
+      setCheckDone(true);
       setManualTests((prev) => ({
         ...prev,
-        [onuId]: {
-          status: result.verifyStatus === "ok" ? "ok" : "fail",
-          message:
-            result.message ||
-            (result.verifyStatus === "ok" ? "Todo OK" : "Hay fallos"),
-        },
+        [onuId]: { status: "ok", message: "Todo OK" },
       }));
-    } catch (error) {
+    } else {
+      setCheckFailed(true);
+      const failed = result.steps.find((s) => s.status === "error");
       setManualTests((prev) => ({
         ...prev,
         [onuId]: {
           status: "fail",
-          message: error instanceof Error ? error.message : String(error),
+          message: failed?.detail || "Hay fallos",
         },
       }));
     }
+  }
+
+  /** Mismas pruebas que Check ONU, con el modal de progreso paso a paso. */
+  function startManualTest(onuId: string, serial: string) {
+    const pause = (ms: number) =>
+      new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+    const steps: ProgressStep[] = [
+      {
+        id: "run",
+        label: "Consultando router del gateway y ACS",
+        status: "pending",
+      },
+      { id: "arp", label: "ARP en el router del gateway", status: "pending" },
+      {
+        id: "connreq",
+        label: "Credenciales de petición de conexión",
+        status: "pending",
+      },
+      {
+        id: "wan",
+        label: "WAN TR-069 (IP, máscara, VLAN, NAT)",
+        status: "pending",
+      },
+      {
+        id: "traffic",
+        label: "Tráfico / conexiones activas",
+        status: "pending",
+      },
+      { id: "result", label: "Resultado final", status: "pending" },
+    ];
+
+    let detail: Record<string, unknown> = {};
+    let status = "fail";
+
+    const checkOf = (key: string) =>
+      detail[key] as { ok?: boolean; message?: string } | undefined;
+
+    const runners: Record<string, () => Promise<string | void>> = {
+      run: async () => {
+        const r = await apiFetch<{
+          ok: boolean;
+          verifyStatus: string;
+          verifyDetail: Record<string, unknown>;
+          message?: string;
+        }>(`/app/onus/${onuId}/verify/run`, { method: "POST" });
+        detail = r.verifyDetail ?? {};
+        status = r.verifyStatus;
+        const healed = detail.healed;
+        return Array.isArray(healed) && healed.length
+          ? `Pruebas hechas · curado: ${healed.join("; ")}`
+          : "Pruebas hechas";
+      },
+      arp: async () => {
+        await pause(350);
+        const c = checkOf("arp");
+        if (!c?.ok) throw new Error(c?.message || "ARP falló");
+        return c.message || "ARP OK";
+      },
+      connreq: async () => {
+        await pause(350);
+        const c = checkOf("connreq");
+        if (!c?.ok) throw new Error(c?.message || "Credenciales fallaron");
+        return c.message || "Credenciales OK";
+      },
+      wan: async () => {
+        await pause(350);
+        const c = checkOf("wan");
+        if (!c?.ok) throw new Error(c?.message || "WAN falló");
+        return c.message || "WAN OK";
+      },
+      traffic: async () => {
+        await pause(350);
+        const c = checkOf("traffic");
+        // Un cliente sin equipos encendidos no invalida el chequeo.
+        if (status === "ok") {
+          return c?.ok
+            ? c.message || "Tráfico OK"
+            : c?.message || "Sin tráfico (cliente idle)";
+        }
+        if (!c?.ok) throw new Error(c?.message || "Sin tráfico");
+        return c.message || "Tráfico OK";
+      },
+      result: async () => {
+        await pause(200);
+        if (status !== "ok") throw new Error("La ONU no pasó el chequeo");
+        return "Todo OK";
+      },
+    };
+
+    setManualTests((prev) => ({
+      ...prev,
+      [onuId]: { status: "running", message: "Verificando…" },
+    }));
+    setCheckTitle(`Test manual · ${serial}`);
+    setCheckSteps(steps);
+    setCheckOpen(true);
+    void executeManualTest(onuId, steps, runners);
   }
 
   return (
@@ -392,8 +499,8 @@ export function Tr069StatusView() {
                         <div className="flex flex-wrap items-center gap-2">
                           <button
                             type="button"
-                            disabled={test?.status === "running"}
-                            onClick={() => void runManualTest(o.onuId)}
+                            disabled={checkRunning}
+                            onClick={() => startManualTest(o.onuId, o.serial)}
                             className="rounded-md border border-[var(--border)] px-2 py-1 text-xs hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:opacity-50"
                           >
                             {test?.status === "running"
@@ -422,6 +529,27 @@ export function Tr069StatusView() {
           </table>
         </div>
       </section>
+
+      <OperationProgressModal
+        open={checkOpen}
+        title={checkTitle}
+        steps={checkSteps}
+        running={checkRunning}
+        failed={checkFailed}
+        allDone={checkDone}
+        doneLabel="Todo OK"
+        failedLabel="Hay fallos — puedes reintentar el chequeo"
+        onClose={() => {
+          setCheckOpen(false);
+          void statusQuery.refetch();
+        }}
+      >
+        {checkDone ? (
+          <div className="mx-5 mb-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">
+            Todo OK — la ONU pasó ARP, credenciales, WAN y tráfico.
+          </div>
+        ) : null}
+      </OperationProgressModal>
     </div>
   );
 }

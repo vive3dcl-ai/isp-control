@@ -52,6 +52,18 @@ export function OnuTr069ConfigModal({
     queryFn: () =>
       apiFetch<Tr069OnuConfig>(`/app/onus/${onuId}/tr069-config`),
   })
+  const tvVlansQuery = useQuery({
+    queryKey: ['app', 'settings', 'vlans', 'tv'],
+    queryFn: () =>
+      apiFetch<{
+        vlans: Array<{
+          vlanId: number
+          description: string | null
+          purpose?: string
+        }>
+      }>('/app/settings/vlans?purpose=tv'),
+    staleTime: 60_000,
+  })
   const modulesQuery = useQuery({
     queryKey: ['app', 'settings', 'modules'],
     queryFn: () => apiFetch<TenantModuleCard[]>('/app/settings/modules'),
@@ -116,9 +128,12 @@ export function OnuTr069ConfigModal({
   useEffect(() => {
     const c = configQuery.data
     if (!c?.inAcs || autoRefreshDone.current) return
-    const needsRefresh =
+    const wifiNeeds =
+      c.wifi.length === 0 || c.wifi.every((w) => !w.ssid?.trim())
+    const usersNeed =
       c.webUsers.length === 0 ||
-      (c.wifi.length === 0 && c.ethernet.length === 0)
+      c.webUsers.every((u) => !u.username?.trim())
+    const needsRefresh = wifiNeeds || usersNeed
     if (!needsRefresh) return
     autoRefreshDone.current = true
     setMsg('Solicitando Wi‑Fi / Ethernet / usuarios web al ACS…')
@@ -162,11 +177,10 @@ export function OnuTr069ConfigModal({
       }
       const nextVlan = d.vlanId.trim() ? Number(d.vlanId.trim()) : null
       const prevVlan = p.vlanId ?? null
-      const nextMode = d.vlanMode
-      const prevMode = p.vlanMode ?? 'untag'
-      if (nextVlan !== prevVlan || (nextVlan != null && nextMode !== prevMode)) {
+      // IPTV / bridge ports: always untagged on the selected TV VLAN.
+      if (nextVlan !== prevVlan) {
         patch.vlanId = nextVlan
-        if (nextVlan != null) patch.vlanMode = nextMode
+        if (nextVlan != null) patch.vlanMode = 'untag'
         changed = true
       }
       if (changed) ethernet.push(patch)
@@ -480,17 +494,23 @@ export function OnuTr069ConfigModal({
               ) : (
                 <>
                   <p className="text-xs text-[var(--text-muted)]">
-                    La VLAN del puerto se aplica por OMCI en la OLT (
-                    <code className="text-[11px]">vlan port eth_0/N</code>
-                    ), típico IPTV/bridge hacia el proveedor.
+                    Asigna una VLAN tipo TV (catálogo) como untagged en el
+                    puerto vía OMCI (
+                    <code className="text-[11px]">vlan port eth_0/N mode untag</code>
+                    ).
+                    {(tvVlansQuery.data?.vlans.length ?? 0) === 0 && (
+                      <>
+                        {' '}
+                        No hay VLANs TV: marca una en Ajustes → VLANs.
+                      </>
+                    )}
                   </p>
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="text-left text-[var(--text-muted)]">
                         <th className="py-1 font-medium">Puerto</th>
                         <th className="py-1 font-medium">Estado</th>
-                        <th className="py-1 font-medium">VLAN</th>
-                        <th className="py-1 font-medium">Modo</th>
+                        <th className="py-1 font-medium">VLAN TV</th>
                         <th className="py-1 font-medium">Activo</th>
                       </tr>
                     </thead>
@@ -501,6 +521,13 @@ export function OnuTr069ConfigModal({
                           vlanId: '',
                           vlanMode: 'untag' as const,
                         }
+                        const tvVlans = tvVlansQuery.data?.vlans ?? []
+                        const currentId = d.vlanId.trim()
+                          ? Number(d.vlanId.trim())
+                          : null
+                        const currentInList =
+                          currentId != null &&
+                          tvVlans.some((v) => v.vlanId === currentId)
                         return (
                           <tr
                             key={p.index}
@@ -514,12 +541,13 @@ export function OnuTr069ConfigModal({
                             </td>
                             <td className="py-2 text-[var(--text-muted)]">
                               {p.status ?? '—'}
+                              {d.vlanId.trim() ? (
+                                <div className="text-[10px]">untag</div>
+                              ) : null}
                             </td>
                             <td className="py-2">
-                              <input
-                                className={`${inputClass} w-20`}
-                                inputMode="numeric"
-                                placeholder="—"
+                              <select
+                                className={`${inputClass} min-w-[9rem]`}
                                 value={d.vlanId}
                                 disabled={!canWrite || !c.inAcs}
                                 onChange={(e) =>
@@ -527,38 +555,29 @@ export function OnuTr069ConfigModal({
                                     ...prev,
                                     [p.index]: {
                                       ...d,
-                                      vlanId: e.target.value.replace(
-                                        /\D+/g,
-                                        '',
-                                      ),
-                                    },
-                                  }))
-                                }
-                              />
-                            </td>
-                            <td className="py-2">
-                              <select
-                                className={inputClass}
-                                value={d.vlanMode}
-                                disabled={
-                                  !canWrite || !c.inAcs || !d.vlanId.trim()
-                                }
-                                onChange={(e) =>
-                                  setEthDraft((prev) => ({
-                                    ...prev,
-                                    [p.index]: {
-                                      ...d,
-                                      vlanMode: e.target.value as
-                                        | 'tag'
-                                        | 'untag'
-                                        | 'hybrid',
+                                      vlanId: e.target.value,
+                                      vlanMode: 'untag',
                                     },
                                   }))
                                 }
                               >
-                                <option value="untag">untag</option>
-                                <option value="tag">tag</option>
-                                <option value="hybrid">hybrid</option>
+                                <option value="">Sin VLAN</option>
+                                {currentId != null && !currentInList ? (
+                                  <option value={String(currentId)}>
+                                    {currentId} (actual)
+                                  </option>
+                                ) : null}
+                                {tvVlans.map((v) => (
+                                  <option
+                                    key={v.vlanId}
+                                    value={String(v.vlanId)}
+                                  >
+                                    {v.vlanId}
+                                    {v.description
+                                      ? ` — ${v.description}`
+                                      : ''}
+                                  </option>
+                                ))}
                               </select>
                             </td>
                             <td className="py-2">

@@ -15,6 +15,9 @@ import {
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
+export const SERVICE_VLAN_PURPOSES = ['internet', 'management', 'tv'] as const;
+export type ServiceVlanPurpose = (typeof SERVICE_VLAN_PURPOSES)[number];
+
 export class CreateServiceVlanDto {
   @Type(() => Number)
   @IsInt()
@@ -26,6 +29,10 @@ export class CreateServiceVlanDto {
   @IsString()
   @MaxLength(255)
   description?: string;
+
+  @IsOptional()
+  @IsIn(SERVICE_VLAN_PURPOSES)
+  purpose?: ServiceVlanPurpose;
 }
 
 export class UpdateServiceVlanDto {
@@ -33,6 +40,10 @@ export class UpdateServiceVlanDto {
   @IsString()
   @MaxLength(255)
   description?: string | null;
+
+  @IsOptional()
+  @IsIn(SERVICE_VLAN_PURPOSES)
+  purpose?: ServiceVlanPurpose;
 
   @IsOptional()
   @IsArray()

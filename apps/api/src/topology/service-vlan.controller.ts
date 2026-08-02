@@ -9,6 +9,7 @@ import {
   Patch,
   Post,
   Put,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -24,8 +25,10 @@ import type { AuthUser } from '../auth/auth.types';
 import { ServiceVlanService } from './service-vlan.service';
 import {
   CreateServiceVlanDto,
+  SERVICE_VLAN_PURPOSES,
   UpdateServiceVlanDto,
   SyncServiceVlanDeviceDto,
+  type ServiceVlanPurpose,
 } from './dto/service-vlan.dto';
 
 @Controller('app/settings/vlans')
@@ -35,8 +38,16 @@ export class ServiceVlanController {
   constructor(private readonly serviceVlans: ServiceVlanService) {}
 
   @Get()
-  list(@CurrentUser() user: AuthUser) {
-    return this.serviceVlans.list(user);
+  list(
+    @CurrentUser() user: AuthUser,
+    @Query('purpose') purpose?: string,
+  ) {
+    const normalized =
+      purpose &&
+      (SERVICE_VLAN_PURPOSES as readonly string[]).includes(purpose)
+        ? (purpose as ServiceVlanPurpose)
+        : undefined;
+    return this.serviceVlans.list(user, { purpose: normalized });
   }
 
   @Post()

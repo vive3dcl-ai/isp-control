@@ -380,36 +380,63 @@ export class OnuTr069ConfigService {
     const webUsers: Tr069WebUser[] = [];
 
     // —— TR-098 WiFi ——
-    const wlanBase = 'InternetGatewayDevice.LANDevice.1.WLANConfiguration';
-    for (const i of genieChildIndices(device, wlanBase)) {
-      const prefix = `${wlanBase}.${i}`;
-      const keyCandidates = [
-        `${prefix}.KeyPassphrase`,
-        `${prefix}.PreSharedKey.1.PreSharedKey`,
-        `${prefix}.PreSharedKey.1.KeyPassphrase`,
-      ];
-      let keyPath: string | null = null;
-      let key: string | null = null;
-      for (const kp of keyCandidates) {
-        const v = strVal(genieGet(device, kp));
-        if (v != null || genieGet(device, kp)) {
-          keyPath = kp;
-          key = v;
-          break;
+    const pushTr098Wifi = (wlanBase: string) => {
+      for (const i of genieChildIndices(device, wlanBase)) {
+        if (wifi.some((w) => w.pathPrefix === `${wlanBase}.${i}`)) continue;
+        const prefix = `${wlanBase}.${i}`;
+        const keyCandidates = [
+          `${prefix}.KeyPassphrase`,
+          `${prefix}.PreSharedKey.1.PreSharedKey`,
+          `${prefix}.PreSharedKey.1.KeyPassphrase`,
+          `${prefix}.X_HW_WPAKey`,
+          `${prefix}.X_ZTE-COM_KeyPassphrase`,
+          `${prefix}.X_FH_WPAKey`,
+        ];
+        let keyPath: string | null = null;
+        let key: string | null = null;
+        for (const kp of keyCandidates) {
+          const raw = genieGet(device, kp);
+          const v = strVal(raw);
+          if (v != null) {
+            keyPath = kp;
+            key = v;
+            break;
+          }
+          if (!keyPath && raw) keyPath = kp;
         }
+        if (!keyPath) {
+          for (const kp of keyCandidates) {
+            if (genieNodeExists(device, kp)) {
+              keyPath = kp;
+              break;
+            }
+          }
+        }
+        wifi.push({
+          index: i,
+          pathPrefix: prefix,
+          ssidPath: `${prefix}.SSID`,
+          keyPath,
+          enablePath: `${prefix}.Enable`,
+          ssid: strVal(genieGet(device, `${prefix}.SSID`)),
+          key,
+          enabled: boolVal(genieGet(device, `${prefix}.Enable`)),
+          channel: strVal(genieGet(device, `${prefix}.Channel`)),
+          standard: strVal(genieGet(device, `${prefix}.Standard`)),
+        });
       }
-      wifi.push({
-        index: i,
-        pathPrefix: prefix,
-        ssidPath: `${prefix}.SSID`,
-        keyPath,
-        enablePath: `${prefix}.Enable`,
-        ssid: strVal(genieGet(device, `${prefix}.SSID`)),
-        key,
-        enabled: boolVal(genieGet(device, `${prefix}.Enable`)),
-        channel: strVal(genieGet(device, `${prefix}.Channel`)),
-        standard: strVal(genieGet(device, `${prefix}.Standard`)),
-      });
+    };
+    pushTr098Wifi('InternetGatewayDevice.LANDevice.1.WLANConfiguration');
+    if (wifi.length === 0) {
+      for (const lan of genieChildIndices(
+        device,
+        'InternetGatewayDevice.LANDevice',
+      )) {
+        if (lan === 1) continue;
+        pushTr098Wifi(
+          `InternetGatewayDevice.LANDevice.${lan}.WLANConfiguration`,
+        );
+      }
     }
 
     // —— TR-181 WiFi ——
@@ -418,7 +445,23 @@ export class OnuTr069ConfigService {
       for (const i of genieChildIndices(device, ssidBase)) {
         const prefix = `${ssidBase}.${i}`;
         const apPrefix = `Device.WiFi.AccessPoint.${i}`;
-        const keyPath = `${apPrefix}.Security.KeyPassphrase`;
+        const keyCandidates = [
+          `${apPrefix}.Security.KeyPassphrase`,
+          `${apPrefix}.Security.PreSharedKey`,
+          `${prefix}.KeyPassphrase`,
+        ];
+        let keyPath: string | null = null;
+        let key: string | null = null;
+        for (const kp of keyCandidates) {
+          const raw = genieGet(device, kp);
+          const v = strVal(raw);
+          if (v != null) {
+            keyPath = kp;
+            key = v;
+            break;
+          }
+          if (!keyPath && (raw || genieNodeExists(device, kp))) keyPath = kp;
+        }
         wifi.push({
           index: i,
           pathPrefix: prefix,
@@ -426,7 +469,7 @@ export class OnuTr069ConfigService {
           keyPath,
           enablePath: `${prefix}.Enable`,
           ssid: strVal(genieGet(device, `${prefix}.SSID`)),
-          key: strVal(genieGet(device, keyPath)),
+          key,
           enabled: boolVal(genieGet(device, `${prefix}.Enable`)),
           channel: strVal(genieGet(device, `Device.WiFi.Radio.1.Channel`)),
           standard: strVal(
@@ -530,6 +573,33 @@ export class OnuTr069ConfigService {
 
     // —— Vendor / TR-098 user interface (Huawei / ZTE) ——
     if (webUsers.length === 0) {
+      const hwBase = 'InternetGatewayDevice.UserInterface.X_HW_WebUserInfo';
+      for (const i of genieChildIndices(device, hwBase)) {
+        const prefix = `${hwBase}.${i}`;
+        const userLeaf = genieNodeExists(device, `${prefix}.UserName`)
+          ? 'UserName'
+          : genieNodeExists(device, `${prefix}.Username`)
+            ? 'Username'
+            : 'UserName';
+        const passLeaf = genieNodeExists(device, `${prefix}.Password`)
+          ? 'Password'
+          : genieNodeExists(device, `${prefix}.PassWord`)
+            ? 'PassWord'
+            : 'Password';
+        webUsers.push({
+          index: i,
+          pathPrefix: prefix,
+          usernamePath: `${prefix}.${userLeaf}`,
+          passwordPath: `${prefix}.${passLeaf}`,
+          username: strVal(genieGet(device, `${prefix}.${userLeaf}`)),
+          password: strVal(genieGet(device, `${prefix}.${passLeaf}`)),
+          enablePath: null,
+          enabled: null,
+          label: i === 1 ? 'Admin' : i === 2 ? 'Usuario' : `User ${i}`,
+        });
+      }
+    }
+    if (webUsers.length === 0) {
       const candidates = [
         {
           prefix: 'InternetGatewayDevice.UserInterface.X_HW_WebUserInfo.1',
@@ -538,8 +608,20 @@ export class OnuTr069ConfigService {
           label: 'Admin',
         },
         {
+          prefix: 'InternetGatewayDevice.UserInterface.X_HW_WebUserInfo.1',
+          user: 'Username',
+          pass: 'Password',
+          label: 'Admin',
+        },
+        {
           prefix: 'InternetGatewayDevice.UserInterface.X_HW_WebUserInfo.2',
           user: 'UserName',
+          pass: 'Password',
+          label: 'Usuario',
+        },
+        {
+          prefix: 'InternetGatewayDevice.UserInterface.X_HW_WebUserInfo.2',
+          user: 'Username',
           pass: 'Password',
           label: 'Usuario',
         },
@@ -561,9 +643,17 @@ export class OnuTr069ConfigService {
           pass: 'Password',
           label: 'Admin',
         },
+        {
+          prefix: 'InternetGatewayDevice.X_ZTE-COM_User',
+          user: 'UserName',
+          pass: 'Password',
+          label: 'Admin',
+        },
       ];
+      const seenPrefix = new Set<string>();
       let idx = 1;
       for (const c of candidates) {
+        if (seenPrefix.has(c.prefix)) continue;
         if (
           !genieNodeExists(device, c.prefix) &&
           !genieGet(device, `${c.prefix}.${c.user}`) &&
@@ -571,6 +661,7 @@ export class OnuTr069ConfigService {
         ) {
           continue;
         }
+        seenPrefix.add(c.prefix);
         webUsers.push({
           index: idx++,
           pathPrefix: c.prefix,
@@ -811,12 +902,13 @@ export class OnuTr069ConfigService {
     const omciNotes: string[] = [];
 
     if (dto.refresh) {
-      // First Inform is often DeviceInfo-only; pull LAN + web-user trees.
+      // First Inform is often DeviceInfo-only; pull LAN + WiFi + web-user trees.
       const refreshTargets = [
         'InternetGatewayDevice.LANDevice',
         'InternetGatewayDevice.DeviceInfo.X_FH_Account',
         'InternetGatewayDevice.UserInterface',
         'Device.Users',
+        'Device.WiFi',
       ];
       for (const objectName of refreshTargets) {
         try {
@@ -825,16 +917,56 @@ export class OnuTr069ConfigService {
           /* best-effort per vendor tree */
         }
       }
-      // FiberHome a veces solo descubre el path; fuerza get de las hojas.
+
+      // Re-read tree so we can request concrete leaves that GenieACS discovered
+      // without `_value` yet (common after first refreshObject).
+      let fresh = device;
       try {
-        await client.getParameterValues(deviceId, [
-          'InternetGatewayDevice.DeviceInfo.X_FH_Account.X_FH_WebUserInfo.WebSuperUsername',
-          'InternetGatewayDevice.DeviceInfo.X_FH_Account.X_FH_WebUserInfo.WebSuperPassword',
-          'InternetGatewayDevice.DeviceInfo.X_FH_Account.X_FH_WebUserInfo.WebUsername',
-          'InternetGatewayDevice.DeviceInfo.X_FH_Account.X_FH_WebUserInfo.WebPassword',
-        ]);
+        const again = await client.findBySerial(onu.sn);
+        if (again) fresh = again;
       } catch {
-        /* optional */
+        /* keep original */
+      }
+      const parsedFresh = this.parseDevice(fresh);
+      const leafPaths = new Set<string>();
+      for (const w of parsedFresh.wifi) {
+        leafPaths.add(w.ssidPath);
+        if (w.keyPath) leafPaths.add(w.keyPath);
+        if (w.enablePath) leafPaths.add(w.enablePath);
+      }
+      for (const u of parsedFresh.webUsers) {
+        leafPaths.add(u.usernamePath);
+        leafPaths.add(u.passwordPath);
+      }
+      // FiberHome / Huawei / ZTE fallbacks if tree still empty.
+      for (const p of [
+        'InternetGatewayDevice.DeviceInfo.X_FH_Account.X_FH_WebUserInfo.WebSuperUsername',
+        'InternetGatewayDevice.DeviceInfo.X_FH_Account.X_FH_WebUserInfo.WebSuperPassword',
+        'InternetGatewayDevice.DeviceInfo.X_FH_Account.X_FH_WebUserInfo.WebUsername',
+        'InternetGatewayDevice.DeviceInfo.X_FH_Account.X_FH_WebUserInfo.WebPassword',
+        'InternetGatewayDevice.UserInterface.X_HW_WebUserInfo.1.UserName',
+        'InternetGatewayDevice.UserInterface.X_HW_WebUserInfo.1.Password',
+        'InternetGatewayDevice.UserInterface.X_HW_WebUserInfo.2.UserName',
+        'InternetGatewayDevice.UserInterface.X_HW_WebUserInfo.2.Password',
+        'InternetGatewayDevice.UserInterface.X_ZTE-COM_WebUserInfo.1.UserName',
+        'InternetGatewayDevice.UserInterface.X_ZTE-COM_WebUserInfo.1.Password',
+        'InternetGatewayDevice.UserInterface.X_ZTE-COM_WebUserInfo.2.UserName',
+        'InternetGatewayDevice.UserInterface.X_ZTE-COM_WebUserInfo.2.Password',
+        'InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID',
+        'InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.KeyPassphrase',
+        'InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.PreSharedKey.1.PreSharedKey',
+        'InternetGatewayDevice.LANDevice.1.WLANConfiguration.2.SSID',
+        'InternetGatewayDevice.LANDevice.1.WLANConfiguration.2.KeyPassphrase',
+        'InternetGatewayDevice.LANDevice.1.WLANConfiguration.2.PreSharedKey.1.PreSharedKey',
+      ]) {
+        leafPaths.add(p);
+      }
+      if (leafPaths.size > 0) {
+        try {
+          await client.getParameterValues(deviceId, [...leafPaths]);
+        } catch {
+          /* optional */
+        }
       }
     }
 
@@ -1933,9 +2065,10 @@ export class OnuTr069ConfigService {
 }
 
 function parsedAfterRefreshEmpty(view: Tr069OnuConfigView): boolean {
-  return (
-    view.wifi.length === 0 &&
-    view.ethernet.length === 0 &&
-    view.webUsers.length === 0
-  );
+  const wifiEmpty =
+    view.wifi.length === 0 || view.wifi.every((w) => !w.ssid?.trim());
+  const usersEmpty =
+    view.webUsers.length === 0 ||
+    view.webUsers.every((u) => !u.username?.trim());
+  return wifiEmpty && view.ethernet.length === 0 && usersEmpty;
 }

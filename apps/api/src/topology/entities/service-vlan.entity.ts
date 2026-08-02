@@ -23,6 +23,13 @@ export class ServiceVlan {
   @Column({ type: 'varchar', length: 255, nullable: true })
   description: string | null;
 
+  /**
+   * Semantic role of the VLAN in the tenant catalog.
+   * TV VLANs feed the ONU Ethernet untagged IPTV port picker.
+   */
+  @Column({ type: 'varchar', length: 20, default: 'internet' })
+  purpose: 'internet' | 'management' | 'tv';
+
   /** OLT device UUIDs this VLAN should exist on. */
   @Column({ name: 'olt_ids', type: 'jsonb', default: () => "'[]'" })
   oltIds: string[];

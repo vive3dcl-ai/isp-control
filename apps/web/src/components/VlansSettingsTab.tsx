@@ -23,10 +23,13 @@ import { ModalPortal } from './ModalPortal'
 const inputClass =
   'w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 outline-none ring-[var(--accent)] focus:ring-2'
 
+type ServiceVlanPurpose = 'internet' | 'management' | 'tv'
+
 type ServiceVlanRow = {
   id: string | null
   vlanId: number
   description: string | null
+  purpose?: ServiceVlanPurpose
   oltIds: string[]
   routerIds: string[]
   switchIds: string[]
@@ -37,6 +40,12 @@ type ServiceVlanRow = {
   routers: Array<{ id: string; name: string }>
   switches: Array<{ id: string; name: string }>
   discovered?: boolean
+}
+
+const PURPOSE_LABELS: Record<ServiceVlanPurpose, string> = {
+  internet: 'Internet',
+  management: 'Mgmt',
+  tv: 'TV',
 }
 
 type ModalMode = 'create' | 'edit'
@@ -65,6 +74,7 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
   const [editing, setEditing] = useState<ServiceVlanRow | null>(null)
   const [vlanId, setVlanId] = useState('')
   const [description, setDescription] = useState('')
+  const [purpose, setPurpose] = useState<ServiceVlanPurpose>('internet')
   /** routerId → parent physical port id (only needed when creating) */
   const [routerParentPort, setRouterParentPort] = useState<
     Record<string, string>
@@ -278,6 +288,7 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
     setEditing(null)
     setVlanId('')
     setDescription('')
+    setPurpose('internet')
     setRouterParentPort({})
     setSwitchBridge({})
     setSwitchNewBridge({})
@@ -291,6 +302,7 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
     setEditing(v)
     setVlanId(String(v.vlanId))
     setDescription(v.description ?? '')
+    setPurpose(v.purpose ?? 'internet')
     setRouterParentPort({})
     setSwitchBridge({})
     setSwitchNewBridge({})
@@ -414,6 +426,7 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
         body: JSON.stringify({
           vlanId: idNum,
           description: description.trim() || undefined,
+          purpose,
         }),
       })
       setMsg(`VLAN ${idNum} añadida al catálogo`)
@@ -422,6 +435,7 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
       setModal('edit')
       setEditing({
         ...created,
+        purpose: created.purpose ?? purpose,
         olts: created.olts ?? [],
         routers: created.routers ?? [],
         switches: created.switches ?? [],
@@ -439,10 +453,17 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
       `/app/settings/vlans/by-vlan/${currentVlanId}`,
       {
         method: 'PUT',
-        body: JSON.stringify({ description: description.trim() || null }),
+        body: JSON.stringify({
+          description: description.trim() || null,
+          purpose,
+        }),
       },
     )
-    setEditing((prev) => (prev ? { ...prev, id: upserted.id } : prev))
+    setEditing((prev) =>
+      prev
+        ? { ...prev, id: upserted.id, purpose: upserted.purpose ?? purpose }
+        : prev,
+    )
     return upserted.id!
   }
 
@@ -488,7 +509,10 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
         catalogId = await ensureCatalogId()
         await apiFetch(`/app/settings/vlans/${catalogId}`, {
           method: 'PATCH',
-          body: JSON.stringify({ description: description.trim() || null }),
+          body: JSON.stringify({
+            description: description.trim() || null,
+            purpose,
+          }),
         })
         return 'Catálogo actualizado'
       },
@@ -637,6 +661,7 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
             <thead className="border-b border-[var(--border)] bg-[var(--bg)] text-[var(--text-muted)]">
               <tr>
                 <th className="px-3 py-2 font-medium">VLAN</th>
+                <th className="px-3 py-2 font-medium">Tipo</th>
                 <th className="px-3 py-2 font-medium">Descripción</th>
                 <th className="px-3 py-2 font-medium">OLT</th>
                 <th className="px-3 py-2 font-medium">Router</th>
@@ -657,6 +682,9 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
                         detectada
                       </span>
                     )}
+                  </td>
+                  <td className="px-3 py-2.5">
+                    {PURPOSE_LABELS[v.purpose ?? 'internet']}
                   </td>
                   <td className="px-3 py-2.5">{v.description || '—'}</td>
                   <td className="px-3 py-2.5 text-xs">{v.olt || '—'}</td>
@@ -713,13 +741,29 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
               </label>
               <label className="block text-sm">
                 <span className="mb-1 block text-[var(--text-muted)]">
+                  Tipo
+                </span>
+                <select
+                  className={inputClass}
+                  value={purpose}
+                  onChange={(e) =>
+                    setPurpose(e.target.value as ServiceVlanPurpose)
+                  }
+                >
+                  <option value="internet">Internet</option>
+                  <option value="management">Mgmt</option>
+                  <option value="tv">TV</option>
+                </select>
+              </label>
+              <label className="block text-sm">
+                <span className="mb-1 block text-[var(--text-muted)]">
                   Descripción
                 </span>
                 <input
                   className={inputClass}
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
-                  placeholder="ej. Management / Internet"
+                  placeholder="ej. IPTV clientes / Management"
                 />
               </label>
 
@@ -1200,9 +1244,10 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
                           method: 'PATCH',
                           body: JSON.stringify({
                             description: description.trim() || null,
+                            purpose,
                           }),
                         })
-                        setMsg('Descripción guardada')
+                        setMsg('VLAN guardada')
                         invalidate()
                       } catch (e) {
                         setError(e instanceof Error ? e.message : String(e))
@@ -1211,7 +1256,7 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
                   }}
                   className="rounded-lg bg-[var(--accent)] px-3 py-2 text-sm font-medium text-white"
                 >
-                  Guardar descripción
+                  Guardar
                 </button>
               )}
             </div>
