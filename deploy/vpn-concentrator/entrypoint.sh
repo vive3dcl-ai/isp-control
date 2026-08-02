@@ -263,6 +263,12 @@ POOLS = {
 seen_routes = set()
 server_ips = set()
 per_proto = {p: {"routes": set(), "ips": set(), "snat": set()} for p in POOLS}
+# OpenVPN admite un solo dueño por iroute: si dos clientes del mismo túnel
+# publican la misma LAN, gana el último en conectarse y esa red queda
+# inalcanzable para el panel. Solo el primero la anuncia. Se agrupa por túnel
+# (server address) para no alterar el comportamiento entre túneles distintos,
+# donde los rangos por defecto (RFC1918) suelen solaparse.
+claimed_iroutes = {}
 users = data.get("openvpnUsers") or []
 with open(users_path, "w") as uf:
     for u in users:
@@ -308,6 +314,7 @@ with open(users_path, "w") as uf:
                 )
         except Exception:
             pass
+        claimed = claimed_iroutes.setdefault((proto, server), set())
         for cidr in u.get("lanRoutes") or []:
             cidr = (cidr or "").strip()
             if not cidr:
@@ -315,7 +322,15 @@ with open(users_path, "w") as uf:
             try:
                 net = ipaddress.ip_network(cidr, strict=False)
                 mask = str(net.netmask)
-                lines.append(f"iroute {net.network_address} {mask}")
+                if str(net) in claimed:
+                    print(
+                        f"WARN: {net} ya la publica otro cliente del túnel {server}"
+                        f" — {user} no la anuncia (iroute admite un solo dueño)",
+                        file=sys.stderr,
+                    )
+                else:
+                    claimed.add(str(net))
+                    lines.append(f"iroute {net.network_address} {mask}")
                 seen_routes.add(str(net))
                 per_proto[proto]["routes"].add(str(net))
                 # Los equipos detrás del router tampoco saben volver a

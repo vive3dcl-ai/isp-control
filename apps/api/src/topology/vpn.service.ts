@@ -1194,7 +1194,10 @@ export class VpnService {
       for (const row of rows) {
         try {
           // Prefer multi-client table; fall back to legacy tunnel row.
+          // Orden estable: el cliente principal (nombre = nombre del túnel, o el
+          // más antiguo) primero, porque es el único que publica las LAN.
           const clients: Array<{
+            tunnel_id: string;
             name: string;
             password: string | null;
             client_address: string;
@@ -1204,18 +1207,32 @@ export class VpnService {
             server_address: string;
             tunnel_routes: string;
           }> = await admin.query(
-            `SELECT c.name, c.password, c.client_address, c.wg_public_key,
+            `SELECT c.tunnel_id, c.name, c.password, c.client_address,
+                    c.wg_public_key,
                     t.protocol, t.mode, t.server_address, t.tunnel_routes
              FROM "${row.schema_name}"."vpn_tunnel_clients" c
              INNER JOIN "${row.schema_name}"."vpn_tunnels" t ON t.id = c.tunnel_id
-             WHERE COALESCE(t.mode, 'outbound') = 'outbound'`,
+             WHERE COALESCE(t.mode, 'outbound') = 'outbound'
+             ORDER BY c.tunnel_id,
+                      (c.name = t.name) DESC,
+                      c.created_at ASC NULLS FIRST,
+                      c.client_address ASC`,
           );
           if (clients.length > 0) {
+            // OpenVPN admite un solo dueño por iroute (y WireGuard un solo peer
+            // por AllowedIPs): si todos los clientes del túnel publican la misma
+            // LAN, gana el último en conectarse y la red queda inalcanzable para
+            // el panel. Solo el cliente principal las anuncia.
+            const lanPublishedFor = new Set<string>();
             for (const c of clients) {
-              const routes = (c.tunnel_routes || '')
-                .split(/\r?\n/)
-                .map((r) => r.trim())
-                .filter(Boolean);
+              const isLanOwner = !lanPublishedFor.has(c.tunnel_id);
+              if (isLanOwner) lanPublishedFor.add(c.tunnel_id);
+              const routes = isLanOwner
+                ? (c.tunnel_routes || '')
+                    .split(/\r?\n/)
+                    .map((r) => r.trim())
+                    .filter(Boolean)
+                : [];
               if (
                 (c.protocol === 'openvpn_tcp' || c.protocol === 'openvpn_udp') &&
                 c.password
