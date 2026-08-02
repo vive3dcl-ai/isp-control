@@ -24,9 +24,12 @@ import { TenantRolesGuard } from '../auth/guards/tenant-roles.guard';
 import type { AuthUser } from '../auth/auth.types';
 import { VpnService } from './vpn.service';
 import {
+  CreateVpnTunnelClientDto,
   CreateVpnTunnelDto,
   ImportVpnToRouterDto,
+  UpdateVpnTunnelClientDto,
   UpdateVpnTunnelDto,
+  VpnSetupDto,
 } from './dto/vpn.dto';
 
 @Controller('app/topology/vpn')
@@ -65,10 +68,53 @@ export class VpnController {
     return this.vpn.remove(user, id);
   }
 
+  @Get('tunnels/:id/clients')
+  listClients(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.vpn.listClients(user, id);
+  }
+
+  @Post('tunnels/:id/clients')
+  @TenantRoles(...CRM_WRITE_ROLES)
+  createClient(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CreateVpnTunnelClientDto,
+  ) {
+    return this.vpn.createClient(user, id, dto);
+  }
+
+  @Patch('tunnels/:id/clients/:clientId')
+  @TenantRoles(...CRM_WRITE_ROLES)
+  updateClient(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('clientId', ParseUUIDPipe) clientId: string,
+    @Body() dto: UpdateVpnTunnelClientDto,
+  ) {
+    return this.vpn.updateClient(user, id, clientId, dto);
+  }
+
+  @Delete('tunnels/:id/clients/:clientId')
+  @TenantRoles(...CRM_WRITE_ROLES)
+  removeClient(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('clientId', ParseUUIDPipe) clientId: string,
+  ) {
+    return this.vpn.removeClient(user, id, clientId);
+  }
+
   @Post('tunnels/:id/setup')
   @TenantRoles(...CRM_WRITE_ROLES)
-  setup(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string) {
-    return this.vpn.getSetup(user, id);
+  setup(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: VpnSetupDto = {},
+  ) {
+    return this.vpn.getSetup(user, id, dto?.clientId);
   }
 
   @Post('tunnels/:id/probe')
@@ -84,7 +130,13 @@ export class VpnController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ImportVpnToRouterDto,
   ) {
-    return this.vpn.importToRouter(user, id, dto.deviceId, dto.phase ?? 'all');
+    return this.vpn.importToRouter(
+      user,
+      id,
+      dto.deviceId,
+      dto.phase ?? 'all',
+      dto.clientId,
+    );
   }
 }
 

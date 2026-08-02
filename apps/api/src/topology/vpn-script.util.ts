@@ -48,6 +48,29 @@ export function allocateTunnelSubnet(
   };
 }
 
+/** Next free host in a tunnel /24 (.2–.254), skipping used addresses and .1. */
+export function allocateClientAddressInSubnet(
+  tunnelSubnet: string,
+  usedAddresses: string[],
+): string {
+  const m = tunnelSubnet.match(/^(\d+\.\d+\.\d+)\.0\/24$/);
+  if (!m) {
+    throw new Error(`Subred de túnel inválida: ${tunnelSubnet}`);
+  }
+  const prefix = m[1];
+  const used = new Set(
+    usedAddresses
+      .map((a) => a.trim())
+      .filter((a) => a.startsWith(`${prefix}.`)),
+  );
+  used.add(`${prefix}.1`); // server/gateway
+  for (let host = 2; host <= 254; host += 1) {
+    const ip = `${prefix}.${host}`;
+    if (!used.has(ip)) return ip;
+  }
+  throw new Error(`Sin IPs libres en ${tunnelSubnet}`);
+}
+
 /** Is this /24 inside the pool the concentrator serves for that protocol? */
 export function tunnelSubnetMatchesProtocol(
   tunnelSubnet: string,

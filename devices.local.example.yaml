@@ -1,0 +1,29 @@
+# Copia este archivo a devices.local.yaml y rellena datos reales.
+# devices.local.yaml está en .gitignore — no se sube a git ni a Docker.
+#
+# Uso: pega IPs, usuario y password de cada equipo problemático.
+# Protocolo típico MikroTik: api_ssl (8729) | api_plain (8728) | rest_https (443)
+# SwitchOS: http (80)
+
+devices:
+  - name: "Router-ejemplo"
+    role: router # router | switch
+    vendor: mikrotik
+    os: routeros # routeros | swos
+    host: "192.168.1.1"
+    port: 8729
+    protocol: api_ssl # api_ssl | api_plain | rest_https | http
+    username: "admin"
+    password: "CAMBIAR"
+    notes: "Qué falla / qué revisar"
+
+  - name: "Switch-ejemplo"
+    role: switch
+    vendor: mikrotik
+    os: routeros
+    host: "192.168.1.2"
+    port: 8729
+    protocol: api_ssl
+    username: "admin"
+    password: "CAMBIAR"
+    notes: ""

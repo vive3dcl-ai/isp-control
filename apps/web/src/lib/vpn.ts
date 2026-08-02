@@ -24,6 +24,22 @@ export const DEFAULT_VPN_ROUTES = `10.0.0.0/8
 172.16.0.0/12
 192.168.0.0/16`
 
+export interface VpnTunnelClient {
+  id: string
+  tunnelId: string
+  name: string
+  clientAddress: string
+  deviceId?: string | null
+  importedAt?: string | null
+  status: string
+  hasPassword?: boolean
+  hasWgKeys?: boolean
+  setupTokenValid?: boolean
+  note?: string | null
+  createdAt?: string
+  updatedAt?: string
+}
+
 export interface VpnTunnel {
   id: string
   name: string
@@ -40,12 +56,15 @@ export interface VpnTunnel {
   lastImportedDeviceId?: string | null
   lastImportedAt?: string | null
   note?: string | null
+  clients?: VpnTunnelClient[]
+  clientCount?: number
   createdAt?: string
   updatedAt?: string
 }
 
 export interface VpnSetupPayload {
   tunnel: VpnTunnel
+  client?: VpnTunnelClient
   protocolLabel: string
   expiresInSeconds: number
   endpoint: { host: string; port: number }

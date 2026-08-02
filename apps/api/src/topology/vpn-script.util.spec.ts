@@ -1,4 +1,5 @@
 import {
+  allocateClientAddressInSubnet,
   allocateTunnelSubnet,
   buildMikrotikVpnScript,
   placeBeforeTables,
@@ -136,6 +137,18 @@ describe('allocateTunnelSubnet', () => {
     expect(
       allocateTunnelSubnet(['10.69.1.0/24'], 'wireguard').tunnelSubnet,
     ).toBe('10.69.2.0/24');
+  });
+
+  it('allocates next host in the same /24 for extra clients', () => {
+    expect(
+      allocateClientAddressInSubnet('10.69.1.0/24', ['10.69.1.2']),
+    ).toBe('10.69.1.3');
+    expect(
+      allocateClientAddressInSubnet('10.69.1.0/24', [
+        '10.69.1.2',
+        '10.69.1.3',
+      ]),
+    ).toBe('10.69.1.4');
   });
 
   it('allocates OpenVPN UDP from the tun1 pool', () => {

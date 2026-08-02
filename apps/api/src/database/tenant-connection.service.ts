@@ -14,6 +14,7 @@ import { NetworkNode } from '../topology/entities/network-node.entity';
 import { NodeHeader } from '../topology/entities/node-header.entity';
 import { DeviceMetricSample } from '../topology/entities/device-metric-sample.entity';
 import { VpnTunnel } from '../topology/entities/vpn-tunnel.entity';
+import { VpnTunnelClient } from '../topology/entities/vpn-tunnel-client.entity';
 import { Tr069Profile } from '../topology/entities/tr069-profile.entity';
 import { Tr069ProfileOlt } from '../topology/entities/tr069-profile-olt.entity';
 import { OnuProfile } from '../topology/entities/onu-profile.entity';
@@ -428,6 +429,49 @@ const TOPOLOGY_ALTER = (schema: string) => `
   ALTER TABLE "${schema}"."vpn_tunnels"
     ADD COLUMN IF NOT EXISTS "endpoint_host" varchar(255) NULL;
 
+  -- Multi-cliente por segmento VPN (mismo /24: .2, .3, .4…)
+  CREATE TABLE IF NOT EXISTS "${schema}"."vpn_tunnel_clients" (
+    "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    "tunnel_id" uuid NOT NULL REFERENCES "${schema}"."vpn_tunnels"("id") ON DELETE CASCADE,
+    "name" varchar(80) NOT NULL,
+    "client_address" varchar(64) NOT NULL,
+    "password" text NULL,
+    "wg_private_key" text NULL,
+    "wg_public_key" text NULL,
+    "device_id" uuid NULL,
+    "imported_at" TIMESTAMPTZ NULL,
+    "status" varchar(20) NOT NULL DEFAULT 'pending',
+    "setup_token" varchar(64) NULL,
+    "setup_token_expires_at" TIMESTAMPTZ NULL,
+    "note" text NULL,
+    "created_at" TIMESTAMPTZ NOT NULL DEFAULT now(),
+    "updated_at" TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT "uq_vpn_tunnel_clients_name" UNIQUE ("name"),
+    CONSTRAINT "uq_vpn_tunnel_clients_addr" UNIQUE ("tunnel_id", "client_address")
+  );
+  CREATE INDEX IF NOT EXISTS "idx_vpn_tunnel_clients_tunnel"
+    ON "${schema}"."vpn_tunnel_clients" ("tunnel_id");
+  CREATE UNIQUE INDEX IF NOT EXISTS "uq_vpn_tunnel_clients_device"
+    ON "${schema}"."vpn_tunnel_clients" ("device_id")
+    WHERE "device_id" IS NOT NULL;
+  CREATE INDEX IF NOT EXISTS "idx_vpn_tunnel_clients_setup_token"
+    ON "${schema}"."vpn_tunnel_clients" ("setup_token");
+  -- Backfill: un cliente primario por túnel legado (misma IP/credenciales)
+  INSERT INTO "${schema}"."vpn_tunnel_clients" (
+    "tunnel_id", "name", "client_address", "password",
+    "wg_private_key", "wg_public_key", "device_id", "imported_at", "status"
+  )
+  SELECT
+    t."id", t."name", t."client_address", t."password",
+    t."wg_private_key", t."wg_public_key",
+    t."last_imported_device_id", t."last_imported_at",
+    COALESCE(t."status", 'pending')
+  FROM "${schema}"."vpn_tunnels" t
+  WHERE NOT EXISTS (
+    SELECT 1 FROM "${schema}"."vpn_tunnel_clients" c WHERE c."tunnel_id" = t."id"
+  )
+  ON CONFLICT ("name") DO NOTHING;
+
   CREATE TABLE IF NOT EXISTS "${schema}"."tr069_profiles" (
     "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     "name" varchar(120) NOT NULL,
@@ -793,6 +837,7 @@ export class TenantConnectionService implements OnModuleDestroy {
         NodeHeader,
         DeviceMetricSample,
         VpnTunnel,
+        VpnTunnelClient,
         Tr069Profile,
         Tr069ProfileOlt,
         OnuProfile,
@@ -914,6 +959,14 @@ export class TenantConnectionService implements OnModuleDestroy {
     await this.ensureTenantSchema(schemaName);
     const ds = await this.getDataSource(schemaName);
     return ds.getRepository(VpnTunnel);
+  }
+
+  async getVpnTunnelClientRepository(
+    schemaName: string,
+  ): Promise<Repository<VpnTunnelClient>> {
+    await this.ensureTenantSchema(schemaName);
+    const ds = await this.getDataSource(schemaName);
+    return ds.getRepository(VpnTunnelClient);
   }
 
   async getTr069ProfileRepository(

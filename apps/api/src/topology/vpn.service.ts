@@ -12,7 +12,13 @@ import type { AuthUser } from '../auth/auth.types';
 import { TenantConnectionService } from '../database/tenant-connection.service';
 import { MikrotikClient } from './mikrotik.client';
 import type { VpnTunnel } from './entities/vpn-tunnel.entity';
-import { CreateVpnTunnelDto, UpdateVpnTunnelDto } from './dto/vpn.dto';
+import type { VpnTunnelClient } from './entities/vpn-tunnel-client.entity';
+import {
+  CreateVpnTunnelClientDto,
+  CreateVpnTunnelDto,
+  UpdateVpnTunnelClientDto,
+  UpdateVpnTunnelDto,
+} from './dto/vpn.dto';
 import {
   DEFAULT_VPN_PORTS,
   DEFAULT_VPN_TUNNEL_ROUTES,
@@ -21,6 +27,7 @@ import {
   type VpnProtocol,
 } from './vpn.constants';
 import {
+  allocateClientAddressInSubnet,
   allocateTunnelSubnet,
   buildMikrotikBootstrapCommand,
   buildMikrotikVpnScript,
@@ -44,6 +51,7 @@ import {
   type OpenVpnConcentratorUserInput,
   type WireguardConcentratorPeerInput,
 } from './vpn-script.util';
+import { isMikrotikRouterOsDevice } from './switch.constants';
 import { PlatformPublicUrlsService } from '../platform/platform-public-urls.service';
 
 const ACS_HINT_PORT = 14501;
@@ -154,7 +162,7 @@ export class VpnService {
       : schema;
   }
 
-  private sanitize(t: VpnTunnel) {
+  private sanitize(t: VpnTunnel, clients?: VpnTunnelClient[]) {
     const {
       password,
       wgPrivateKey,
@@ -176,7 +184,63 @@ export class VpnService {
         !!setupToken &&
         !!setupTokenExpiresAt &&
         setupTokenExpiresAt.getTime() > Date.now(),
+      clients: (clients ?? []).map((c) => this.sanitizeClient(c)),
+      clientCount: clients?.length ?? 0,
     };
+  }
+
+  private sanitizeClient(c: VpnTunnelClient) {
+    const { password, wgPrivateKey, setupToken, setupTokenExpiresAt, ...rest } =
+      c;
+    return {
+      ...rest,
+      hasPassword: !!password,
+      hasWgKeys: !!wgPrivateKey,
+      setupTokenValid:
+        !!setupToken &&
+        !!setupTokenExpiresAt &&
+        setupTokenExpiresAt.getTime() > Date.now(),
+    };
+  }
+
+  private async loadClients(
+    schema: string,
+    tunnelId: string,
+  ): Promise<VpnTunnelClient[]> {
+    const repo =
+      await this.tenantConnections.getVpnTunnelClientRepository(schema);
+    return repo.find({
+      where: { tunnelId },
+      order: { clientAddress: 'ASC' },
+    });
+  }
+
+  private async ensurePrimaryClient(
+    schema: string,
+    tunnel: VpnTunnel,
+  ): Promise<VpnTunnelClient[]> {
+    const repo =
+      await this.tenantConnections.getVpnTunnelClientRepository(schema);
+    let clients = await repo.find({
+      where: { tunnelId: tunnel.id },
+      order: { clientAddress: 'ASC' },
+    });
+    if (clients.length > 0) return clients;
+
+    const created = await repo.save(
+      repo.create({
+        tunnelId: tunnel.id,
+        name: tunnel.name,
+        clientAddress: tunnel.clientAddress,
+        password: tunnel.password,
+        wgPrivateKey: tunnel.wgPrivateKey,
+        wgPublicKey: tunnel.wgPublicKey,
+        deviceId: tunnel.lastImportedDeviceId,
+        importedAt: tunnel.lastImportedAt,
+        status: tunnel.status || 'pending',
+      }),
+    );
+    return [created];
   }
 
   async list(user: AuthUser) {
@@ -186,15 +250,20 @@ export class VpnService {
     const live = await this.readLiveVpnPeers();
     const updated = await Promise.all(
       rows.map(async (t) => {
-        const next = this.deriveLiveStatus(t, live);
+        const clients = await this.ensurePrimaryClient(schema, t);
+        const next = this.deriveLiveStatus(t, live, clients);
         if (next !== t.status) {
           t.status = next;
           await repo.save(t);
         }
-        return t;
+        return { tunnel: t, clients };
       }),
     );
-    return { tunnels: updated.map((t) => this.sanitize(t)) };
+    return {
+      tunnels: updated.map(({ tunnel, clients }) =>
+        this.sanitize(tunnel, clients),
+      ),
+    };
   }
 
   /** Peers vistos en el concentrador (OpenVPN status + WG handshakes). */
@@ -314,11 +383,22 @@ export class VpnService {
       openvpnIps: Set<string>;
       wireguardIps: Set<string>;
     },
+    clients?: VpnTunnelClient[],
   ): string {
     const prev = tunnel.status || 'pending';
+    const list = clients ?? [];
     if (tunnel.protocol === 'wireguard') {
-      if (live.wireguardIps.has(tunnel.clientAddress)) return 'connected';
+      if (
+        list.some((c) => live.wireguardIps.has(c.clientAddress)) ||
+        live.wireguardIps.has(tunnel.clientAddress)
+      ) {
+        return 'connected';
+      }
     } else if (
+      list.some(
+        (c) =>
+          live.openvpn.has(c.name) || live.openvpnIps.has(c.clientAddress),
+      ) ||
       live.openvpn.has(tunnel.name) ||
       live.openvpnIps.has(tunnel.clientAddress)
     ) {
@@ -579,7 +659,21 @@ export class VpnService {
       }),
     );
 
-    return this.sanitize(tunnel);
+    const clientRepo =
+      await this.tenantConnections.getVpnTunnelClientRepository(schema);
+    const primary = await clientRepo.save(
+      clientRepo.create({
+        tunnelId: tunnel.id,
+        name,
+        clientAddress: alloc.clientAddress,
+        password,
+        wgPrivateKey,
+        wgPublicKey,
+        status: 'pending',
+      }),
+    );
+
+    return this.sanitize(tunnel, [primary]);
   }
 
   private parseSubnet(cidr: string, protocol: VpnProtocol) {
@@ -629,11 +723,169 @@ export class VpnService {
     }
     if (dto.password !== undefined && dto.password !== '') {
       tunnel.password = dto.password;
+      // Mantén el cliente primario alineado con la password del túnel
+      const clients = await this.loadClients(schema, tunnel.id);
+      const primary = clients[0];
+      if (primary) {
+        const clientRepo =
+          await this.tenantConnections.getVpnTunnelClientRepository(schema);
+        primary.password = dto.password;
+        await clientRepo.save(primary);
+      }
     }
     if (dto.note !== undefined) tunnel.note = dto.note.trim() || null;
 
     await repo.save(tunnel);
-    return this.sanitize(tunnel);
+    const clients = await this.ensurePrimaryClient(schema, tunnel);
+    return this.sanitize(tunnel, clients);
+  }
+
+  async listClients(user: AuthUser, tunnelId: string) {
+    const schema = this.requireSchema(user);
+    const repo = await this.tenantConnections.getVpnTunnelRepository(schema);
+    const tunnel = await repo.findOne({ where: { id: tunnelId } });
+    if (!tunnel) throw new NotFoundException('Tunnel not found');
+    const clients = await this.ensurePrimaryClient(schema, tunnel);
+    return {
+      tunnel: this.sanitize(tunnel, clients),
+      clients: clients.map((c) => this.sanitizeClient(c)),
+    };
+  }
+
+  async createClient(
+    user: AuthUser,
+    tunnelId: string,
+    dto: CreateVpnTunnelClientDto,
+  ) {
+    const schema = this.requireSchema(user);
+    const repo = await this.tenantConnections.getVpnTunnelRepository(schema);
+    const tunnel = await repo.findOne({ where: { id: tunnelId } });
+    if (!tunnel) throw new NotFoundException('Tunnel not found');
+    await this.ensurePrimaryClient(schema, tunnel);
+
+    const clientRepo =
+      await this.tenantConnections.getVpnTunnelClientRepository(schema);
+    const name = dto.name.trim();
+    const clash = await clientRepo.findOne({ where: { name } });
+    if (clash) {
+      throw new BadRequestException(`Ya existe un cliente VPN llamado ${name}`);
+    }
+    // También no chocar con nombres de túnel ajenos como usuario OVPN legado
+    const tunnelClash = await repo.findOne({ where: { name } });
+    if (tunnelClash && tunnelClash.id !== tunnel.id) {
+      throw new BadRequestException(
+        `El nombre ${name} ya está usado por otro túnel`,
+      );
+    }
+
+    const existing = await clientRepo.find({ where: { tunnelId } });
+    let clientAddress = dto.clientAddress?.trim();
+    if (clientAddress) {
+      const prefix = tunnel.tunnelSubnet.replace(/\.0\/24$/, '');
+      if (!clientAddress.startsWith(`${prefix}.`)) {
+        throw new BadRequestException(
+          `La IP debe pertenecer a ${tunnel.tunnelSubnet}`,
+        );
+      }
+      if (clientAddress.endsWith('.1')) {
+        throw new BadRequestException('La .1 es la IP del concentrador');
+      }
+      if (existing.some((c) => c.clientAddress === clientAddress)) {
+        throw new BadRequestException(`La IP ${clientAddress} ya está en uso`);
+      }
+    } else {
+      clientAddress = allocateClientAddressInSubnet(
+        tunnel.tunnelSubnet,
+        existing.map((c) => c.clientAddress),
+      );
+    }
+
+    let password: string | null = null;
+    let wgPrivateKey: string | null = null;
+    let wgPublicKey: string | null = null;
+    if (tunnel.protocol === 'wireguard') {
+      this.requireWgServerPublicKey();
+      const kp = generateWireguardKeyPair();
+      wgPrivateKey = kp.privateKey;
+      wgPublicKey = kp.publicKey;
+    } else {
+      password = dto.password?.trim() || randomPassword(12);
+    }
+
+    const client = await clientRepo.save(
+      clientRepo.create({
+        tunnelId,
+        name,
+        clientAddress,
+        password,
+        wgPrivateKey,
+        wgPublicKey,
+        status: 'pending',
+        note: dto.note?.trim() || null,
+      }),
+    );
+    return this.sanitizeClient(client);
+  }
+
+  async updateClient(
+    user: AuthUser,
+    tunnelId: string,
+    clientId: string,
+    dto: UpdateVpnTunnelClientDto,
+  ) {
+    const schema = this.requireSchema(user);
+    const tunnelRepo =
+      await this.tenantConnections.getVpnTunnelRepository(schema);
+    const tunnel = await tunnelRepo.findOne({ where: { id: tunnelId } });
+    if (!tunnel) throw new NotFoundException('Tunnel not found');
+    const clientRepo =
+      await this.tenantConnections.getVpnTunnelClientRepository(schema);
+    const client = await clientRepo.findOne({
+      where: { id: clientId, tunnelId },
+    });
+    if (!client) throw new NotFoundException('Cliente VPN not found');
+
+    if (dto.name !== undefined) {
+      const name = dto.name.trim();
+      const clash = await clientRepo.findOne({ where: { name } });
+      if (clash && clash.id !== clientId) {
+        throw new BadRequestException(
+          `Ya existe un cliente VPN llamado ${name}`,
+        );
+      }
+      client.name = name;
+    }
+    if (dto.password !== undefined && dto.password !== '') {
+      if (tunnel.protocol === 'wireguard') {
+        throw new BadRequestException(
+          'WireGuard no usa password; regenera el cliente si necesitas nuevas claves',
+        );
+      }
+      client.password = dto.password;
+    }
+    if (dto.note !== undefined) client.note = dto.note.trim() || null;
+    await clientRepo.save(client);
+    return this.sanitizeClient(client);
+  }
+
+  async removeClient(user: AuthUser, tunnelId: string, clientId: string) {
+    const schema = this.requireSchema(user);
+    const tunnelRepo =
+      await this.tenantConnections.getVpnTunnelRepository(schema);
+    const tunnel = await tunnelRepo.findOne({ where: { id: tunnelId } });
+    if (!tunnel) throw new NotFoundException('Tunnel not found');
+    const clientRepo =
+      await this.tenantConnections.getVpnTunnelClientRepository(schema);
+    const clients = await clientRepo.find({ where: { tunnelId } });
+    if (clients.length <= 1) {
+      throw new BadRequestException(
+        'No se puede eliminar el único cliente del segmento; borra el túnel entero',
+      );
+    }
+    const client = clients.find((c) => c.id === clientId);
+    if (!client) throw new NotFoundException('Cliente VPN not found');
+    await clientRepo.delete({ id: clientId });
+    return { ok: true };
   }
 
   async remove(user: AuthUser, id: string) {
@@ -641,11 +893,14 @@ export class VpnService {
     const repo = await this.tenantConnections.getVpnTunnelRepository(schema);
     const tunnel = await repo.findOne({ where: { id } });
     if (!tunnel) throw new NotFoundException('Tunnel not found');
+    const clientRepo =
+      await this.tenantConnections.getVpnTunnelClientRepository(schema);
+    await clientRepo.delete({ tunnelId: id });
     await repo.delete({ id });
     return { ok: true };
   }
 
-  private scriptContext(tunnel: VpnTunnel) {
+  private scriptContext(tunnel: VpnTunnel, client: VpnTunnelClient) {
     const protocol = tunnel.protocol as VpnProtocol;
     const host = this.requireVpnPublicHost();
     const { host: epHost, port } = vpnEndpoint(
@@ -654,29 +909,49 @@ export class VpnService {
       this.vpnPortFor(protocol),
     );
     return {
-      name: tunnel.name,
+      name: client.name,
       protocol,
-      password: tunnel.password,
-      clientAddress: tunnel.clientAddress,
+      password: client.password,
+      clientAddress: client.clientAddress,
       serverAddress: tunnel.serverAddress,
       tunnelRoutes: tunnel.tunnelRoutes.split(/\r?\n/),
       vpnHost: epHost,
       vpnPort: port,
-      wgPrivateKey: tunnel.wgPrivateKey,
+      wgPrivateKey: client.wgPrivateKey,
       wgServerPublicKey: this.wgServerPublicKey(),
     };
   }
 
-  private buildRouterScript(tunnel: VpnTunnel): string {
+  private buildRouterScript(
+    tunnel: VpnTunnel,
+    client: VpnTunnelClient,
+  ): string {
     try {
-      return buildMikrotikVpnScript(this.scriptContext(tunnel));
+      return buildMikrotikVpnScript(this.scriptContext(tunnel, client));
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Error generando script VPN';
       throw new BadRequestException(msg);
     }
   }
 
-  async getSetup(user: AuthUser, id: string) {
+  private async resolveClient(
+    schema: string,
+    tunnel: VpnTunnel,
+    clientId?: string,
+  ): Promise<VpnTunnelClient> {
+    const clients = await this.ensurePrimaryClient(schema, tunnel);
+    if (clientId) {
+      const found = clients.find((c) => c.id === clientId);
+      if (!found) throw new NotFoundException('Cliente VPN not found');
+      return found;
+    }
+    if (clients.length === 1) return clients[0];
+    throw new BadRequestException(
+      'Selecciona un cliente VPN (el segmento tiene varios equipos)',
+    );
+  }
+
+  async getSetup(user: AuthUser, id: string, clientId?: string) {
     const schema = this.requireSchema(user);
     const repo = await this.tenantConnections.getVpnTunnelRepository(schema);
     const tunnel = await repo.findOne({ where: { id } });
@@ -687,25 +962,30 @@ export class VpnService {
       this.requireWgServerPublicKey();
     }
 
+    const client = await this.resolveClient(schema, tunnel, clientId);
+    const clientRepo =
+      await this.tenantConnections.getVpnTunnelClientRepository(schema);
     const token = randomSetupToken();
-    tunnel.setupToken = token;
-    tunnel.setupTokenExpiresAt = new Date(Date.now() + 5 * 60 * 1000);
-    if (tunnel.status === 'pending') {
-      tunnel.status = 'configured';
-    }
+    client.setupToken = token;
+    client.setupTokenExpiresAt = new Date(Date.now() + 5 * 60 * 1000);
+    if (client.status === 'pending') client.status = 'configured';
+    if (tunnel.status === 'pending') tunnel.status = 'configured';
+    await clientRepo.save(client);
     await repo.save(tunnel);
 
-    const ctx = this.scriptContext(tunnel);
-    const script = this.buildRouterScript(tunnel);
+    const ctx = this.scriptContext(tunnel, client);
+    const script = this.buildRouterScript(tunnel, client);
     const acsUrlHint = `http://${tunnel.serverAddress}:${ACS_HINT_PORT}`;
     const apiBase = await this.publicUrls.resolvePublicApiUrl();
     const fetchUrl = apiBase ? `${apiBase}/public/vpn-setup/${token}` : '';
     const bootstrap = fetchUrl
       ? buildMikrotikBootstrapCommand({ fetchUrl })
       : null;
+    const clients = await this.loadClients(schema, tunnel.id);
 
     return {
-      tunnel: this.sanitize(tunnel),
+      tunnel: this.sanitize(tunnel, clients),
+      client: this.sanitizeClient(client),
       protocolLabel:
         VPN_PROTOCOL_LABELS[tunnel.protocol as VpnProtocol] ?? tunnel.protocol,
       expiresInSeconds: 300,
@@ -715,7 +995,7 @@ export class VpnService {
       bootstrap,
       fetchUrl: fetchUrl || null,
       note: apiBase
-        ? `Bootstrap/script en MikroTik → ${ctx.vpnHost}:${ctx.vpnPort}. El concentrador sincroniza el usuario/peer solo.`
+        ? `Bootstrap/script en MikroTik → ${ctx.vpnHost}:${ctx.vpnPort}. Cliente «${client.name}» (${client.clientAddress}).`
         : 'PUBLIC_API_URL no está configurada: usa el script completo (pegar todo).',
     };
   }
@@ -913,6 +1193,54 @@ export class VpnService {
       `);
       for (const row of rows) {
         try {
+          // Prefer multi-client table; fall back to legacy tunnel row.
+          const clients: Array<{
+            name: string;
+            password: string | null;
+            client_address: string;
+            wg_public_key: string | null;
+            protocol: string;
+            mode: string | null;
+            server_address: string;
+            tunnel_routes: string;
+          }> = await admin.query(
+            `SELECT c.name, c.password, c.client_address, c.wg_public_key,
+                    t.protocol, t.mode, t.server_address, t.tunnel_routes
+             FROM "${row.schema_name}"."vpn_tunnel_clients" c
+             INNER JOIN "${row.schema_name}"."vpn_tunnels" t ON t.id = c.tunnel_id
+             WHERE COALESCE(t.mode, 'outbound') = 'outbound'`,
+          );
+          if (clients.length > 0) {
+            for (const c of clients) {
+              const routes = (c.tunnel_routes || '')
+                .split(/\r?\n/)
+                .map((r) => r.trim())
+                .filter(Boolean);
+              if (
+                (c.protocol === 'openvpn_tcp' || c.protocol === 'openvpn_udp') &&
+                c.password
+              ) {
+                openvpnUsers.push({
+                  username: c.name,
+                  password: c.password,
+                  clientAddress: c.client_address,
+                  serverAddress: c.server_address,
+                  protocol: c.protocol,
+                  lanRoutes: routes,
+                });
+              }
+              if (c.protocol === 'wireguard' && c.wg_public_key) {
+                wireguardPeers.push({
+                  clientPublicKey: c.wg_public_key,
+                  clientAddress: c.client_address,
+                  serverAddress: c.server_address,
+                  lanRoutes: routes,
+                });
+              }
+            }
+            continue;
+          }
+
           const tunnels: Array<{
             name: string;
             protocol: string;
@@ -956,7 +1284,7 @@ export class VpnService {
             }
           }
         } catch {
-          // schema without vpn_tunnels
+          // schema without vpn tables
         }
       }
     } finally {
@@ -996,6 +1324,33 @@ export class VpnService {
       for (const row of rows) {
         const schema = row.schema_name;
         try {
+          // Prefer client-scoped tokens
+          const clientFound: Array<{
+            id: string;
+            tunnel_id: string;
+          }> = await admin.query(
+            `SELECT id, tunnel_id FROM "${schema}"."vpn_tunnel_clients"
+             WHERE setup_token = $1
+               AND setup_token_expires_at > now()
+             LIMIT 1`,
+            [token],
+          );
+          if (clientFound.length) {
+            const tunnelRepo =
+              await this.tenantConnections.getVpnTunnelRepository(schema);
+            const clientRepo =
+              await this.tenantConnections.getVpnTunnelClientRepository(schema);
+            const tunnel = await tunnelRepo.findOne({
+              where: { id: clientFound[0].tunnel_id },
+            });
+            const client = await clientRepo.findOne({
+              where: { id: clientFound[0].id },
+            });
+            if (tunnel && client) {
+              return this.buildRouterScript(tunnel, client);
+            }
+          }
+
           const found: Array<{ id: string }> = await admin.query(
             `SELECT id FROM "${schema}"."vpn_tunnels"
            WHERE setup_token = $1
@@ -1008,7 +1363,8 @@ export class VpnService {
             await this.tenantConnections.getVpnTunnelRepository(schema);
           const tunnel = await repo.findOne({ where: { id: found[0].id } });
           if (!tunnel) continue;
-          return this.buildRouterScript(tunnel);
+          const client = await this.resolveClient(schema, tunnel);
+          return this.buildRouterScript(tunnel, client);
         } catch {
           // schema may lack table
         }
@@ -1024,11 +1380,18 @@ export class VpnService {
     id: string,
     deviceId: string,
     phase: 'connect' | 'plan' | 'apply' | 'verify' | 'all' = 'all',
+    clientId?: string,
   ) {
     if (phase === 'all') {
       const stages: Array<Record<string, unknown>> = [];
       for (const p of ['connect', 'plan', 'apply', 'verify'] as const) {
-        const r = await this.importToRouterPhase(user, id, deviceId, p);
+        const r = await this.importToRouterPhase(
+          user,
+          id,
+          deviceId,
+          p,
+          clientId,
+        );
         const { phase: completedPhase, ...rest } = r;
         void completedPhase;
         stages.push({ phase: p, ...rest });
@@ -1057,7 +1420,7 @@ export class VpnService {
         checks: last.checks,
       };
     }
-    return this.importToRouterPhase(user, id, deviceId, phase);
+    return this.importToRouterPhase(user, id, deviceId, phase, clientId);
   }
 
   private async importToRouterPhase(
@@ -1065,28 +1428,44 @@ export class VpnService {
     id: string,
     deviceId: string,
     phase: 'connect' | 'plan' | 'apply' | 'verify',
+    clientId?: string,
   ) {
     const schema = this.requireSchema(user);
     const repo = await this.tenantConnections.getVpnTunnelRepository(schema);
     const tunnel = await repo.findOne({ where: { id } });
     if (!tunnel) throw new NotFoundException('Tunnel not found');
+    const client = await this.resolveClient(schema, tunnel, clientId);
+    const clientRepo =
+      await this.tenantConnections.getVpnTunnelClientRepository(schema);
+
+    if (client.deviceId && client.deviceId !== deviceId) {
+      throw new BadRequestException(
+        `El cliente «${client.name}» ya está asignado a otro activo`,
+      );
+    }
+    const taken = await clientRepo.findOne({ where: { deviceId } });
+    if (taken && taken.id !== client.id) {
+      throw new BadRequestException(
+        `Ese activo ya tiene asignado el cliente VPN «${taken.name}»`,
+      );
+    }
 
     const devices =
       await this.tenantConnections.getNetworkDeviceRepository(schema);
     const device = await devices.findOne({ where: { id: deviceId } });
-    if (!device) throw new NotFoundException('Router not found');
+    if (!device) throw new NotFoundException('Activo not found');
     if (device.type === 'router' && !device.subtype) {
       device.subtype = 'mikrotik';
       await devices.save(device);
     }
-    if (device.subtype !== 'mikrotik') {
+    if (!isMikrotikRouterOsDevice(device.type, device.subtype)) {
       throw new BadRequestException(
-        'Solo se puede importar a routers MikroTik',
+        'Solo se puede importar a routers/switches MikroTik RouterOS',
       );
     }
     if (!device.mgmtHost || !device.mgmtUsername || !device.mgmtPassword) {
       throw new BadRequestException(
-        'El router no tiene credenciales de gestión configuradas',
+        'El activo no tiene credenciales de gestión configuradas',
       );
     }
     const protocol = device.mgmtProtocol ?? 'api_ssl';
@@ -1106,11 +1485,11 @@ export class VpnService {
       useTls,
     };
 
-    const ctx = this.scriptContext(tunnel);
-    const script = this.buildRouterScript(tunnel);
+    const ctx = this.scriptContext(tunnel, client);
+    const script = this.buildRouterScript(tunnel, client);
     const iface = vpnClientInterfaceName(ctx);
     const desiredRoutes = desiredVpnClientRouteCidrs(ctx);
-    const tag = `isp-control ${tunnel.name}`;
+    const tag = `isp-control ${client.name}`;
 
     if (phase === 'connect') {
       const probe = await this.mikrotik.probe({
@@ -1227,6 +1606,11 @@ export class VpnService {
         tunnel.status =
           failed.length === results.length ? 'offline' : 'configured';
         await repo.save(tunnel);
+        client.deviceId = device.id;
+        client.importedAt = new Date();
+        client.status =
+          failed.length === results.length ? 'offline' : 'configured';
+        await clientRepo.save(client);
 
         return {
           ok: failed.length < results.length,
@@ -1243,8 +1627,9 @@ export class VpnService {
             .filter(Boolean) as string[],
           script,
           detail: `Script completo: ${results.length - failed.length}/${results.length} OK`,
-          note: 'Primera importación: se aplicó el script completo del túnel.',
-          tunnel: this.sanitize(tunnel),
+          note: `Primera importación: script completo del cliente «${client.name}».`,
+          tunnel: this.sanitize(tunnel, await this.loadClients(schema, tunnel.id)),
+          client: this.sanitizeClient(client),
         };
       }
 
@@ -1268,6 +1653,10 @@ export class VpnService {
           ? 'offline'
           : 'configured';
       await repo.save(tunnel);
+      client.deviceId = device.id;
+      client.importedAt = new Date();
+      client.status = tunnel.status;
+      await clientRepo.save(client);
 
       return {
         ok: failed.length === 0,

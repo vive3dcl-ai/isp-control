@@ -4,6 +4,13 @@ build/
 .env
 .env.production
 .env.production.aapanel
+# Credenciales locales de routers/switches (NUNCA subir a git)
+devices.local.yaml
+devices.local.yml
+devices.local.json
+vpn.local/
+vpn.local.ovpn
+vpn.local.auth
 *.log
 .DS_Store
 coverage/
