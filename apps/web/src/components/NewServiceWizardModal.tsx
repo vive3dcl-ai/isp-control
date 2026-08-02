@@ -13,6 +13,10 @@ import {
 import type { IpPoolsResponse } from '../lib/ip-pools'
 import type { Tr069ProfilesResponse } from '../lib/tr069'
 import type { Client, ClientService, ServicePlan } from '../lib/crm'
+import {
+  inventoryLabel,
+  type InventoryItem,
+} from '../lib/inventory'
 import { useMoney } from '../lib/currency'
 import { AddressLocationFields } from './AddressLocationFields'
 import { LocationPickerMap } from './LocationPickerMap'
@@ -58,7 +62,6 @@ export function NewServiceWizardModal({
   const [oltFilter, setOltFilter] = useState('')
   const [search, setSearch] = useState('')
   const [orphan, setOrphan] = useState<UncfgOnu | null>(null)
-  const [onuNumber, setOnuNumber] = useState('')
 
   // Paso 2 — Ubicación
   const clientHasAddress = !!(
@@ -77,6 +80,9 @@ export function NewServiceWizardModal({
 
   // Paso 3 — Plan
   const [servicePlanId, setServicePlanId] = useState('')
+  const [inventoryOnuItemId, setInventoryOnuItemId] = useState('')
+  const [inventoryDecoItemId, setInventoryDecoItemId] = useState('')
+  const [additionalDecoCount, setAdditionalDecoCount] = useState('0')
 
   // Paso 4 — Red
   const [mgmtVlanPick, setMgmtVlanPick] = useState('')
@@ -100,7 +106,6 @@ export function NewServiceWizardModal({
     setOltFilter('')
     setSearch('')
     setOrphan(null)
-    setOnuNumber('')
     setName('')
     if (clientHasAddress && client) {
       // Por defecto reutilizamos la dirección del cliente.
@@ -120,6 +125,9 @@ export function NewServiceWizardModal({
     }
     setZoneId(client?.zoneId ?? '')
     setServicePlanId('')
+    setInventoryOnuItemId('')
+    setInventoryDecoItemId('')
+    setAdditionalDecoCount('0')
     setMgmtVlanPick('')
     setWanVlanPick('')
     setTr069ProfilePick('')
@@ -156,6 +164,14 @@ export function NewServiceWizardModal({
   const plansQuery = useQuery({
     queryKey: ['app', 'service-plans'],
     queryFn: () => apiFetch<ServicePlan[]>('/app/service-plans'),
+    enabled: open && step === 3,
+  })
+  const inventoryQuery = useQuery({
+    queryKey: ['app', 'inventory', 'items', 'inStock'],
+    queryFn: () =>
+      apiFetch<{ items: InventoryItem[] }>(
+        '/app/inventory/items?inStock=true',
+      ),
     enabled: open && step === 3,
   })
 
@@ -230,20 +246,22 @@ export function NewServiceWizardModal({
 
   const plans = (plansQuery.data ?? []).filter((p) => p.isActive)
   const selectedPlan = plans.find((p) => p.id === servicePlanId)
-
-  function pickOrphan(o: UncfgOnu) {
-    setOrphan(o)
-    // Sin sugerencia se deja vacío: el índice 1 está ocupado en cualquier
-    // puerto con clientes y la OLT lo trata como «re-create», dejando el SN
-    // sin registrar.
-    setOnuNumber(o.suggestedOnuId != null ? String(o.suggestedOnuId) : '')
-  }
+  const planHasTv = !!selectedPlan?.serviceTypes?.includes('tv')
+  const inventoryOnus = (inventoryQuery.data?.items ?? []).filter(
+    (i) => i.type === 'onu',
+  )
+  const inventoryDecos = (inventoryQuery.data?.items ?? []).filter(
+    (i) => i.type === 'deco',
+  )
+  const extraDecos = planHasTv
+    ? Math.max(0, Math.floor(Number(additionalDecoCount) || 0))
+    : 0
+  const decoCharge =
+    extraDecos * Number(selectedPlan?.additionalDecoPrice ?? 0)
 
   function validateStep(current: number): string | null {
     if (current === 1) {
       if (!orphan) return 'Selecciona una ONU de la lista.'
-      if (!/^\d+$/.test(onuNumber.trim()))
-        return 'El ONU ID debe ser un número.'
     }
     if (current === 2) {
       if (name.trim().length < 2)
@@ -348,7 +366,9 @@ export function NewServiceWizardModal({
           body: JSON.stringify({
             oltId: orphan.oltId,
             oltIf: orphan.oltIf,
-            onuId: onuNumber.trim(),
+            // Sin índice: la OLT resuelve el primero libre al autorizar, que es
+            // más fiable que la sugerencia calculada al listar huérfanas.
+            onuId: null,
             sn: orphan.sn,
             onuType: null,
             name: oltOnuName(clientName, name),
@@ -394,6 +414,9 @@ export function NewServiceWizardModal({
               onuId: ctxRef.current.onuDbId,
               latitude: lat ?? undefined,
               longitude: lng ?? undefined,
+              inventoryOnuItemId: inventoryOnuItemId || undefined,
+              inventoryDecoItemId: inventoryDecoItemId || undefined,
+              additionalDecoCount: planHasTv ? extraDecos : 0,
             }),
           },
         )
@@ -594,7 +617,7 @@ export function NewServiceWizardModal({
                           <li key={`${o.oltId}-${o.oltIf}-${o.sn}`}>
                             <button
                               type="button"
-                              onClick={() => pickOrphan(o)}
+                              onClick={() => setOrphan(o)}
                               className={[
                                 'flex w-full items-center gap-3 px-3 py-2 text-left text-sm',
                                 selected
@@ -633,27 +656,14 @@ export function NewServiceWizardModal({
                 </div>
 
                 {orphan && (
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <label className="block text-sm">
-                      <span className="mb-1 block text-[var(--text-muted)]">
-                        ONU ID en el puerto
-                      </span>
-                      <input
-                        className={inputClass}
-                        inputMode="numeric"
-                        value={onuNumber}
-                        onChange={(e) => setOnuNumber(e.target.value)}
-                      />
-                      {orphan.suggestedOnuId != null && (
-                        <span className="mt-1 block text-xs text-[var(--text-muted)]">
-                          Sugerido (siguiente libre): {orphan.suggestedOnuId}
-                        </span>
-                      )}
-                    </label>
-                    <div className="self-end pb-1 text-xs text-[var(--text-muted)]">
-                      El tipo de ONU se detecta automáticamente al autorizar.
-                    </div>
-                  </div>
+                  <p className="text-xs text-[var(--text-muted)]">
+                    El índice en el puerto y el tipo de ONU se asignan
+                    automáticamente al autorizar
+                    {orphan.suggestedOnuId != null
+                      ? ` (ahora el primero libre en ${orphan.oltIf} es el ${orphan.suggestedOnuId})`
+                      : ''}
+                    .
+                  </p>
                 )}
               </div>
             )}
@@ -771,7 +781,13 @@ export function NewServiceWizardModal({
                       <li key={p.id}>
                         <button
                           type="button"
-                          onClick={() => setServicePlanId(p.id)}
+                          onClick={() => {
+                            setServicePlanId(p.id)
+                            if (!p.serviceTypes?.includes('tv')) {
+                              setInventoryDecoItemId('')
+                              setAdditionalDecoCount('0')
+                            }
+                          }}
                           className={[
                             'flex w-full items-center gap-3 rounded-lg border px-3 py-2.5 text-left text-sm',
                             selected
@@ -797,6 +813,9 @@ export function NewServiceWizardModal({
                               {p.speedProfile
                                 ? `${p.speedProfile.name} · ↓${p.speedProfile.downloadMbps} / ↑${p.speedProfile.uploadMbps} Mbps`
                                 : `↓${p.downloadSpeed} / ↑${p.uploadSpeed} Mbps`}
+                              {p.serviceTypes?.includes('tv')
+                                ? ` · TV (${p.decoCount ?? 0} decos)`
+                                : ''}
                             </span>
                           </span>
                           <span className="shrink-0 font-medium">
@@ -812,6 +831,78 @@ export function NewServiceWizardModal({
                     </li>
                   )}
                 </ul>
+
+                {servicePlanId && (
+                  <div className="space-y-3 rounded-lg border border-[var(--border)] p-3">
+                    <p className="text-xs font-medium text-[var(--text-muted)]">
+                      Inventario (opcional — no afecta el aprovisionamiento)
+                    </p>
+                    <label className="block text-sm">
+                      <span className="mb-1 block text-[var(--text-muted)]">
+                        ONU de inventario
+                      </span>
+                      <select
+                        className={inputClass}
+                        value={inventoryOnuItemId}
+                        onChange={(e) => setInventoryOnuItemId(e.target.value)}
+                      >
+                        <option value="">Sin descontar stock</option>
+                        {inventoryOnus.map((i) => (
+                          <option key={i.id} value={i.id}>
+                            {inventoryLabel(i)}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    {planHasTv && (
+                      <>
+                        <label className="block text-sm">
+                          <span className="mb-1 block text-[var(--text-muted)]">
+                            Deco de inventario
+                            {(selectedPlan?.decoCount ?? 0) > 0
+                              ? ` (descuenta ${selectedPlan!.decoCount} + adicionales)`
+                              : ''}
+                          </span>
+                          <select
+                            className={inputClass}
+                            value={inventoryDecoItemId}
+                            onChange={(e) =>
+                              setInventoryDecoItemId(e.target.value)
+                            }
+                          >
+                            <option value="">Sin descontar stock</option>
+                            {inventoryDecos.map((i) => (
+                              <option key={i.id} value={i.id}>
+                                {inventoryLabel(i)}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="block text-sm">
+                          <span className="mb-1 block text-[var(--text-muted)]">
+                            Decos adicionales
+                          </span>
+                          <input
+                            className={inputClass}
+                            type="number"
+                            min={0}
+                            value={additionalDecoCount}
+                            onChange={(e) =>
+                              setAdditionalDecoCount(e.target.value)
+                            }
+                          />
+                          {extraDecos > 0 && (
+                            <span className="mt-1 block text-[11px] text-[var(--text-muted)]">
+                              {extraDecos} ×{' '}
+                              {money(selectedPlan?.additionalDecoPrice ?? 0)} ={' '}
+                              {money(decoCharge)} — se suma a la factura del mes
+                            </span>
+                          )}
+                        </label>
+                      </>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 

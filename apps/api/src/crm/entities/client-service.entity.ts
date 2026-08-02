@@ -92,6 +92,40 @@ export class ClientService {
   })
   installationInvoiced: boolean;
 
+  /** Optional warehouse ONU stock line consumed on install. */
+  @Column({ name: 'inventory_onu_item_id', type: 'uuid', nullable: true })
+  inventoryOnuItemId: string | null;
+
+  /** Optional warehouse deco stock line consumed on install. */
+  @Column({ name: 'inventory_deco_item_id', type: 'uuid', nullable: true })
+  inventoryDecoItemId: string | null;
+
+  /** Snapshot of plan deco_count at install. */
+  @Column({ name: 'included_deco_count', type: 'int', default: 0 })
+  includedDecoCount: number;
+
+  /** Extra decoders beyond the plan inclusion. */
+  @Column({ name: 'additional_deco_count', type: 'int', default: 0 })
+  additionalDecoCount: number;
+
+  /** Charge extra decos on the first monthly invoice. */
+  @Column({
+    name: 'additional_deco_fee_pending',
+    type: 'boolean',
+    default: false,
+  })
+  additionalDecoFeePending: boolean;
+
+  /** Snapshot of plan.additional_deco_price at install. */
+  @Column({
+    name: 'additional_deco_unit_price',
+    type: 'decimal',
+    precision: 12,
+    scale: 2,
+    default: 0,
+  })
+  additionalDecoUnitPrice: string;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

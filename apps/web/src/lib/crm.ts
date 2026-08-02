@@ -57,6 +57,8 @@ export interface ServicePlan {
   billingCycleDay: PlanBillingCycleDay
   serviceTypes: PlanServiceType[]
   type: string
+  decoCount: number
+  additionalDecoPrice: string
   isActive: boolean
   createdAt: string
   updatedAt: string

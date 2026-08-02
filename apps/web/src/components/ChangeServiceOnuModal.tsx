@@ -51,7 +51,6 @@ export function ChangeServiceOnuModal({
   const [oltFilter, setOltFilter] = useState('')
   const [search, setSearch] = useState('')
   const [orphan, setOrphan] = useState<UncfgOnu | null>(null)
-  const [onuNumber, setOnuNumber] = useState('')
   const [mgmtVlanPick, setMgmtVlanPick] = useState('')
   const [wanVlanPick, setWanVlanPick] = useState('')
   const [tr069ProfilePick, setTr069ProfilePick] = useState('')
@@ -70,7 +69,6 @@ export function ChangeServiceOnuModal({
     setOltFilter(currentOnu?.oltId ?? '')
     setSearch('')
     setOrphan(null)
-    setOnuNumber('')
     setMgmtVlanPick(
       currentOnu?.mgmtVlanId != null ? String(currentOnu.mgmtVlanId) : '',
     )
@@ -178,21 +176,9 @@ export function ChangeServiceOnuModal({
     return [...map.values()]
   }, [connectedQuery.data?.onus, currentOnu, targetName])
 
-  function pickOrphan(o: UncfgOnu) {
-    setOrphan(o)
-    // Sin sugerencia se deja vacío: el índice 1 está ocupado en cualquier
-    // puerto con clientes y la OLT lo trata como «re-create», dejando el SN
-    // sin registrar.
-    setOnuNumber(o.suggestedOnuId != null ? String(o.suggestedOnuId) : '')
-  }
-
   function startSwap() {
     if (!orphan) {
       setError('Selecciona una ONU huérfana.')
-      return
-    }
-    if (!/^\d+$/.test(onuNumber.trim())) {
-      setError('El ONU ID debe ser un número.')
       return
     }
     if (mgmtVlanPick && tr069Profiles.length > 0 && !tr069ProfilePick) {
@@ -293,7 +279,9 @@ export function ChangeServiceOnuModal({
           body: JSON.stringify({
             oltId: orphan.oltId,
             oltIf: orphan.oltIf,
-            onuId: onuNumber.trim(),
+            // Sin índice: la OLT resuelve el primero libre al autorizar, que es
+            // más fiable que la sugerencia calculada al listar huérfanas.
+            onuId: null,
             sn: orphan.sn,
             onuType: null,
             name: targetName,
@@ -489,7 +477,7 @@ export function ChangeServiceOnuModal({
                       <li key={`${o.oltId}-${o.oltIf}-${o.sn}`}>
                         <button
                           type="button"
-                          onClick={() => pickOrphan(o)}
+                          onClick={() => setOrphan(o)}
                           className={[
                             'flex w-full items-center gap-3 px-3 py-2 text-left text-sm',
                             selected
@@ -527,17 +515,13 @@ export function ChangeServiceOnuModal({
 
             {orphan && (
               <>
-                <label className="block text-sm">
-                  <span className="mb-1 block text-[var(--text-muted)]">
-                    ONU ID en el puerto
-                  </span>
-                  <input
-                    className={inputClass}
-                    inputMode="numeric"
-                    value={onuNumber}
-                    onChange={(e) => setOnuNumber(e.target.value)}
-                  />
-                </label>
+                <p className="text-xs text-[var(--text-muted)]">
+                  El índice en el puerto se asigna automáticamente al autorizar
+                  {orphan.suggestedOnuId != null
+                    ? ` (ahora el primero libre en ${orphan.oltIf} es el ${orphan.suggestedOnuId})`
+                    : ''}
+                  .
+                </p>
 
                 <label className="block text-sm">
                   <span className="mb-1 block text-[var(--text-muted)]">

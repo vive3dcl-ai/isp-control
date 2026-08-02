@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
   Optional,
   forwardRef,
@@ -40,15 +41,19 @@ import {
   toSystemOltProfileName,
 } from '../topology/zte-olt-speed.util';
 import { BillingService } from '../billing/billing.service';
+import { InventoryService } from '../inventory/inventory.service';
 import { ClientPortalService } from '../client-portal/client-portal.service';
 import type { Client } from './entities/client.entity';
 
 @Injectable()
 export class CrmService {
+  private readonly logger = new Logger(CrmService.name);
+
   constructor(
     private readonly tenantConnections: TenantConnectionService,
     private readonly topology: TopologyService,
     private readonly billing: BillingService,
+    private readonly inventory: InventoryService,
     private readonly onus: OnuConnectedService,
     private readonly suspensionPortal: SuspensionPortalService,
     @InjectRepository(Tenant)
@@ -65,25 +70,40 @@ export class CrmService {
     );
   }
 
+  /** El portal es un efecto lateral: nunca debe tumbar el guardado del CRM. */
+  private async runPortalSideEffect(what: string, fn: () => Promise<unknown>) {
+    try {
+      await fn();
+    } catch (err) {
+      this.logger.warn(
+        `Portal ${what} falló: ${err instanceof Error ? err.message : err}`,
+      );
+    }
+  }
+
   private async maybeInvitePortal(user: AuthUser, client: Client) {
     if (!this.clientPortal || !user.tenantId || !user.schemaName) return;
     if (client.isLead || !client.isActive) return;
-    await this.clientPortal.inviteClient({
-      tenantId: user.tenantId,
-      schemaName: user.schemaName,
-      clientId: client.id,
-      email: client.email,
-      name: this.clientDisplayName(client),
-      client,
-    });
+    const tenantId = user.tenantId;
+    const schemaName = user.schemaName;
+    await this.runPortalSideEffect('invite', () =>
+      this.clientPortal!.inviteClient({
+        tenantId,
+        schemaName,
+        clientId: client.id,
+        email: client.email,
+        name: this.clientDisplayName(client),
+        client,
+      }),
+    );
   }
 
   private async syncPortalSnapshot(user: AuthUser, client: Client) {
     if (!this.clientPortal || !user.tenantId) return;
-    await this.clientPortal.syncClientSnapshot({
-      tenantId: user.tenantId,
-      client,
-    });
+    const tenantId = user.tenantId;
+    await this.runPortalSideEffect('snapshot', () =>
+      this.clientPortal!.syncClientSnapshot({ tenantId, client }),
+    );
   }
 
   private requireSchema(user: AuthUser): string {
@@ -504,6 +524,7 @@ export class CrmService {
     const repo = await this.tenantConnections.getServicePlanRepository(schema);
     const profile = await this.requireSpeedProfile(schema, dto.speedProfileId);
     const serviceTypes = this.normalizeServiceTypes(dto.serviceTypes);
+    const hasTv = serviceTypes.includes('tv');
     const plan = repo.create({
       name: dto.name.trim(),
       price: dto.price.toFixed(2),
@@ -519,6 +540,8 @@ export class CrmService {
       billingCycleDay: dto.billingCycleDay,
       serviceTypes,
       type: this.serviceTypesLabel(serviceTypes),
+      decoCount: hasTv ? Math.max(0, Math.floor(dto.decoCount ?? 0)) : 0,
+      additionalDecoPrice: (dto.additionalDecoPrice ?? 0).toFixed(2),
       isActive: dto.isActive ?? true,
     });
     const saved = await repo.save(plan);
@@ -554,6 +577,15 @@ export class CrmService {
     if (dto.serviceTypes !== undefined) {
       plan.serviceTypes = this.normalizeServiceTypes(dto.serviceTypes);
       plan.type = this.serviceTypesLabel(plan.serviceTypes);
+    }
+    if (dto.decoCount !== undefined) {
+      plan.decoCount = Math.max(0, Math.floor(dto.decoCount));
+    }
+    if (dto.additionalDecoPrice !== undefined) {
+      plan.additionalDecoPrice = dto.additionalDecoPrice.toFixed(2);
+    }
+    if (!plan.serviceTypes.includes('tv')) {
+      plan.decoCount = 0;
     }
     // Always monthly
     plan.invoicingPeriod = 1;
@@ -643,6 +675,8 @@ export class CrmService {
     billingCycleDay?: string | null;
     serviceTypes?: Array<'internet' | 'tv' | 'telephony'> | null;
     type: string;
+    decoCount?: number | null;
+    additionalDecoPrice?: string | null;
     isActive: boolean;
     createdAt: Date;
     updatedAt: Date;
@@ -676,6 +710,8 @@ export class CrmService {
       billingCycleDay: plan.billingCycleDay || 'first',
       serviceTypes,
       type: this.serviceTypesLabel(serviceTypes),
+      decoCount: serviceTypes.includes('tv') ? (plan.decoCount ?? 0) : 0,
+      additionalDecoPrice: plan.additionalDecoPrice ?? '0.00',
       isActive: plan.isActive,
       createdAt: plan.createdAt,
       updatedAt: plan.updatedAt,
@@ -953,6 +989,14 @@ export class CrmService {
     const plan = await plans.findOne({ where: { id: dto.servicePlanId } });
     if (!plan) throw new NotFoundException('Service plan not found');
 
+    const hasTv = (plan.serviceTypes ?? []).includes('tv');
+    const includedDecoCount = hasTv ? Math.max(0, plan.decoCount ?? 0) : 0;
+    const additionalDecoCount = hasTv
+      ? Math.max(0, Math.floor(dto.additionalDecoCount ?? 0))
+      : 0;
+    const additionalDecoUnitPrice = Number(plan.additionalDecoPrice ?? 0);
+    const decoUnits = includedDecoCount + additionalDecoCount;
+
     const repo =
       await this.tenantConnections.getClientServiceRepository(schema);
     const service = repo.create({
@@ -972,8 +1016,33 @@ export class CrmService {
       onuId: dto.onuId ?? null,
       latitude: dto.latitude ?? null,
       longitude: dto.longitude ?? null,
+      inventoryOnuItemId: dto.inventoryOnuItemId ?? null,
+      inventoryDecoItemId: dto.inventoryDecoItemId ?? null,
+      includedDecoCount,
+      additionalDecoCount,
+      additionalDecoUnitPrice: additionalDecoUnitPrice.toFixed(2),
+      additionalDecoFeePending:
+        additionalDecoCount > 0 && additionalDecoUnitPrice > 0,
     });
     const saved = await repo.save(service);
+
+    try {
+      if (dto.inventoryOnuItemId) {
+        await this.inventory.consume(schema, dto.inventoryOnuItemId, 1, 'onu');
+      }
+      if (dto.inventoryDecoItemId && decoUnits > 0) {
+        await this.inventory.consume(
+          schema,
+          dto.inventoryDecoItemId,
+          decoUnits,
+          'deco',
+        );
+      }
+    } catch (e) {
+      await repo.delete({ id: saved.id });
+      throw e;
+    }
+
     await this.billing.onClientServiceCreated(schema, saved);
     return repo.findOne({
       where: { id: saved.id },

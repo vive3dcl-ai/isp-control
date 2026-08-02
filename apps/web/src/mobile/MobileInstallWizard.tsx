@@ -20,6 +20,10 @@ import type {
   ServicePlan,
 } from '../lib/crm'
 import { clientDisplayName } from '../lib/crm'
+import {
+  inventoryLabel,
+  type InventoryItem,
+} from '../lib/inventory'
 import { useMoney } from '../lib/currency'
 import type { CompanyProfile } from '../lib/company'
 import {
@@ -75,13 +79,14 @@ export function MobileInstallWizard() {
   // Servicio
   const [serviceName, setServiceName] = useState('Casa')
   const [servicePlanId, setServicePlanId] = useState('')
+  const [inventoryOnuItemId, setInventoryOnuItemId] = useState('')
+  const [inventoryDecoItemId, setInventoryDecoItemId] = useState('')
+  const [additionalDecoCount, setAdditionalDecoCount] = useState('0')
 
   // ONU
   const [oltFilter, setOltFilter] = useState('')
   const [search, setSearch] = useState('')
   const [orphan, setOrphan] = useState<UncfgOnu | null>(null)
-  const [onuNumber, setOnuNumber] = useState('')
-
   // Red
   const [mgmtVlanPick, setMgmtVlanPick] = useState('')
   const [wanVlanPick, setWanVlanPick] = useState('')
@@ -112,6 +117,14 @@ export function MobileInstallWizard() {
     queryKey: ['app', 'service-plans'],
     queryFn: () => apiFetch<ServicePlan[]>('/app/service-plans'),
     staleTime: 60_000,
+  })
+  const inventoryQuery = useQuery({
+    queryKey: ['app', 'inventory', 'items', 'inStock'],
+    queryFn: () =>
+      apiFetch<{ items: InventoryItem[] }>(
+        '/app/inventory/items?inStock=true',
+      ),
+    staleTime: 30_000,
   })
   const clientsQuery = useQuery({
     queryKey: ['app', 'clients'],
@@ -223,14 +236,6 @@ export function MobileInstallWizard() {
     (s) => s.status === 'active',
   )
 
-  function pickOrphan(o: UncfgOnu) {
-    setOrphan(o)
-    // Sin sugerencia se deja vacío: el índice 1 está ocupado en cualquier
-    // puerto con clientes y la OLT lo trata como «re-create», dejando el SN
-    // sin registrar.
-    setOnuNumber(o.suggestedOnuId != null ? String(o.suggestedOnuId) : '')
-  }
-
   function chooseMode(mode: ClientMode) {
     setError(null)
     setClientMode(mode)
@@ -286,7 +291,6 @@ export function MobileInstallWizard() {
     }
     if (current === 3) {
       if (!orphan) return 'Selecciona una ONU no configurada.'
-      if (!/^\d+$/.test(onuNumber.trim())) return 'ONU ID debe ser numérico.'
     }
     if (current === 4) {
       if (mgmtPools.length > 0 && !mgmtVlanPick)
@@ -474,7 +478,9 @@ export function MobileInstallWizard() {
           body: JSON.stringify({
             oltId: orphan.oltId,
             oltIf: orphan.oltIf,
-            onuId: onuNumber.trim(),
+            // Sin índice: la OLT resuelve el primero libre al autorizar, que es
+            // más fiable que la sugerencia calculada al listar huérfanas.
+            onuId: null,
             sn: orphan.sn,
             onuType: null,
             name: oltOnuName(nameForOnu, svcName),
@@ -515,6 +521,9 @@ export function MobileInstallWizard() {
             street: street.trim(),
             city: city.trim(),
             onuId: ctxRef.current.onuDbId,
+            inventoryOnuItemId: inventoryOnuItemId || undefined,
+            inventoryDecoItemId: inventoryDecoItemId || undefined,
+            additionalDecoCount: planHasTv ? extraDecos : 0,
           }),
         })
         ctxRef.current.serviceId = r.id
@@ -581,6 +590,18 @@ export function MobileInstallWizard() {
   }
 
   const selectedPlan = plans.find((p) => p.id === servicePlanId)
+  const planHasTv = !!selectedPlan?.serviceTypes?.includes('tv')
+  const inventoryOnus = (inventoryQuery.data?.items ?? []).filter(
+    (i) => i.type === 'onu',
+  )
+  const inventoryDecos = (inventoryQuery.data?.items ?? []).filter(
+    (i) => i.type === 'deco',
+  )
+  const extraDecos = planHasTv
+    ? Math.max(0, Math.floor(Number(additionalDecoCount) || 0))
+    : 0
+  const decoCharge =
+    extraDecos * Number(selectedPlan?.additionalDecoPrice ?? 0)
 
   return (
     <div className="flex flex-1 flex-col">
@@ -907,12 +928,22 @@ export function MobileInstallWizard() {
               <select
                 className={field}
                 value={servicePlanId}
-                onChange={(e) => setServicePlanId(e.target.value)}
+                onChange={(e) => {
+                  setServicePlanId(e.target.value)
+                  const p = plans.find((x) => x.id === e.target.value)
+                  if (!p?.serviceTypes?.includes('tv')) {
+                    setInventoryDecoItemId('')
+                    setAdditionalDecoCount('0')
+                  }
+                }}
               >
                 <option value="">Seleccionar…</option>
                 {plans.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.name} · {money(p.price)}
+                    {p.serviceTypes?.includes('tv')
+                      ? ` · TV (${p.decoCount ?? 0})`
+                      : ''}
                   </option>
                 ))}
               </select>
@@ -921,6 +952,71 @@ export function MobileInstallWizard() {
               <p className="text-xs text-[var(--text-muted)]">
                 {selectedPlan.downloadSpeed}/{selectedPlan.uploadSpeed} Mbps
               </p>
+            )}
+            {servicePlanId && (
+              <div className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] p-3">
+                <p className="text-xs text-[var(--text-muted)]">
+                  Inventario (opcional)
+                </p>
+                <label className="block text-sm">
+                  <span className="mb-1 block text-[var(--text-muted)]">
+                    ONU inventario
+                  </span>
+                  <select
+                    className={field}
+                    value={inventoryOnuItemId}
+                    onChange={(e) => setInventoryOnuItemId(e.target.value)}
+                  >
+                    <option value="">Sin descontar</option>
+                    {inventoryOnus.map((i) => (
+                      <option key={i.id} value={i.id}>
+                        {inventoryLabel(i)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {planHasTv && (
+                  <>
+                    <label className="block text-sm">
+                      <span className="mb-1 block text-[var(--text-muted)]">
+                        Deco inventario
+                        {(selectedPlan?.decoCount ?? 0) > 0
+                          ? ` (−${selectedPlan!.decoCount}+extra)`
+                          : ''}
+                      </span>
+                      <select
+                        className={field}
+                        value={inventoryDecoItemId}
+                        onChange={(e) => setInventoryDecoItemId(e.target.value)}
+                      >
+                        <option value="">Sin descontar</option>
+                        {inventoryDecos.map((i) => (
+                          <option key={i.id} value={i.id}>
+                            {inventoryLabel(i)}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="block text-sm">
+                      <span className="mb-1 block text-[var(--text-muted)]">
+                        Decos adicionales
+                      </span>
+                      <input
+                        className={field}
+                        type="number"
+                        min={0}
+                        value={additionalDecoCount}
+                        onChange={(e) => setAdditionalDecoCount(e.target.value)}
+                      />
+                      {extraDecos > 0 && (
+                        <span className="mt-1 block text-xs text-[var(--text-muted)]">
+                          {money(decoCharge)} en factura del mes
+                        </span>
+                      )}
+                    </label>
+                  </>
+                )}
+              </div>
             )}
             <label className="block text-sm">
               <span className="mb-1 block text-[var(--text-muted)]">Calle</span>
@@ -989,7 +1085,7 @@ export function MobileInstallWizard() {
                   <li key={`${o.oltId}-${o.oltIf}-${o.sn}`}>
                     <button
                       type="button"
-                      onClick={() => pickOrphan(o)}
+                      onClick={() => setOrphan(o)}
                       className={[
                         'w-full rounded-2xl border px-4 py-3 text-left transition',
                         selected
@@ -1013,17 +1109,13 @@ export function MobileInstallWizard() {
               )}
             </ul>
             {orphan && (
-              <label className="block text-sm">
-                <span className="mb-1 block text-[var(--text-muted)]">
-                  ONU ID en puerto
-                </span>
-                <input
-                  className={field}
-                  inputMode="numeric"
-                  value={onuNumber}
-                  onChange={(e) => setOnuNumber(e.target.value)}
-                />
-              </label>
+              <p className="text-xs text-[var(--text-muted)]">
+                El índice en el puerto se asigna automáticamente al autorizar
+                {orphan.suggestedOnuId != null
+                  ? ` (ahora el primero libre es el ${orphan.suggestedOnuId})`
+                  : ''}
+                .
+              </p>
             )}
           </>
         )}

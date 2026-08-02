@@ -340,6 +340,35 @@ export class HuaweiOltClient {
     }
   }
 
+  /** Siguiente índice libre en un puerto PON, leído en vivo. */
+  async resolveNextOnuId(
+    params: CliParams & { ifName: string },
+  ): Promise<{ ok: boolean; onuId?: number; error?: string }> {
+    try {
+      const point = parseHuaweiOltIf(params.ifName);
+      if (!point) {
+        return { ok: false, error: `Puerto inválido: ${params.ifName}` };
+      }
+      const next = await this.run(params, false, async (io) => {
+        await io.send(`display ont info 0/${point.slot}/${point.port} all`);
+        const occupied = parseHuaweiConnectedOnus(
+          await io.read(),
+          params.ifName,
+        ).map((o) => o.onuId);
+        return suggestNextOntId(occupied);
+      });
+      if (next == null) {
+        return {
+          ok: false,
+          error: `El puerto ${params.ifName} no tiene índices libres.`,
+        };
+      }
+      return { ok: true, onuId: next };
+    } catch (error) {
+      return { ok: false, error: this.message(error) };
+    }
+  }
+
   async listUncfgOnus(params: CliParams) {
     const probedAt = new Date().toISOString();
     try {

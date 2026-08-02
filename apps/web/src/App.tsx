@@ -14,6 +14,7 @@ import { ClientsPage } from './pages/ClientsPage'
 import { ClientDetailPage } from './pages/ClientDetailPage'
 import { TopologyPage } from './pages/TopologyPage'
 import { NetworkMapPage } from './pages/NetworkMapPage'
+import { InventoryPage } from './pages/InventoryPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { AdminOnusPage } from './pages/AdminOnusPage'
 import { AdminPaymentMethodsPage } from './pages/AdminPaymentMethodsPage'
@@ -118,6 +119,7 @@ export default function App() {
             />
             <Route path="/app/topology" element={<TopologyPage />} />
             <Route path="/app/network-map" element={<NetworkMapPage />} />
+            <Route path="/app/inventory" element={<InventoryPage />} />
             <Route path="/app/support" element={<TenantSupportPage />} />
             <Route
               path="/app/support/:id"

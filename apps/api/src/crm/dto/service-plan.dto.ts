@@ -4,6 +4,7 @@ import {
   IsArray,
   IsBoolean,
   IsIn,
+  IsInt,
   IsNumber,
   IsOptional,
   IsString,
@@ -66,6 +67,18 @@ export class CreateServicePlanDto {
   serviceTypes: PlanServiceTypeDto[];
 
   @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  decoCount?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  additionalDecoPrice?: number;
+
+  @IsOptional()
   @IsBoolean()
   isActive?: boolean;
 }
@@ -116,6 +129,18 @@ export class UpdateServicePlanDto {
   @ArrayUnique()
   @IsIn([...PLAN_SERVICE_TYPES], { each: true })
   serviceTypes?: PlanServiceTypeDto[];
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  decoCount?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  additionalDecoPrice?: number;
 
   @IsOptional()
   @IsBoolean()

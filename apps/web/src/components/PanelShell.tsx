@@ -38,6 +38,7 @@ const tenantNavBase: NavItem[] = [
   { to: '/app/users', label: 'Usuarios' },
   { to: '/app/topology', label: 'Topología' },
   { to: '/app/network-map', label: 'Mapa de red' },
+  { to: '/app/inventory', label: 'Inventario' },
   { to: '/app/support', label: 'Soporte', showTicketBadge: true },
   { to: '/movil', label: 'Técnico' },
   { to: '/app/settings', label: 'Ajustes' },

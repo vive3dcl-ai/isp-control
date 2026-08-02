@@ -12,6 +12,7 @@ import { TopologyModule } from './topology/topology.module';
 import { BillingModule } from './billing/billing.module';
 import { ModulesModule } from './modules/modules.module';
 import { ClientPortalModule } from './client-portal/client-portal.module';
+import { InventoryModule } from './inventory/inventory.module';
 import { CalendarModule } from './calendar/calendar.module';
 import { Tenant } from './tenants/entities/tenant.entity';
 import { UserDirectory } from './tenants/entities/user-directory.entity';
@@ -114,6 +115,7 @@ import { TenantMapDraft } from './crm/entities/tenant-map-draft.entity';
     SupportModule,
     ClientPortalModule,
     CalendarModule,
+    InventoryModule,
   ],
   providers: [
     {

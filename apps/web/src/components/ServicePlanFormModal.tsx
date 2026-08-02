@@ -31,6 +31,8 @@ type PlanForm = {
   billingAnchor: PlanBillingAnchor
   billingCycleDay: PlanBillingCycleDay
   serviceTypes: PlanServiceType[]
+  decoCount: string
+  additionalDecoPrice: string
   isActive: boolean
 }
 
@@ -44,6 +46,8 @@ const empty: PlanForm = {
   billingAnchor: 'installation',
   billingCycleDay: 'first',
   serviceTypes: ['internet'],
+  decoCount: '0',
+  additionalDecoPrice: '0',
   isActive: true,
 }
 
@@ -88,6 +92,8 @@ export function ServicePlanFormModal({
         billingCycleDay: plan.billingCycleDay ?? 'first',
         serviceTypes:
           plan.serviceTypes?.length > 0 ? [...plan.serviceTypes] : ['internet'],
+        decoCount: String(plan.decoCount ?? 0),
+        additionalDecoPrice: String(plan.additionalDecoPrice ?? 0),
         isActive: plan.isActive,
       })
     } else {
@@ -157,6 +163,10 @@ export function ServicePlanFormModal({
       billingAnchor: form.billingAnchor,
       billingCycleDay: form.billingCycleDay,
       serviceTypes: form.serviceTypes,
+      decoCount: form.serviceTypes.includes('tv')
+        ? Math.max(0, Math.floor(Number(form.decoCount) || 0))
+        : 0,
+      additionalDecoPrice: Number(form.additionalDecoPrice || 0),
       isActive: form.isActive,
     })
   }
@@ -352,6 +362,40 @@ export function ServicePlanFormModal({
               ))}
             </div>
           </fieldset>
+
+          {form.serviceTypes.includes('tv') && (
+            <fieldset className="space-y-3 rounded-lg border border-[var(--border)] px-3 py-3">
+              <legend className="px-1 text-sm text-[var(--text-muted)]">
+                TV / Decos
+              </legend>
+              <label className="block text-sm">
+                <span className="mb-1 block text-[var(--text-muted)]">
+                  Cantidad de decos incluidos
+                </span>
+                <input
+                  className={inputClass}
+                  type="number"
+                  min={0}
+                  value={form.decoCount}
+                  onChange={(e) => set('decoCount', e.target.value)}
+                />
+              </label>
+              <label className="block text-sm">
+                <span className="mb-1 block text-[var(--text-muted)]">
+                  Valor deco adicional ({currency})
+                </span>
+                <MoneyInput
+                  className={inputClass}
+                  currency={currency}
+                  value={form.additionalDecoPrice}
+                  onChange={(v) => set('additionalDecoPrice', v || '0')}
+                />
+                <span className="mt-1 block text-[11px] text-[var(--text-muted)]">
+                  Se suma a la factura mensual del cliente por cada deco extra.
+                </span>
+              </label>
+            </fieldset>
+          )}
 
           <label className="inline-flex items-center gap-2 text-sm">
             <input

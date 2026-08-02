@@ -225,39 +225,28 @@ export class ClientPortalService {
       where: { tenantId: opts.tenantId, clientId: opts.client.id },
     });
     const email = this.portalEmailFor(opts.client.id, opts.client.email);
+    const byEmail = await this.users.findOne({
+      where: { tenantId: opts.tenantId, email },
+    });
+    // El email es único por tenant: si ya pertenece a otro cliente el snapshot
+    // guarda un placeholder en vez de romper el guardado del CRM.
+    const emailTaken = !!byEmail && byEmail.clientId !== opts.client.id;
     if (!user) {
-      const byEmail = await this.users.findOne({
-        where: { tenantId: opts.tenantId, email },
-      });
-      if (byEmail && byEmail.clientId !== opts.client.id) {
-        // Email ya ligado a otro cliente: snapshot con placeholder único.
-        user = this.users.create({
-          tenantId: opts.tenantId,
-          clientId: opts.client.id,
-          status: 'stored',
-          passwordHash: null,
-          archivedAt: null,
-        });
-        this.applyClientSnapshot(user, {
-          ...opts.client,
-          email: '',
-        });
-      } else if (byEmail) {
-        user = byEmail;
-        this.applyClientSnapshot(user, opts.client);
-      } else {
-        user = this.users.create({
-          tenantId: opts.tenantId,
-          clientId: opts.client.id,
-          status: 'stored',
-          passwordHash: null,
-          archivedAt: null,
-        });
-        this.applyClientSnapshot(user, opts.client);
-      }
-    } else {
-      this.applyClientSnapshot(user, opts.client);
+      user =
+        byEmail && !emailTaken
+          ? byEmail
+          : this.users.create({
+              tenantId: opts.tenantId,
+              clientId: opts.client.id,
+              status: 'stored',
+              passwordHash: null,
+              archivedAt: null,
+            });
     }
+    this.applyClientSnapshot(
+      user,
+      emailTaken ? { ...opts.client, email: '' } : opts.client,
+    );
     if (!opts.client.isActive || opts.client.isLead) {
       if (user.status === 'active' || user.status === 'invited') {
         // keep portal status; only mark archived when inactive
@@ -867,13 +856,16 @@ export class ClientPortalService {
           where: { tenantId: tenant.id, clientId: opts.clientId },
         });
 
+    const byEmail = await this.users.findOne({
+      where: { tenantId: tenant.id, email },
+    });
+    const emailTaken =
+      !!byEmail &&
+      (user ? byEmail.id !== user.id : byEmail.clientId !== opts.clientId);
+    if (emailTaken) {
+      return { sent: false, skipped: 'email_taken' };
+    }
     if (!user) {
-      const byEmail = await this.users.findOne({
-        where: { tenantId: tenant.id, email },
-      });
-      if (byEmail && byEmail.clientId !== opts.clientId) {
-        return { sent: false, skipped: 'email_taken' };
-      }
       user = byEmail;
     }
     if (!user) {

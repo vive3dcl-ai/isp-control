@@ -1,5 +1,6 @@
 import {
   IsIn,
+  IsInt,
   IsNumber,
   IsOptional,
   IsString,
@@ -75,6 +76,23 @@ export class CreateClientServiceDto {
   @Min(-180)
   @Max(180)
   longitude?: number;
+
+  /** Optional inventory ONU stock line to consume (1 unit). */
+  @IsOptional()
+  @IsUUID()
+  inventoryOnuItemId?: string;
+
+  /** Optional inventory deco stock line to consume. */
+  @IsOptional()
+  @IsUUID()
+  inventoryDecoItemId?: string;
+
+  /** Extra decoders beyond plan inclusion (charged on monthly invoice). */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  additionalDecoCount?: number;
 }
 
 export class UpdateClientServiceDto {

@@ -5,6 +5,7 @@ import { DatabaseModule } from '../database/database.module';
 import { TenantRolesGuard } from '../auth/guards/tenant-roles.guard';
 import { TopologyModule } from '../topology/topology.module';
 import { BillingModule } from '../billing/billing.module';
+import { InventoryModule } from '../inventory/inventory.module';
 import { ClientPortalModule } from '../client-portal/client-portal.module';
 import { Tenant } from '../tenants/entities/tenant.entity';
 import { TenantMapDraft } from './entities/tenant-map-draft.entity';
@@ -18,6 +19,7 @@ import { MapDraftsService } from './map-drafts.service';
     AuthModule,
     TopologyModule,
     BillingModule,
+    InventoryModule,
     forwardRef(() => ClientPortalModule),
     TypeOrmModule.forFeature([Tenant, TenantMapDraft]),
   ],

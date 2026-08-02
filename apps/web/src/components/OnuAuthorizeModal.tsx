@@ -27,12 +27,8 @@ type Props = {
 
 export function OnuAuthorizeModal({ orphan, onClose, onAuthorized }: Props) {
   const queryClient = useQueryClient()
-  // Sin sugerencia no se inventa un índice: el 1 está ocupado en cualquier
-  // puerto con clientes y la OLT lo acepta como «re-create», dejando el SN sin
-  // registrar y pudiendo pisar al cliente que ya tenía ese índice.
-  const [onuId, setOnuId] = useState(
-    orphan.suggestedOnuId != null ? String(orphan.suggestedOnuId) : '',
-  )
+  // Vacío = automático: la OLT resuelve el primer índice libre al autorizar.
+  const [onuId, setOnuId] = useState('')
   const [onuType, setOnuType] = useState('')
   const [customType, setCustomType] = useState(false)
   const [name, setName] = useState('')
@@ -67,7 +63,7 @@ export function OnuAuthorizeModal({ orphan, onClose, onAuthorized }: Props) {
         body: JSON.stringify({
           oltId: orphan.oltId,
           oltIf: orphan.oltIf,
-          onuId: onuId.trim(),
+          onuId: onuId.trim() || null,
           sn: orphan.sn,
           onuType: onuType.trim() || null,
           name: name.trim() || null,
@@ -109,7 +105,7 @@ export function OnuAuthorizeModal({ orphan, onClose, onAuthorized }: Props) {
   function submit(e: FormEvent) {
     e.preventDefault()
     setError(null)
-    if (!onuId.trim() || !/^\d+$/.test(onuId.trim())) {
+    if (onuId.trim() && !/^\d+$/.test(onuId.trim())) {
       setError('ONU ID debe ser un número')
       return
     }
@@ -186,26 +182,24 @@ export function OnuAuthorizeModal({ orphan, onClose, onAuthorized }: Props) {
           </label>
 
           <label className="block">
-            <span className="text-xs text-[var(--text-muted)]">ONU ID</span>
+            <span className="text-xs text-[var(--text-muted)]">
+              ONU ID (opcional)
+            </span>
             <input
               className={`${inputClass} mt-1`}
               value={onuId}
               onChange={(e) => setOnuId(e.target.value)}
               inputMode="numeric"
-              required
+              placeholder="Automático"
               disabled={busy}
             />
-            {orphan.suggestedOnuId != null ? (
-              <span className="mt-1 block text-xs text-[var(--text-muted)]">
-                Sugerido (siguiente libre): {orphan.suggestedOnuId}
-              </span>
-            ) : (
-              <span className="mt-1 block text-xs text-amber-300">
-                No se pudo leer los índices ocupados del puerto. Consúltalos en
-                la OLT antes de autorizar: un índice en uso se rechaza como
-                «re-create» y el SN no queda registrado.
-              </span>
-            )}
+            <span className="mt-1 block text-xs text-[var(--text-muted)]">
+              Vacío = la OLT asigna el primer índice libre del puerto
+              {orphan.suggestedOnuId != null
+                ? ` (ahora el ${orphan.suggestedOnuId})`
+                : ''}
+              .
+            </span>
           </label>
 
           <div>

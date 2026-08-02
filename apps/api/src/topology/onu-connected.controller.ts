@@ -95,8 +95,10 @@ class AuthorizeOnuDto {
   @IsString()
   oltIf!: string;
 
+  /** Índice en el puerto PON; si se omite lo resuelve la OLT. */
+  @IsOptional()
   @IsString()
-  onuId!: string;
+  onuId?: string | null;
 
   @IsString()
   sn!: string;

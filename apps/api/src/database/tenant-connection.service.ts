@@ -32,6 +32,7 @@ import { InvoiceItem } from '../billing/entities/invoice-item.entity';
 import { BillingProduct } from '../billing/entities/billing-product.entity';
 import { ModuleConfig } from '../modules/entities/module-config.entity';
 import { CalendarEvent } from '../calendar/entities/calendar-event.entity';
+import { InventoryItem } from '../inventory/entities/inventory-item.entity';
 
 const CRM_DDL = (schema: string) => `
   CREATE TABLE IF NOT EXISTS "${schema}"."clients" (
@@ -814,10 +815,45 @@ const TOPOLOGY_ALTER = (schema: string) => `
     ADD COLUMN IF NOT EXISTS "purpose" varchar(20) NOT NULL DEFAULT 'internet';
   CREATE INDEX IF NOT EXISTS "idx_service_vlans_purpose"
     ON "${schema}"."service_vlans" ("purpose");
+
+  -- v49: inventario ONU/deco + TV en planes / snapshot en servicios
+  CREATE TABLE IF NOT EXISTS "${schema}"."inventory_items" (
+    "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    "type" varchar(16) NOT NULL,
+    "brand" varchar(80) NOT NULL,
+    "model" varchar(120) NOT NULL,
+    "quantity" int NOT NULL DEFAULT 0,
+    "notes" text NOT NULL DEFAULT '',
+    "is_active" boolean NOT NULL DEFAULT true,
+    "created_at" TIMESTAMPTZ NOT NULL DEFAULT now(),
+    "updated_at" TIMESTAMPTZ NOT NULL DEFAULT now()
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS "uq_inventory_items_type_brand_model"
+    ON "${schema}"."inventory_items" ("type", lower("brand"), lower("model"));
+  CREATE INDEX IF NOT EXISTS "idx_inventory_items_type"
+    ON "${schema}"."inventory_items" ("type");
+
+  ALTER TABLE "${schema}"."service_plans"
+    ADD COLUMN IF NOT EXISTS "deco_count" int NOT NULL DEFAULT 0;
+  ALTER TABLE "${schema}"."service_plans"
+    ADD COLUMN IF NOT EXISTS "additional_deco_price" numeric(12,2) NOT NULL DEFAULT 0;
+
+  ALTER TABLE "${schema}"."client_services"
+    ADD COLUMN IF NOT EXISTS "inventory_onu_item_id" uuid NULL;
+  ALTER TABLE "${schema}"."client_services"
+    ADD COLUMN IF NOT EXISTS "inventory_deco_item_id" uuid NULL;
+  ALTER TABLE "${schema}"."client_services"
+    ADD COLUMN IF NOT EXISTS "included_deco_count" int NOT NULL DEFAULT 0;
+  ALTER TABLE "${schema}"."client_services"
+    ADD COLUMN IF NOT EXISTS "additional_deco_count" int NOT NULL DEFAULT 0;
+  ALTER TABLE "${schema}"."client_services"
+    ADD COLUMN IF NOT EXISTS "additional_deco_fee_pending" boolean NOT NULL DEFAULT false;
+  ALTER TABLE "${schema}"."client_services"
+    ADD COLUMN IF NOT EXISTS "additional_deco_unit_price" numeric(12,2) NOT NULL DEFAULT 0;
 `;
 
 /** Bump when tenant DDL adds new tables/columns so existing processes re-apply. */
-const TENANT_SCHEMA_VERSION = 48;
+const TENANT_SCHEMA_VERSION = 49;
 
 @Injectable()
 export class TenantConnectionService implements OnModuleDestroy {
@@ -883,6 +919,7 @@ export class TenantConnectionService implements OnModuleDestroy {
         BillingProduct,
         ModuleConfig,
         CalendarEvent,
+        InventoryItem,
       ],
       synchronize: false,
     });
@@ -1115,6 +1152,14 @@ export class TenantConnectionService implements OnModuleDestroy {
     await this.ensureTenantSchema(schemaName);
     const ds = await this.getDataSource(schemaName);
     return ds.getRepository(BillingProduct);
+  }
+
+  async getInventoryItemRepository(
+    schemaName: string,
+  ): Promise<Repository<InventoryItem>> {
+    await this.ensureTenantSchema(schemaName);
+    const ds = await this.getDataSource(schemaName);
+    return ds.getRepository(InventoryItem);
   }
 
   async getCalendarEventRepository(

@@ -878,12 +878,35 @@ export class OnuConnectedService {
    * Probes ONU-type profiles (by SN vendor) until the OLT accepts one,
    * then silently reads SW equip to learn the real model.
    */
+  /**
+   * Índice libre en el puerto, preguntado a la OLT.
+   *
+   * Falla en vez de caer al índice 1: en un puerto con clientes ese índice ya
+   * está tomado y la OLT trata el alta como «re-create», dejando el SN fuera.
+   */
+  private async resolveNextOnuId(
+    olt: NetworkDevice,
+    oltIf: string,
+  ): Promise<string> {
+    const conn = this.zteConn(olt);
+    const res = isHuaweiOltDevice(olt.type, olt.subtype)
+      ? await this.huaweiOlt.resolveNextOnuId({ ...conn, ifName: oltIf })
+      : await this.zteOlt.resolveNextOnuId({ ...conn, ifName: oltIf });
+    if (!res.ok || res.onuId == null) {
+      throw new BadRequestException(
+        res.error || `No se pudo determinar el índice libre en ${oltIf}`,
+      );
+    }
+    return String(res.onuId);
+  }
+
   async authorize(
     user: AuthUser,
     body: {
       oltId: string;
       oltIf: string;
-      onuId: string | number;
+      /** Índice en el puerto PON; si viene vacío se resuelve contra la OLT. */
+      onuId?: string | number | null;
       sn: string;
       onuType?: string | null;
       name?: string | null;
@@ -893,12 +916,14 @@ export class OnuConnectedService {
     const schema = this.requireSchema(user);
     const olt = await this.requireManagedOlt(schema, body.oltId);
     const oltIf = body.oltIf?.trim();
-    const onuId = String(body.onuId ?? '').trim();
     const sn = body.sn?.trim().toUpperCase();
     const preferred = body.onuType?.trim() || null;
-    if (!oltIf || !onuId || !sn) {
-      throw new BadRequestException('oltIf, onuId y sn son requeridos');
+    if (!oltIf || !sn) {
+      throw new BadRequestException('oltIf y sn son requeridos');
     }
+    const onuId = String(body.onuId ?? '').trim()
+      ? String(body.onuId).trim()
+      : await this.resolveNextOnuId(olt, oltIf);
 
     const ponType: 'gpon' | 'epon' = oltIf.startsWith('epon') ? 'epon' : 'gpon';
     if (isHuaweiOltDevice(olt.type, olt.subtype)) {

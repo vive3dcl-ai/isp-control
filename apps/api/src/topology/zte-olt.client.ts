@@ -3237,6 +3237,55 @@ export class ZteOltClient {
     }
   }
 
+  /**
+   * Siguiente índice libre en un puerto PON, leído en vivo.
+   *
+   * Devuelve error en vez de adivinar cuando la OLT no entrega los índices
+   * ocupados: autorizar sobre un índice en uso deja el SN sin registrar («The
+   * entry is existed. This is a re-create operation.»).
+   */
+  async resolveNextOnuId(params: {
+    host: string;
+    port: number;
+    protocol: 'telnet' | 'ssh';
+    username: string;
+    password: string;
+    ifName: string;
+    subtypeHint?: string | null;
+    firmwareHint?: string | null;
+  }): Promise<{ ok: boolean; onuId?: number; error?: string }> {
+    try {
+      return await this.runConfigWrite(params, async (send, read) => {
+        const family = params.ifName.startsWith('epon') ? 'epon' : 'gpon';
+        const fw = this.resolveFwFamily(params);
+        const oltIfCli = this.cliOltIf(params.ifName, fw);
+        await send(`show ${family} onu state ${oltIfCli}`);
+        const stateOut = await read(25_000);
+        const occupied = parseOnuIdsFromState(stateOut);
+        const counts = parseOnuStateCounts(stateOut);
+        if (occupied.length === 0 && counts.total > 0) {
+          return {
+            ok: false,
+            error: `La OLT no entregó los índices ocupados de ${params.ifName}. Reintenta en unos segundos.`,
+          };
+        }
+        const next = suggestNextOnuId(occupied, defaultMaxOnus(family));
+        if (next == null) {
+          return {
+            ok: false,
+            error: `El puerto ${params.ifName} no tiene índices libres.`,
+          };
+        }
+        return { ok: true, onuId: next };
+      });
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
+
   async rebootOnusOnIf(params: {
     host: string;
     port: number;

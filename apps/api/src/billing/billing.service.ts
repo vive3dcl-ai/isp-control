@@ -754,6 +754,22 @@ export class BillingService {
           svc.installationInvoiced = true;
         }
 
+        if (
+          svc.additionalDecoFeePending &&
+          Number(svc.additionalDecoCount) > 0
+        ) {
+          const unit = Number(svc.additionalDecoUnitPrice ?? 0);
+          const n = Number(svc.additionalDecoCount);
+          if (unit > 0 && n > 0) {
+            allProrate = false;
+            items.push({
+              description: `Decos adicionales (${n}) — ${plan.invoiceLabel || plan.name}`,
+              unitPrice: Math.round(unit * n * 100) / 100,
+            });
+          }
+          svc.additionalDecoFeePending = false;
+        }
+
         if (svc.periodStart && (!minStart || svc.periodStart < minStart)) {
           minStart = svc.periodStart;
         }

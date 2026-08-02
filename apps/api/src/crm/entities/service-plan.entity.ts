@@ -113,6 +113,20 @@ export class ServicePlan {
   @Column({ name: 'is_active', type: 'boolean', default: true })
   isActive: boolean;
 
+  /** Decoders included in the plan when TV is enabled. */
+  @Column({ name: 'deco_count', type: 'int', default: 0 })
+  decoCount: number;
+
+  /** Unit price charged on the monthly invoice for each extra deco. */
+  @Column({
+    name: 'additional_deco_price',
+    type: 'decimal',
+    precision: 12,
+    scale: 2,
+    default: 0,
+  })
+  additionalDecoPrice: string;
+
   @OneToMany(() => ClientService, (s) => s.servicePlan)
   services: ClientService[];
 
