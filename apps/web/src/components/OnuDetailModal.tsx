@@ -7,8 +7,6 @@ import { useAuth } from '../auth/AuthContext'
 import { findNapForClient, loadMapDrafts } from '../lib/map-elements'
 import type { NetworkMapLocations } from '../lib/network-map'
 import {
-  bpsToMbps,
-  formatBps,
   formatSignal,
   type ConnectedOnuDetailResponse,
   type OnuCliReportResponse,
@@ -16,6 +14,12 @@ import {
   type OnuRunningConfigResponse,
   type OnuSwInfoResponse,
 } from '../lib/onu-connected'
+import {
+  MetricWindowPicker,
+  SignalChart,
+  TrafficChart,
+  type MetricWindowKey,
+} from './OnuMetricCharts'
 import { OnuCliReportModal } from './OnuCliReportModal'
 import { OnuLiveTrafficModal } from './OnuLiveTrafficModal'
 import { OnuTr069ConfigModal } from './OnuTr069ConfigModal'
@@ -42,176 +46,6 @@ function pendingBtn(label: string) {
 
 function isUuid(id: string | undefined): id is string {
   return !!id && /^[0-9a-f-]{36}$/i.test(id)
-}
-
-/** Keep charts light when showing 24h of 1-min (+ denser live) points. */
-function downsampleSeries<T>(samples: T[], maxPoints: number): T[] {
-  if (samples.length <= maxPoints) return samples
-  const out: T[] = []
-  const step = (samples.length - 1) / (maxPoints - 1)
-  for (let i = 0; i < maxPoints; i++) {
-    out.push(samples[Math.round(i * step)]!)
-  }
-  return out
-}
-
-function SignalChart({
-  samples,
-}: {
-  samples: Array<{ value: number; sampledAt: string }>
-}) {
-  const points = useMemo(() => {
-    const series = downsampleSeries(samples, 360)
-    if (series.length === 0) return null
-    const vals = series.map((s) => s.value)
-    const min = Math.min(...vals) - 1
-    const max = Math.max(...vals) + 1
-    const span = Math.max(max - min, 0.5)
-    const w = 320
-    const h = 100
-    const pad = 8
-    const coords = series.map((s, i) => {
-      const x =
-        pad +
-        (series.length === 1
-          ? (w - pad * 2) / 2
-          : (i / (series.length - 1)) * (w - pad * 2))
-      const y = pad + ((max - s.value) / span) * (h - pad * 2)
-      return `${x.toFixed(1)},${y.toFixed(1)}`
-    })
-    return { w, h, path: coords.join(' '), min, max, n: samples.length }
-  }, [samples])
-
-  if (!points) {
-    return (
-      <p className="text-xs text-[var(--text-muted)]">
-        Sin muestras aún. Flota ~1 min; con la modal abierta ~3 s.
-      </p>
-    )
-  }
-
-  return (
-    <div>
-      <svg
-        viewBox={`0 0 ${points.w} ${points.h}`}
-        className="h-28 w-full text-[var(--accent)]"
-        role="img"
-        aria-label="Señal histórica"
-      >
-        <polyline
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          points={points.path}
-        />
-      </svg>
-      <p className="mt-1 text-xs text-[var(--text-muted)]">
-        {points.min.toFixed(1)} … {points.max.toFixed(1)} dBm · {points.n}{' '}
-        muestras
-      </p>
-    </div>
-  )
-}
-
-function TrafficChart({
-  download,
-  upload,
-  liveDownloadBps,
-  liveUploadBps,
-}: {
-  download: Array<{ value: number; sampledAt: string }>
-  upload: Array<{ value: number; sampledAt: string }>
-  liveDownloadBps?: number | null
-  liveUploadBps?: number | null
-}) {
-  const chart = useMemo(() => {
-    const downSeries = downsampleSeries(download, 360)
-    const upSeries = downsampleSeries(upload, 360)
-    const times = new Map<string, { down?: number; up?: number }>()
-    for (const s of downSeries) {
-      const t = times.get(s.sampledAt) ?? {}
-      t.down = bpsToMbps(s.value)
-      times.set(s.sampledAt, t)
-    }
-    for (const s of upSeries) {
-      const t = times.get(s.sampledAt) ?? {}
-      t.up = bpsToMbps(s.value)
-      times.set(s.sampledAt, t)
-    }
-    const keys = [...times.keys()].sort()
-    if (keys.length === 0) return null
-    const downs = keys.map((k) => times.get(k)?.down ?? 0)
-    const ups = keys.map((k) => times.get(k)?.up ?? 0)
-    const max = Math.max(...downs, ...ups, 0.1)
-    const w = 320
-    const h = 100
-    const pad = 8
-    const toPath = (vals: number[]) =>
-      vals
-        .map((v, i) => {
-          const x =
-            pad +
-            (vals.length === 1
-              ? (w - pad * 2) / 2
-              : (i / (vals.length - 1)) * (w - pad * 2))
-          const y = pad + ((max - v) / max) * (h - pad * 2)
-          return `${x.toFixed(1)},${y.toFixed(1)}`
-        })
-        .join(' ')
-    return {
-      w,
-      h,
-      downPath: toPath(downs),
-      upPath: toPath(ups),
-      max,
-      n: Math.max(download.length, upload.length),
-    }
-  }, [download, upload])
-
-  if (!chart) {
-    return (
-      <p className="text-xs text-[var(--text-muted)]">
-        Sin muestras de tráfico aún. Flota ~1 min; con la modal abierta ~3 s.
-      </p>
-    )
-  }
-
-  return (
-    <div>
-      <div className="mb-1 flex flex-wrap gap-3 text-xs">
-        <span>
-          <span className="text-sky-400">●</span> Bajada{' '}
-          {formatBps(liveDownloadBps ?? download.at(-1)?.value ?? null)}
-        </span>
-        <span>
-          <span className="text-emerald-400">●</span> Subida{' '}
-          {formatBps(liveUploadBps ?? upload.at(-1)?.value ?? null)}
-        </span>
-      </div>
-      <svg
-        viewBox={`0 0 ${chart.w} ${chart.h}`}
-        className="h-28 w-full"
-        role="img"
-        aria-label="Tráfico histórico"
-      >
-        <polyline
-          fill="none"
-          stroke="#38bdf8"
-          strokeWidth="2"
-          points={chart.downPath}
-        />
-        <polyline
-          fill="none"
-          stroke="#34d399"
-          strokeWidth="2"
-          points={chart.upPath}
-        />
-      </svg>
-      <p className="mt-1 text-xs text-[var(--text-muted)]">
-        0 … {chart.max.toFixed(2)} Mbps · {chart.n} muestras
-      </p>
-    </div>
-  )
 }
 
 export function OnuDetailModal({
@@ -250,6 +84,7 @@ export function OnuDetailModal({
   const [msg, setMsg] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [tr069Error, setTr069Error] = useState<string | null>(null)
+  const [chartWindow, setChartWindow] = useState<MetricWindowKey>('1h')
 
   const detailQuery = useQuery({
     queryKey: ['app', 'onus', 'detail', oltId, onuIf],
@@ -1107,23 +942,36 @@ export function OnuDetailModal({
                 </button>
               </div>
 
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs font-medium text-[var(--text-muted)]">
+                  Ventana de las gráficas
+                </p>
+                <MetricWindowPicker
+                  value={chartWindow}
+                  onChange={setChartWindow}
+                />
+              </div>
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="rounded-lg border border-[var(--border)] p-3">
                   <p className="mb-2 text-xs font-medium text-[var(--text-muted)]">
-                    Tráfico (últimas 24 h · live ~3 s)
+                    Tráfico
                   </p>
                   <TrafficChart
                     download={downloadSamples}
                     upload={uploadSamples}
+                    windowKey={chartWindow}
                     liveDownloadBps={o.downloadBps}
                     liveUploadBps={o.uploadBps}
                   />
                 </div>
                 <div className="rounded-lg border border-[var(--border)] p-3">
                   <p className="mb-2 text-xs font-medium text-[var(--text-muted)]">
-                    Señal (últimas 24 h · live ~3 s)
+                    Señal
                   </p>
-                  <SignalChart samples={signalSamples} />
+                  <SignalChart
+                    samples={signalSamples}
+                    windowKey={chartWindow}
+                  />
                 </div>
               </div>
 
