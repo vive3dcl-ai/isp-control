@@ -2,6 +2,7 @@ import {
   ArrayMinSize,
   ArrayUnique,
   IsArray,
+  IsBoolean,
   IsIn,
   IsInt,
   IsOptional,
@@ -76,11 +77,22 @@ export class SyncServiceVlanDeviceDto {
   @IsUUID()
   parentPortId?: string;
 
-  /** Bridge name on RouterOS switch (default `bridge`). */
+  /**
+   * Bridge name on a RouterOS switch. Omit to reuse the bridge the selected
+   * ports already belong to.
+   */
   @IsOptional()
   @IsString()
   @MaxLength(80)
   bridge?: string;
+
+  /**
+   * Allow creating `bridge` when it does not exist yet. Off by default so a
+   * typo can never spawn a second bridge and strand the ports in it.
+   */
+  @IsOptional()
+  @IsBoolean()
+  createBridge?: boolean;
 
   /**
    * Required when kind=switch: physical ports and tagged/untagged membership

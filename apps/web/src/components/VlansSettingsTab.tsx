@@ -1,5 +1,10 @@
 import { useMemo, useState } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query'
 import { apiFetch } from '../lib/api'
 import type { TopologyDevice } from '../lib/topology'
 import {
@@ -40,6 +45,15 @@ type PendingDelete = {
 
 type SwitchPortMode = 'tagged' | 'untagged'
 
+type SwitchBridgeConfig = {
+  ok: boolean
+  bridges?: Array<{ name: string; vlanFiltering: boolean; disabled: boolean }>
+  ports?: Array<{ interface: string; bridge: string; pvid: number }>
+}
+
+/** Sentinel for the "create a new bridge" option in the bridge selector. */
+const NEW_BRIDGE = '__new__'
+
 export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
   const queryClient = useQueryClient()
   const { confirm } = useNotify()
@@ -51,8 +65,12 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
   const [routerParentPort, setRouterParentPort] = useState<
     Record<string, string>
   >({})
-  /** switchId → bridge name (default bridge) */
+  /** switchId → chosen bridge name, '' = auto, NEW_BRIDGE = create one */
   const [switchBridge, setSwitchBridge] = useState<Record<string, string>>({})
+  /** switchId → name typed when creating a new bridge */
+  const [switchNewBridge, setSwitchNewBridge] = useState<
+    Record<string, string>
+  >({})
   /** switchId → portId → tagged|untagged */
   const [switchPortModes, setSwitchPortModes] = useState<
     Record<string, Record<string, SwitchPortMode | ''>>
@@ -111,6 +129,73 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
     [topologyQuery.data?.devices],
   )
 
+  // Live bridge layout per switch: the selector must offer what the device
+  // really has, never a hardcoded name.
+  const bridgeQueries = useQueries({
+    queries: switches.map((sw) => ({
+      queryKey: ['app', 'topology', 'devices', sw.id, 'bridge'],
+      queryFn: () =>
+        apiFetch<SwitchBridgeConfig>(`/app/topology/devices/${sw.id}/bridge`),
+      enabled: modal !== null,
+      staleTime: 30_000,
+    })),
+  })
+
+  const bridgeInfo = useMemo(() => {
+    const out: Record<
+      string,
+      {
+        loading: boolean
+        failed: boolean
+        names: string[]
+        bridgeByPort: Record<string, string>
+      }
+    > = {}
+    switches.forEach((sw, i) => {
+      const q = bridgeQueries[i]
+      const data = q?.data
+      const bridgeByPort: Record<string, string> = {}
+      for (const p of data?.ports ?? []) {
+        if (p.interface && p.bridge) bridgeByPort[p.interface] = p.bridge
+      }
+      out[sw.id] = {
+        loading: !!q?.isLoading,
+        failed: !!q?.isError || (!!data && data.ok === false),
+        names: (data?.bridges ?? []).map((b) => b.name).filter(Boolean),
+        bridgeByPort,
+      }
+    })
+    return out
+  }, [switches, bridgeQueries])
+
+  /** Bridge that the currently selected ports already belong to, if unanimous. */
+  function autoBridge(sw: TopologyDevice): string | null {
+    const info = bridgeInfo[sw.id]
+    if (!info) return null
+    const byId = new Map(physicalPorts(sw).map((p) => [p.id, p.name]))
+    const found = new Set(
+      switchSelectedPorts(sw.id)
+        .map((s) => info.bridgeByPort[byId.get(s.portId) ?? ''])
+        .filter(Boolean),
+    )
+    if (found.size === 1) return [...found][0]
+    if (found.size === 0 && info.names.length === 1) return info.names[0]
+    return null
+  }
+
+  /** Value sent to the API: undefined lets the backend resolve it. */
+  function bridgePayload(switchId: string): {
+    bridge?: string
+    createBridge?: boolean
+  } {
+    const choice = switchBridge[switchId] ?? ''
+    if (choice === NEW_BRIDGE) {
+      const name = switchNewBridge[switchId]?.trim()
+      return name ? { bridge: name, createBridge: true } : {}
+    }
+    return { bridge: choice.trim() || undefined }
+  }
+
   function invalidate() {
     void queryClient.invalidateQueries({
       queryKey: ['app', 'settings', 'vlans'],
@@ -125,6 +210,7 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
     setDescription('')
     setRouterParentPort({})
     setSwitchBridge({})
+    setSwitchNewBridge({})
     setSwitchPortModes({})
     setError(null)
   }
@@ -136,6 +222,7 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
     setDescription(v.description ?? '')
     setRouterParentPort({})
     setSwitchBridge({})
+    setSwitchNewBridge({})
     // Prefill tagged/untagged from topology port cache so existing VLANs are editable.
     const modes: Record<string, Record<string, SwitchPortMode | ''>> = {}
     for (const d of topologyQuery.data?.devices ?? []) {
@@ -343,10 +430,7 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
               kind,
               parentPortId:
                 kind === 'router' ? routerParentPort[device.id] : undefined,
-              bridge:
-                kind === 'switch'
-                  ? switchBridge[device.id]?.trim() || 'bridge'
-                  : undefined,
+              ...(kind === 'switch' ? bridgePayload(device.id) : {}),
               ports: kind === 'switch' ? switchSelectedPorts(device.id) : undefined,
             }),
           },
@@ -395,10 +479,9 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
             body: JSON.stringify({
               deviceId: device.id,
               kind,
-              bridge:
-                kind === 'switch'
-                  ? switchBridge[device.id]?.trim() || 'bridge'
-                  : undefined,
+              ...(kind === 'switch'
+                ? { bridge: bridgePayload(device.id).bridge }
+                : {}),
             }),
           },
         )
@@ -787,22 +870,74 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
                             </div>
                             {canWrite && (
                               <div className="space-y-2">
-                                <label className="block text-xs">
-                                  <span className="mb-1 block text-[var(--text-muted)]">
-                                    Bridge
-                                  </span>
-                                  <input
-                                    className={inputClass}
-                                    value={switchBridge[sw.id] ?? 'bridge'}
-                                    onChange={(e) =>
-                                      setSwitchBridge((prev) => ({
-                                        ...prev,
-                                        [sw.id]: e.target.value,
-                                      }))
-                                    }
-                                    placeholder="bridge"
-                                  />
-                                </label>
+                                {(() => {
+                                  const info = bridgeInfo[sw.id]
+                                  const choice = switchBridge[sw.id] ?? ''
+                                  const auto = autoBridge(sw)
+                                  return (
+                                    <label className="block text-xs">
+                                      <span className="mb-1 block text-[var(--text-muted)]">
+                                        Bridge
+                                      </span>
+                                      <select
+                                        className={inputClass}
+                                        value={choice}
+                                        onChange={(e) =>
+                                          setSwitchBridge((prev) => ({
+                                            ...prev,
+                                            [sw.id]: e.target.value,
+                                          }))
+                                        }
+                                      >
+                                        <option value="">
+                                          {info?.loading
+                                            ? 'Leyendo bridges…'
+                                            : auto
+                                              ? `Automático (${auto})`
+                                              : 'Automático'}
+                                        </option>
+                                        {(info?.names ?? []).map((name) => (
+                                          <option key={name} value={name}>
+                                            {name}
+                                          </option>
+                                        ))}
+                                        <option value={NEW_BRIDGE}>
+                                          Crear bridge nuevo…
+                                        </option>
+                                      </select>
+                                      {choice === NEW_BRIDGE && (
+                                        <input
+                                          className={`${inputClass} mt-1`}
+                                          value={switchNewBridge[sw.id] ?? ''}
+                                          onChange={(e) =>
+                                            setSwitchNewBridge((prev) => ({
+                                              ...prev,
+                                              [sw.id]: e.target.value,
+                                            }))
+                                          }
+                                          placeholder="nombre del bridge nuevo"
+                                        />
+                                      )}
+                                      {info?.failed ? (
+                                        <span className="mt-1 block text-[11px] text-amber-400">
+                                          No se pudieron leer los bridges del
+                                          switch. Con «Automático» el servidor
+                                          usa el de los puertos elegidos.
+                                        </span>
+                                      ) : choice === NEW_BRIDGE ? (
+                                        <span className="mt-1 block text-[11px] text-amber-400">
+                                          Solo puertos que hoy no estén en otro
+                                          bridge: mover uno cortaría su tráfico.
+                                        </span>
+                                      ) : (
+                                        <span className="mt-1 block text-[11px] text-[var(--text-muted)]">
+                                          La VLAN se suma al bridge existente
+                                          sin mover los puertos.
+                                        </span>
+                                      )}
+                                    </label>
+                                  )
+                                })()}
                                 {ports.length === 0 ? (
                                   <span className="block text-[11px] text-amber-400">
                                     Sin puertos en topología. Sincroniza el
@@ -818,8 +953,22 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
                                           key={p.id}
                                           className="flex items-center justify-between gap-2 text-xs"
                                         >
-                                          <span className="truncate font-mono">
-                                            {p.name}
+                                          <span className="truncate">
+                                            <span className="font-mono">
+                                              {p.name}
+                                            </span>
+                                            {bridgeInfo[sw.id]?.bridgeByPort[
+                                              p.name
+                                            ] && (
+                                              <span className="ml-1 text-[var(--text-muted)]">
+                                                (
+                                                {
+                                                  bridgeInfo[sw.id]
+                                                    .bridgeByPort[p.name]
+                                                }
+                                                )
+                                              </span>
+                                            )}
                                             {p.comment
                                               ? ` — ${p.comment}`
                                               : ''}

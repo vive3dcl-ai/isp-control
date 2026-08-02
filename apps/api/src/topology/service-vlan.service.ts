@@ -11,6 +11,7 @@ import {
   DEFAULT_OLT_PORTS,
 } from './olt.constants';
 import { isMikrotikRouterOsDevice } from './switch.constants';
+import { portMoveError, resolveSwitchBridge } from './switch-bridge.util';
 import { saveDeviceIfPresent } from './device-persist.util';
 import type { NetworkDevice } from './entities/network-device.entity';
 import type { NetworkPort } from './entities/network-port.entity';
@@ -478,6 +479,7 @@ export class ServiceVlanService {
         row.description,
         dto.bridge,
         dto.ports,
+        dto.createBridge,
       );
       return {
         ok: true,
@@ -795,6 +797,7 @@ export class ServiceVlanService {
     description: string | null,
     bridgeName?: string,
     membership?: Array<{ portId: string; mode: 'tagged' | 'untagged' }>,
+    createBridge?: boolean,
   ): Promise<string> {
     if (!membership?.length) {
       throw new BadRequestException(
@@ -802,7 +805,6 @@ export class ServiceVlanService {
       );
     }
 
-    const bridge = bridgeName?.trim() || 'bridge';
     const conn = this.mikrotikConn(device);
 
     const byId = new Map(ports.map((p) => [p.id, p]));
@@ -828,38 +830,63 @@ export class ServiceVlanService {
       else untagged.push(port.name);
     }
 
+    const liveCfg = await this.mikrotik.getBridgeConfig(conn);
+    if (!liveCfg.ok) {
+      throw new BadRequestException(
+        liveCfg.error || 'No se pudo leer la configuración de bridge del switch',
+      );
+    }
+    const livePorts = liveCfg.ports ?? [];
+    const liveBridges = liveCfg.bridges ?? [];
+
+    const resolved = resolveSwitchBridge({
+      requested: bridgeName,
+      createBridge,
+      selectedPortNames: selected.map((s) => s.port.name),
+      livePorts,
+      liveBridgeNames: liveBridges.map((b) => b.name),
+    });
+    if (!resolved.ok) throw new BadRequestException(resolved.error);
+    const bridge = resolved.bridge;
+
     // MikroTik expects the bridge itself in the tagged list when using
     // vlan-filtering with CPU/management access to the VLAN.
     if (!tagged.map((n) => n.toLowerCase()).includes(bridge.toLowerCase())) {
       tagged.push(bridge);
     }
 
-    const ensured = await this.mikrotik.ensureBridge({
-      ...conn,
-      name: bridge,
-      vlanFiltering: true,
-    });
-    if (!ensured.ok) {
-      throw new BadRequestException(
-        ensured.error || 'No se pudo asegurar el bridge',
-      );
+    if (resolved.create) {
+      const ensured = await this.mikrotik.ensureBridge({
+        ...conn,
+        name: bridge,
+        vlanFiltering: true,
+      });
+      if (!ensured.ok) {
+        throw new BadRequestException(
+          ensured.error || 'No se pudo asegurar el bridge',
+        );
+      }
     }
-
-    const liveCfg = await this.mikrotik.getBridgeConfig(conn);
-    const livePorts = liveCfg.ok ? (liveCfg.ports ?? []) : [];
 
     for (const { port, mode } of selected) {
       const existing = livePorts.find(
         (bp) => bp.interface.toLowerCase() === port.name.toLowerCase(),
       );
+      const moveError = portMoveError({
+        portName: port.name,
+        currentBridge: existing?.bridge,
+        targetBridge: bridge,
+      });
+      if (moveError) throw new BadRequestException(moveError);
       // Untagged → this VLAN is PVID. Tagged → keep existing PVID if already
       // on the bridge (don't clobber another access VLAN).
       const pvid =
-        mode === 'untagged'
-          ? vlanId
-          : existing?.bridge?.toLowerCase() === bridge.toLowerCase()
-            ? existing.pvid || 1
-            : 1;
+        mode === 'untagged' ? vlanId : existing ? existing.pvid || 1 : 1;
+
+      // A tagged port already on the bridge needs no port-level change: it only
+      // has to appear in the VLAN's tagged list, handled by upsertBridgeVlan.
+      if (existing && existing.pvid === pvid) continue;
+
       const set = await this.mikrotik.setBridgePort({
         ...conn,
         interfaceName: port.name,
@@ -924,10 +951,22 @@ export class ServiceVlanService {
         'Solo switches MikroTik RouterOS admiten eliminar VLAN de bridge',
       );
     }
-    const bridge = bridgeName?.trim() || 'bridge';
     const conn = this.mikrotikConn(device);
 
     const cfg = await this.mikrotik.getBridgeConfig(conn);
+    const requested = bridgeName?.trim();
+    const bridge =
+      (cfg.ok
+        ? (cfg.vlans ?? []).find(
+            (v) =>
+              v.vlanIds.includes(vlanId) &&
+              (!requested ||
+                v.bridge.toLowerCase() === requested.toLowerCase()),
+          )?.bridge
+        : undefined) ||
+      requested ||
+      'bridge';
+
     if (cfg.ok) {
       for (const bp of cfg.ports ?? []) {
         if (bp.pvid === vlanId && bp.interface) {
