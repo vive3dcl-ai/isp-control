@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Post, Query, UseGuards } from '@nestjs/common';
-import { IsBoolean, IsOptional, IsUUID } from 'class-validator';
+import { IsBoolean, IsInt, IsOptional, IsUUID, Min } from 'class-validator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import {
@@ -22,6 +22,16 @@ class MigrationOltDto {
   fromOlt?: boolean;
 }
 
+class MigrationCompleteDto {
+  @IsUUID()
+  onuId!: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  sourceVlan?: number | null;
+}
+
 @Controller('app/onus/migration')
 @UseGuards(JwtAuthGuard, RolesGuard, TenantRolesGuard)
 @Roles('tenant_user')
@@ -40,5 +50,11 @@ export class OnuMigrationController {
   @TenantRoles(...CRM_WRITE_ROLES)
   sourceVlans(@CurrentUser() user: AuthUser, @Query('oltId') oltId: string) {
     return this.migration.sourceVlans(user, oltId);
+  }
+
+  @Post('complete')
+  @TenantRoles(...CRM_WRITE_ROLES)
+  complete(@CurrentUser() user: AuthUser, @Body() dto: MigrationCompleteDto) {
+    return this.migration.markComplete(user, dto.onuId, dto.sourceVlan ?? null);
   }
 }

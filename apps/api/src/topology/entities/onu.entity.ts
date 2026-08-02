@@ -162,6 +162,13 @@ export class Onu {
   @Column({ name: 'verify_detail', type: 'jsonb', default: () => "'{}'" })
   verifyDetail: Record<string, unknown>;
 
+  /** Segmento del que salió mediante el asistente de migración. */
+  @Column({ name: 'migration_source_vlan', type: 'int', nullable: true })
+  migrationSourceVlan: number | null;
+
+  @Column({ name: 'migrated_at', type: 'timestamptz', nullable: true })
+  migratedAt: Date | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

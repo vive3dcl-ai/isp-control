@@ -1,11 +1,14 @@
 import {
   decideVerifyOutcome,
   isVerifyWindowExpired,
+  mapWithConcurrency,
   shouldCloseVerifyWindow,
   shouldRunVerifyTick,
   summarizeVerifyDetail,
   VERIFY_HEAL_MAX_ATTEMPTS,
   VERIFY_INTERVAL_MS,
+  VERIFY_MAX_CONCURRENCY_PER_TENANT,
+  VERIFY_MAX_GLOBAL_CONCURRENCY,
   VERIFY_WINDOW_MS,
 } from './onu-post-provision-verify.util';
 
@@ -138,8 +141,10 @@ describe('criterio de pase/fallo', () => {
     ).toBe('fail');
   });
 
-  it('expone el tope de curaciones', () => {
+  it('expone el tope de curaciones y de concurrencia', () => {
     expect(VERIFY_HEAL_MAX_ATTEMPTS).toBe(3);
+    expect(VERIFY_MAX_CONCURRENCY_PER_TENANT).toBe(5);
+    expect(VERIFY_MAX_GLOBAL_CONCURRENCY).toBe(40);
   });
 });
 
@@ -152,5 +157,38 @@ describe('resumen', () => {
         healed: ['credenciales'],
       }),
     ).toContain('arp: ok');
+  });
+});
+
+describe('cola con tope de concurrencia', () => {
+  it('nunca supera el límite y procesa todos', async () => {
+    let live = 0;
+    let peak = 0;
+    const items = Array.from({ length: 50 }, (_, i) => i);
+
+    const results = await mapWithConcurrency(items, 5, async (n) => {
+      live += 1;
+      peak = Math.max(peak, live);
+      await new Promise((r) => setTimeout(r, 5));
+      live -= 1;
+      return n * 2;
+    });
+
+    expect(peak).toBeLessThanOrEqual(5);
+    expect(results).toHaveLength(50);
+    expect(results.every((r) => r.status === 'fulfilled')).toBe(true);
+    expect(
+      results.map((r) => (r.status === 'fulfilled' ? r.value : null)),
+    ).toEqual(items.map((n) => n * 2));
+  });
+
+  it('aisla rechazos sin tumbar el resto de la cola', async () => {
+    const results = await mapWithConcurrency([1, 2, 3], 2, async (n) => {
+      if (n === 2) throw new Error('boom');
+      return n;
+    });
+    expect(results[0]).toEqual({ status: 'fulfilled', value: 1 });
+    expect(results[1].status).toBe('rejected');
+    expect(results[2]).toEqual({ status: 'fulfilled', value: 3 });
   });
 });

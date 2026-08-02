@@ -337,11 +337,23 @@ export class CrmService {
   }
 
   async deleteClient(user: AuthUser, id: string) {
-    const repo = await this.tenantConnections.getClientRepository(
-      this.requireSchema(user),
-    );
+    const schema = this.requireSchema(user);
+    const repo = await this.tenantConnections.getClientRepository(schema);
     const client = await repo.findOne({ where: { id } });
     if (!client) throw new NotFoundException('Client not found');
+    // Sólo se borra del esquema del tenant; nunca toca admin/public.
+    // Pedimos que esté archivado para no borrar clientes activos por accidente.
+    if (client.isActive) {
+      throw new BadRequestException(
+        'Archiva el cliente antes de eliminarlo de forma permanente',
+      );
+    }
+
+    // invoices.client_id es RESTRICT: hay que limpiarlas antes del cliente.
+    const invoiceRepo =
+      await this.tenantConnections.getInvoiceRepository(schema);
+    await invoiceRepo.delete({ clientId: id });
+
     if (user.tenantId && this.clientPortal) {
       await this.clientPortal.onClientArchivedOrDeleted(user.tenantId, id);
     }

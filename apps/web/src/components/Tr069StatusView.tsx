@@ -1,33 +1,30 @@
-import { useMemo, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { apiFetch } from '../lib/api'
-import type {
-  AcsServiceStatus,
-  Tr069StatusResponse,
-} from '../lib/tr069'
+import { useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { apiFetch } from "../lib/api";
+import type { AcsServiceStatus, Tr069StatusResponse } from "../lib/tr069";
 
 function ServiceBadge({
   label,
   status,
 }: {
-  label: string
-  status: AcsServiceStatus
+  label: string;
+  status: AcsServiceStatus;
 }) {
-  const online = status === 'online'
+  const online = status === "online";
   return (
     <span className="inline-flex items-center gap-1 text-xs">
       {label}:
       <span
         className={[
-          'inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold text-white',
-          online ? 'bg-emerald-600' : 'bg-[var(--danger)]',
-        ].join(' ')}
+          "inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold text-white",
+          online ? "bg-emerald-600" : "bg-[var(--danger)]",
+        ].join(" ")}
         title={status}
       >
-        {online ? '✓' : '✕'}
+        {online ? "✓" : "✕"}
       </span>
     </span>
-  )
+  );
 }
 
 function KpiCard({
@@ -35,16 +32,16 @@ function KpiCard({
   label,
   emphasize,
 }: {
-  value: number
-  label: string
-  emphasize?: 'accent' | 'danger' | 'muted'
+  value: number;
+  label: string;
+  emphasize?: "accent" | "danger" | "muted";
 }) {
   const valueClass =
-    emphasize === 'danger'
-      ? 'text-[var(--danger)]'
-      : emphasize === 'muted'
-        ? 'text-[var(--text)]'
-        : 'text-[var(--accent)]'
+    emphasize === "danger"
+      ? "text-[var(--danger)]"
+      : emphasize === "muted"
+        ? "text-[var(--text)]"
+        : "text-[var(--accent)]";
   return (
     <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] px-4 py-4">
       <p className={`text-3xl font-semibold tabular-nums ${valueClass}`}>
@@ -52,7 +49,7 @@ function KpiCard({
       </p>
       <p className="mt-1 text-sm text-[var(--text-muted)]">{label}</p>
     </div>
-  )
+  );
 }
 
 function CountBadge({ n }: { n: number }) {
@@ -60,37 +57,29 @@ function CountBadge({ n }: { n: number }) {
     <span className="ml-2 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-[var(--bg)] px-1.5 text-xs text-[var(--text-muted)]">
       {n}
     </span>
-  )
+  );
 }
 
 export function Tr069StatusView() {
-  const [search, setSearch] = useState('')
-  const [oltSortAsc, setOltSortAsc] = useState(true)
+  const [search, setSearch] = useState("");
+  const [oltSortAsc, setOltSortAsc] = useState(true);
+  const [manualTests, setManualTests] = useState<
+    Record<string, { status: "running" | "ok" | "fail"; message: string }>
+  >({});
 
   const statusQuery = useQuery({
-    queryKey: ['app', 'settings', 'tr069', 'status'],
-    queryFn: () =>
-      apiFetch<Tr069StatusResponse>('/app/settings/tr069/status'),
+    queryKey: ["app", "settings", "tr069", "status"],
+    queryFn: () => apiFetch<Tr069StatusResponse>("/app/settings/tr069/status"),
     refetchOnWindowFocus: false,
-  })
+  });
 
-  const data = statusQuery.data
-  const q = search.trim().toLowerCase()
+  const data = statusQuery.data;
+  const q = search.trim().toLowerCase();
 
-  const filteredFaults = useMemo(() => {
-    const rows = data?.faults ?? []
-    if (!q) return rows
-    return rows.filter((f) =>
-      [f.profileName, f.deviceId, f.channel, f.code, f.message]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase()
-        .includes(q),
-    )
-  }, [data?.faults, q])
+  const filteredFaults = data?.faults ?? [];
 
   const filteredOnus = useMemo(() => {
-    let rows = data?.onus ?? []
+    let rows = data?.onus ?? [];
     if (q) {
       rows = rows.filter((o) =>
         [
@@ -104,24 +93,55 @@ export function Tr069StatusView() {
           o.profileName,
         ]
           .filter(Boolean)
-          .join(' ')
+          .join(" ")
           .toLowerCase()
           .includes(q),
-      )
+      );
     }
     return [...rows].sort((a, b) => {
-      const av = (a.oltName ?? '').toLowerCase()
-      const bv = (b.oltName ?? '').toLowerCase()
-      const cmp = av.localeCompare(bv)
-      return oltSortAsc ? cmp : -cmp
-    })
-  }, [data?.onus, q, oltSortAsc])
+      const av = (a.oltName ?? "").toLowerCase();
+      const bv = (b.oltName ?? "").toLowerCase();
+      const cmp = av.localeCompare(bv);
+      return oltSortAsc ? cmp : -cmp;
+    });
+  }, [data?.onus, q, oltSortAsc]);
 
   const summary = data?.summary ?? {
     managedOnus: 0,
     onlineInformed: 0,
     notInformedRecently: 0,
     activeFaults: 0,
+  };
+
+  async function runManualTest(onuId: string) {
+    setManualTests((prev) => ({
+      ...prev,
+      [onuId]: { status: "running", message: "Verificando…" },
+    }));
+    try {
+      const result = await apiFetch<{
+        ok: boolean;
+        verifyStatus: string;
+        message?: string;
+      }>(`/app/onus/${onuId}/verify/run`, { method: "POST" });
+      setManualTests((prev) => ({
+        ...prev,
+        [onuId]: {
+          status: result.verifyStatus === "ok" ? "ok" : "fail",
+          message:
+            result.message ||
+            (result.verifyStatus === "ok" ? "Todo OK" : "Hay fallos"),
+        },
+      }));
+    } catch (error) {
+      setManualTests((prev) => ({
+        ...prev,
+        [onuId]: {
+          status: "fail",
+          message: error instanceof Error ? error.message : String(error),
+        },
+      }));
+    }
   }
 
   return (
@@ -133,10 +153,7 @@ export function Tr069StatusView() {
       )}
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <KpiCard
-          value={summary.managedOnus}
-          label="TR069-managed ONUs"
-        />
+        <KpiCard value={summary.managedOnus} label="TR069-managed ONUs" />
         <KpiCard
           value={summary.onlineInformed}
           label="Online (informed < 60 min)"
@@ -163,7 +180,7 @@ export function Tr069StatusView() {
             onClick={() => void statusQuery.refetch()}
           >
             <span aria-hidden>↻</span>
-            {statusQuery.isFetching ? 'Refreshing…' : 'Refresh'}
+            {statusQuery.isFetching ? "Refreshing…" : "Refresh"}
           </button>
         </div>
         <div className="overflow-x-auto">
@@ -210,7 +227,7 @@ export function Tr069StatusView() {
                     {row.type}
                   </td>
                   <td className="px-4 py-3 font-mono text-xs text-[var(--text-muted)]">
-                    {row.nbiEndpoint || '—'}
+                    {row.nbiEndpoint || "—"}
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex flex-wrap gap-3">
@@ -220,7 +237,7 @@ export function Tr069StatusView() {
                     </div>
                   </td>
                   <td className="px-4 py-3 text-[var(--text-muted)]">
-                    {row.devicesInAcs == null ? '—' : row.devicesInAcs}
+                    {row.devicesInAcs == null ? "—" : row.devicesInAcs}
                   </td>
                   <td className="px-4 py-3">{row.faults}</td>
                 </tr>
@@ -230,25 +247,11 @@ export function Tr069StatusView() {
         </div>
         {data?.refreshedAt && (
           <p className="border-t border-[var(--border)] px-4 py-2 text-xs text-[var(--text-muted)]">
-            Actualizado{' '}
-            {new Date(data.refreshedAt).toLocaleString()}
-            {statusQuery.isFetching ? ' · sondeando ACS…' : ''}
+            Actualizado {new Date(data.refreshedAt).toLocaleString()}
+            {statusQuery.isFetching ? " · sondeando ACS…" : ""}
           </p>
         )}
       </section>
-
-      <div className="relative">
-        <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)]">
-          ⌕
-        </span>
-        <input
-          type="search"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search ONUs (serial, IP, description, OLT, model) and faults..."
-          className="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] py-2.5 pl-9 pr-3 text-sm outline-none ring-[var(--accent)] focus:ring-2"
-        />
-      </div>
 
       <section className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)]">
         <div className="flex items-center border-b border-[var(--border)] px-4 py-3">
@@ -291,7 +294,7 @@ export function Tr069StatusView() {
                     </td>
                     <td className="px-4 py-2">{f.profileName}</td>
                     <td className="px-4 py-2 font-mono text-xs">
-                      {f.deviceId ?? '—'}
+                      {f.deviceId ?? "—"}
                     </td>
                     <td className="px-4 py-2">{f.channel}</td>
                     <td className="px-4 py-2 font-mono text-xs">{f.code}</td>
@@ -304,6 +307,19 @@ export function Tr069StatusView() {
           </table>
         </div>
       </section>
+
+      <div className="relative">
+        <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)]">
+          ⌕
+        </span>
+        <input
+          type="search"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search ONUs (serial, IP, description, OLT, model)..."
+          className="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] py-2.5 pl-9 pr-3 text-sm outline-none ring-[var(--accent)] focus:ring-2"
+        />
+      </div>
 
       <section className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)]">
         <div className="flex items-center border-b border-[var(--border)] px-4 py-3">
@@ -324,7 +340,7 @@ export function Tr069StatusView() {
                   >
                     OLT
                     <span className="text-[10px]">
-                      {oltSortAsc ? '▲' : '▼'}
+                      {oltSortAsc ? "▲" : "▼"}
                     </span>
                   </button>
                 </th>
@@ -347,39 +363,65 @@ export function Tr069StatusView() {
                   </td>
                 </tr>
               ) : (
-                filteredOnus.map((o) => (
-                  <tr
-                    key={o.deviceId}
-                    className="border-b border-[var(--border)] last:border-0"
-                  >
-                    <td className="px-4 py-2 font-mono text-xs">
-                      {o.deviceId}
-                    </td>
-                    <td className="px-4 py-2 font-mono text-xs">{o.serial}</td>
-                    <td className="px-4 py-2">{o.oltName ?? '—'}</td>
-                    <td className="px-4 py-2">{o.model ?? '—'}</td>
-                    <td className="px-4 py-2">{o.description ?? '—'}</td>
-                    <td className="px-4 py-2 font-mono text-xs">
-                      {o.ip ?? '—'}
-                    </td>
-                    <td className="px-4 py-2 text-xs">
-                      {o.lastInform
-                        ? new Date(o.lastInform).toLocaleString()
-                        : '—'}
-                    </td>
-                    <td className="px-4 py-2">{o.state}</td>
-                    <td className="px-4 py-2">
-                      <span className="text-xs text-[var(--text-muted)]">
-                        —
-                      </span>
-                    </td>
-                  </tr>
-                ))
+                filteredOnus.map((o) => {
+                  const test = manualTests[o.onuId];
+                  return (
+                    <tr
+                      key={o.deviceId}
+                      className="border-b border-[var(--border)] last:border-0"
+                    >
+                      <td className="px-4 py-2 font-mono text-xs">
+                        {o.deviceId}
+                      </td>
+                      <td className="px-4 py-2 font-mono text-xs">
+                        {o.serial}
+                      </td>
+                      <td className="px-4 py-2">{o.oltName ?? "—"}</td>
+                      <td className="px-4 py-2">{o.model ?? "—"}</td>
+                      <td className="px-4 py-2">{o.description ?? "—"}</td>
+                      <td className="px-4 py-2 font-mono text-xs">
+                        {o.ip ?? "—"}
+                      </td>
+                      <td className="px-4 py-2 text-xs">
+                        {o.lastInform
+                          ? new Date(o.lastInform).toLocaleString()
+                          : "—"}
+                      </td>
+                      <td className="px-4 py-2">{o.state}</td>
+                      <td className="px-4 py-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            disabled={test?.status === "running"}
+                            onClick={() => void runManualTest(o.onuId)}
+                            className="rounded-md border border-[var(--border)] px-2 py-1 text-xs hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:opacity-50"
+                          >
+                            {test?.status === "running"
+                              ? "Testing…"
+                              : "Test manual"}
+                          </button>
+                          {test && test.status !== "running" ? (
+                            <span
+                              title={test.message}
+                              className={
+                                test.status === "ok"
+                                  ? "text-xs text-emerald-400"
+                                  : "text-xs text-[var(--danger)]"
+                              }
+                            >
+                              {test.status === "ok" ? "Todo OK" : "Fail"}
+                            </span>
+                          ) : null}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
         </div>
       </section>
     </div>
-  )
+  );
 }

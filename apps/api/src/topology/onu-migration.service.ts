@@ -80,6 +80,20 @@ export class OnuMigrationService {
     );
 
     const dbRows = await onuRepo.find({ where: { oltId } });
+    const completedBySource: Record<string, number> = {};
+    let completedTotal = 0;
+    for (const row of dbRows) {
+      if (!linkedIds.has(row.id)) continue;
+      // Compatibilidad con migraciones anteriores a v47: no conocemos su VLAN
+      // de origen, pero una ONU ligada y con ambas redes asignadas sí cuenta en
+      // el progreso global. Las nuevas además quedan clasificadas por segmento.
+      if (!row.migratedAt && (!row.mgmtIp || !row.wanIp)) continue;
+      completedTotal += 1;
+      if (row.migrationSourceVlan != null) {
+        const key = String(row.migrationSourceVlan);
+        completedBySource[key] = (completedBySource[key] ?? 0) + 1;
+      }
+    }
     const byIf = new Map(dbRows.map((r) => [r.onuIf.toLowerCase(), r]));
     const bySn = new Map(
       dbRows
@@ -248,6 +262,9 @@ export class OnuMigrationService {
     const candidates = [...candidatesByIf.values()].sort((a, b) =>
       a.onuIf.localeCompare(b.onuIf, undefined, { numeric: true }),
     );
+    for (const vlan of Object.keys(completedBySource)) {
+      vlanSet.add(Number(vlan));
+    }
     const sourceVlans = [...vlanSet].sort((a, b) => a - b);
 
     this.logger.log(
@@ -260,6 +277,8 @@ export class OnuMigrationService {
       probedAt,
       totalLive,
       totalCandidates: candidates.length,
+      completedTotal,
+      completedBySource,
       sourceVlans,
       candidates,
       source,
@@ -274,6 +293,33 @@ export class OnuMigrationService {
       oltName: scan.oltName,
       sourceVlans: scan.sourceVlans,
       totalCandidates: scan.totalCandidates,
+    };
+  }
+
+  /** Persiste el avance al terminar todos los pasos del asistente. */
+  async markComplete(user: AuthUser, onuId: string, sourceVlan: number | null) {
+    const schema = this.requireSchema(user);
+    const onuRepo = await this.tenantConnections.getOnuRepository(schema);
+    const onu = await onuRepo.findOne({ where: { id: onuId } });
+    if (!onu) throw new BadRequestException('ONU no encontrada');
+
+    const serviceRepo =
+      await this.tenantConnections.getClientServiceRepository(schema);
+    const linked = await serviceRepo.findOne({ where: { onuId } });
+    if (!linked) {
+      throw new BadRequestException(
+        'La ONU todavía no está vinculada a un servicio',
+      );
+    }
+
+    onu.migrationSourceVlan = sourceVlan;
+    onu.migratedAt = new Date();
+    await onuRepo.save(onu);
+    return {
+      ok: true,
+      onuId: onu.id,
+      sourceVlan: onu.migrationSourceVlan,
+      migratedAt: onu.migratedAt.toISOString(),
     };
   }
 }

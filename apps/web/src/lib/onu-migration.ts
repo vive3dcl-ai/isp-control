@@ -1,59 +1,61 @@
-import { apiFetch } from './api'
+import { apiFetch } from "./api";
 
 export type MigrationCandidate = {
-  onuIf: string
-  ponType: string
-  board: string
-  port: string
-  onuId: string
-  sn: string | null
-  onuType: string | null
-  name: string | null
-  description: string | null
-  status: string
-  phaseState: string
-  adminState: string
-  online: boolean
-  signalDbm: number | null
-  mode: string | null
-  vlan: number | null
-  vlans: number[]
-  inDb: boolean
-  onuDbId: string | null
-  suggestedClientName: string
-  suggestedFirstName: string
-  suggestedLastName: string
-  suggestedServiceName: string
-  nameSource: 'name' | 'description' | 'empty'
-  nameConfidence: 'high' | 'medium' | 'low'
-}
+  onuIf: string;
+  ponType: string;
+  board: string;
+  port: string;
+  onuId: string;
+  sn: string | null;
+  onuType: string | null;
+  name: string | null;
+  description: string | null;
+  status: string;
+  phaseState: string;
+  adminState: string;
+  online: boolean;
+  signalDbm: number | null;
+  mode: string | null;
+  vlan: number | null;
+  vlans: number[];
+  inDb: boolean;
+  onuDbId: string | null;
+  suggestedClientName: string;
+  suggestedFirstName: string;
+  suggestedLastName: string;
+  suggestedServiceName: string;
+  nameSource: "name" | "description" | "empty";
+  nameConfidence: "high" | "medium" | "low";
+};
 
 export type MigrationScanResponse = {
-  oltId: string
-  oltName: string
-  probedAt: string
-  totalLive: number
-  totalCandidates: number
-  sourceVlans: number[]
-  candidates: MigrationCandidate[]
-  source?: 'db' | 'olt' | 'mixed'
-  liveWarning?: string | null
-}
+  oltId: string;
+  oltName: string;
+  probedAt: string;
+  totalLive: number;
+  totalCandidates: number;
+  completedTotal: number;
+  completedBySource: Record<string, number>;
+  sourceVlans: number[];
+  candidates: MigrationCandidate[];
+  source?: "db" | "olt" | "mixed";
+  liveWarning?: string | null;
+};
 
 export type MigrationSegmentConfig = {
-  oltId: string
-  oltName: string
-  sourceVlan: number | null
-  mgmtVlanId: number
-  wanVlanId: number
-  tr069ProfileId: string | null
-}
+  oltId: string;
+  oltName: string;
+  sourceVlan: number | null;
+  mgmtVlanId: number;
+  wanVlanId: number;
+  tr069ProfileId: string | null;
+};
 
 export function scanMigrationOlts(oltId: string) {
-  return apiFetch<MigrationScanResponse>('/app/onus/migration/scan', {
-    method: 'POST',
+  return apiFetch<MigrationScanResponse>("/app/onus/migration/scan", {
+    method: "POST",
     body: JSON.stringify({ oltId }),
-  })
+  });
 }
 
 /** Filter candidates belonging to a source VLAN segment. */
@@ -61,20 +63,20 @@ export function filterBySourceVlan(
   candidates: MigrationCandidate[],
   sourceVlan: number | null,
 ): MigrationCandidate[] {
-  if (sourceVlan == null) return candidates
+  if (sourceVlan == null) return candidates;
   return candidates.filter((c) => {
-    if (c.vlan === sourceVlan) return true
-    return Array.isArray(c.vlans) && c.vlans.includes(sourceVlan)
-  })
+    if (c.vlan === sourceVlan) return true;
+    return Array.isArray(c.vlans) && c.vlans.includes(sourceVlan);
+  });
 }
 
 /** Lowercase and strip accents so «Muñoz» matches a plain «munoz». */
 function normalizeSearch(value: string): string {
   return value
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
-    .trim()
+    .trim();
 }
 
 /** Free-text match over every field the migration table shows. */
@@ -82,9 +84,9 @@ export function matchesSearch(
   candidate: MigrationCandidate,
   query: string,
 ): boolean {
-  const needle = normalizeSearch(query)
-  if (!needle) return true
-  const terms = needle.split(/\s+/)
+  const needle = normalizeSearch(query);
+  if (!needle) return true;
+  const terms = needle.split(/\s+/);
   const haystack = normalizeSearch(
     [
       candidate.onuIf,
@@ -97,100 +99,97 @@ export function matchesSearch(
       candidate.suggestedServiceName,
       candidate.onuType,
       ...(candidate.vlans ?? []).map(String),
-      candidate.vlan != null ? String(candidate.vlan) : '',
+      candidate.vlan != null ? String(candidate.vlan) : "",
     ]
       .filter(Boolean)
-      .join(' '),
-  )
+      .join(" "),
+  );
   // Every term must appear, so «juan casa» narrows instead of widening.
-  return terms.every((t) => haystack.includes(t))
+  return terms.every((t) => haystack.includes(t));
 }
 
 const SERVICE_SUFFIXES = new Set(
   [
-    'casa',
-    'local',
-    'oficina',
-    'negocio',
-    'tienda',
-    'empresa',
-    'internet',
-    'fibra',
-    'principal',
-    'secundario',
-    'secundaria',
-    'apto',
-    'apt',
-    'depto',
-    'dpto',
-    'departamento',
-    'taller',
-    'bodega',
-    'residencia',
-    'vivienda',
-    'hogar',
-    'servicio',
+    "casa",
+    "local",
+    "oficina",
+    "negocio",
+    "tienda",
+    "empresa",
+    "internet",
+    "fibra",
+    "principal",
+    "secundario",
+    "secundaria",
+    "apto",
+    "apt",
+    "depto",
+    "dpto",
+    "departamento",
+    "taller",
+    "bodega",
+    "residencia",
+    "vivienda",
+    "hogar",
+    "servicio",
   ].map((s) => s.toLowerCase()),
-)
+);
 
 /** Split display name into tentative first/last (+ optional service suffix). */
 export function splitSuggestedName(full: string): {
-  firstName: string
-  lastName: string
-  serviceName: string
+  firstName: string;
+  lastName: string;
+  serviceName: string;
 } {
-  const parts = full.trim().split(/\s+/).filter(Boolean)
+  const parts = full.trim().split(/\s+/).filter(Boolean);
   if (parts.length === 0) {
-    return { firstName: '', lastName: '', serviceName: '' }
+    return { firstName: "", lastName: "", serviceName: "" };
   }
 
-  let serviceName = ''
+  let serviceName = "";
   if (parts.length >= 2) {
-    const last = parts[parts.length - 1]
+    const last = parts[parts.length - 1];
     if (SERVICE_SUFFIXES.has(last.toLowerCase())) {
-      serviceName = last
-      parts.pop()
+      serviceName = last;
+      parts.pop();
     }
   }
 
   if (parts.length === 0) {
-    return { firstName: '', lastName: '', serviceName }
+    return { firstName: "", lastName: "", serviceName };
   }
   if (parts.length === 1) {
-    return { firstName: parts[0], lastName: '', serviceName }
+    return { firstName: parts[0], lastName: "", serviceName };
   }
 
   // «Juan Carlos Perez» → nombre compuesto si el 2º parece nombre
   const compoundSeconds = new Set([
-    'jose',
-    'maría',
-    'maria',
-    'juan',
-    'luis',
-    'carlos',
-    'ana',
-    'rosa',
-    'miguel',
-    'angel',
-    'ángel',
-    'francisco',
-    'antonio',
-    'manuel',
-    'de',
-    'del',
-    'la',
-  ])
-  let firstCount = 1
-  if (
-    parts.length >= 3 &&
-    compoundSeconds.has(parts[1].toLowerCase())
-  ) {
-    firstCount = 2
+    "jose",
+    "maría",
+    "maria",
+    "juan",
+    "luis",
+    "carlos",
+    "ana",
+    "rosa",
+    "miguel",
+    "angel",
+    "ángel",
+    "francisco",
+    "antonio",
+    "manuel",
+    "de",
+    "del",
+    "la",
+  ]);
+  let firstCount = 1;
+  if (parts.length >= 3 && compoundSeconds.has(parts[1].toLowerCase())) {
+    firstCount = 2;
   }
 
   return {
-    firstName: parts.slice(0, firstCount).join(' '),
-    lastName: parts.slice(firstCount).join(' '),
+    firstName: parts.slice(0, firstCount).join(" "),
+    lastName: parts.slice(firstCount).join(" "),
     serviceName,
-  }
+  };
 }

@@ -8,6 +8,11 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Tenant } from '../tenants/entities/tenant.entity';
 import { OnuPostProvisionVerifyService } from './onu-post-provision-verify.service';
+import {
+  mapWithConcurrency,
+  VERIFY_MAX_CONCURRENCY_PER_TENANT,
+  VERIFY_MAX_GLOBAL_CONCURRENCY,
+} from './onu-post-provision-verify.util';
 
 /** Mira ONUs en `test` una vez por minuto; el propio servicio respeta los 3 min. */
 const VERIFY_POLL_INTERVAL_MS = 60_000;
@@ -15,6 +20,10 @@ const VERIFY_POLL_INTERVAL_MS = 60_000;
 /**
  * Poller del chequeo silencioso post-aprovisionamiento.
  * Independiente de la UI: sigue aunque se cierre el modal de la ONU.
+ *
+ * Cada tenant tiene su propia cola y como máximo cinco ONUs en ejecución. A la
+ * vez se conserva un techo global de 40 para que una instalación con muchos
+ * tenants tampoco pueda saturar el ACS. Un tick no se solapa con el siguiente.
  */
 @Injectable()
 export class OnuPostProvisionVerifyPollService
@@ -22,6 +31,7 @@ export class OnuPostProvisionVerifyPollService
 {
   private readonly logger = new Logger(OnuPostProvisionVerifyPollService.name);
   private timer: ReturnType<typeof setInterval> | null = null;
+  private running = false;
 
   constructor(
     @InjectRepository(Tenant)
@@ -30,10 +40,7 @@ export class OnuPostProvisionVerifyPollService
   ) {}
 
   onModuleInit() {
-    this.timer = setInterval(
-      () => void this.tick(),
-      VERIFY_POLL_INTERVAL_MS,
-    );
+    this.timer = setInterval(() => void this.tick(), VERIFY_POLL_INTERVAL_MS);
     setTimeout(() => void this.tick(), 25_000);
   }
 
@@ -43,27 +50,49 @@ export class OnuPostProvisionVerifyPollService
   }
 
   private async tick() {
+    if (this.running) {
+      this.logger.debug('verify poll: tick anterior aún en curso, se salta');
+      return;
+    }
+    this.running = true;
     try {
       const active = await this.tenants.find({ where: { status: 'active' } });
-      await Promise.allSettled(
-        active.map(async (tenant) => {
-          try {
-            await this.verify.tickSchema(tenant.schemaName);
-          } catch (err) {
-            this.logger.warn(
-              `verify poll failed for ${tenant.schemaName}: ${
-                err instanceof Error ? err.message : String(err)
-              }`,
-            );
-          }
-        }),
+      if (!active.length) return;
+
+      // Cada worker de tenant puede usar hasta cinco plazas. Limitar a ocho
+      // tenants paralelos conserva el techo global de cuarenta.
+      const tenantConcurrency = Math.max(
+        1,
+        Math.floor(
+          VERIFY_MAX_GLOBAL_CONCURRENCY / VERIFY_MAX_CONCURRENCY_PER_TENANT,
+        ),
       );
+      const results = await mapWithConcurrency(
+        active,
+        tenantConcurrency,
+        async (tenant) => {
+          await this.verify.tickSchema(
+            tenant.schemaName,
+            VERIFY_MAX_CONCURRENCY_PER_TENANT,
+          );
+          return tenant.schemaName;
+        },
+      );
+
+      const failed = results.filter((r) => r.status === 'rejected').length;
+      if (failed) {
+        this.logger.warn(
+          `verify poll: ${failed}/${active.length} tenant(s) fallaron en este tick`,
+        );
+      }
     } catch (err) {
       this.logger.warn(
         `verify poll tick failed: ${
           err instanceof Error ? err.message : String(err)
         }`,
       );
+    } finally {
+      this.running = false;
     }
   }
 }

@@ -8,6 +8,10 @@
 export const VERIFY_INTERVAL_MS = 3 * 60_000;
 export const VERIFY_WINDOW_MS = 15 * 60_000;
 export const VERIFY_HEAL_MAX_ATTEMPTS = 3;
+/** Un tenant no puede ocupar más de cinco verificadores simultáneos. */
+export const VERIFY_MAX_CONCURRENCY_PER_TENANT = 5;
+/** Defensa adicional cuando hay muchos tenants activos al mismo tiempo. */
+export const VERIFY_MAX_GLOBAL_CONCURRENCY = 40;
 
 export type OnuVerifyStatus = 'idle' | 'test' | 'ok' | 'fail';
 
@@ -116,4 +120,38 @@ export function summarizeVerifyDetail(
     parts.push(`curado: ${detail.healed.join('; ')}`);
   }
   return parts.join(' · ');
+}
+
+/**
+ * Corre `worker` sobre `items` con como mucho `limit` en paralelo.
+ * El resto queda en cola: al liberarse un hueco entra el siguiente.
+ */
+export async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<R>,
+): Promise<PromiseSettledResult<R>[]> {
+  const concurrency = Math.max(1, Math.floor(limit) || 1);
+  const results: PromiseSettledResult<R>[] = new Array(items.length);
+  let next = 0;
+
+  async function runOne(): Promise<void> {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      try {
+        const value = await worker(items[index], index);
+        results[index] = { status: 'fulfilled', value };
+      } catch (reason) {
+        results[index] = { status: 'rejected', reason };
+      }
+    }
+  }
+
+  const runners = Array.from(
+    { length: Math.min(concurrency, items.length) },
+    () => runOne(),
+  );
+  await Promise.all(runners);
+  return results;
 }

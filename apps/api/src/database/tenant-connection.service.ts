@@ -800,10 +800,18 @@ const TOPOLOGY_ALTER = (schema: string) => `
     ADD COLUMN IF NOT EXISTS "verify_detail" jsonb NOT NULL DEFAULT '{}'::jsonb;
   CREATE INDEX IF NOT EXISTS "idx_onus_verify_status"
     ON "${schema}"."onus" ("verify_status");
+
+  -- v47: progreso persistente del asistente de migración
+  ALTER TABLE "${schema}"."onus"
+    ADD COLUMN IF NOT EXISTS "migration_source_vlan" int NULL;
+  ALTER TABLE "${schema}"."onus"
+    ADD COLUMN IF NOT EXISTS "migrated_at" TIMESTAMPTZ NULL;
+  CREATE INDEX IF NOT EXISTS "idx_onus_migration_progress"
+    ON "${schema}"."onus" ("olt_id", "migration_source_vlan", "migrated_at");
 `;
 
 /** Bump when tenant DDL adds new tables/columns so existing processes re-apply. */
-const TENANT_SCHEMA_VERSION = 46;
+const TENANT_SCHEMA_VERSION = 47;
 
 @Injectable()
 export class TenantConnectionService implements OnModuleDestroy {

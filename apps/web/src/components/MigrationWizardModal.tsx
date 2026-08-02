@@ -1,35 +1,32 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { apiFetch } from '../lib/api'
-import type { Client, ServicePlan } from '../lib/crm'
-import { clientDisplayName } from '../lib/crm'
-import {
-  oltOnuName,
-  onuDescriptionForService,
-} from '../lib/onu-connected'
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { apiFetch } from "../lib/api";
+import type { Client, ServicePlan } from "../lib/crm";
+import { clientDisplayName } from "../lib/crm";
+import { oltOnuName, onuDescriptionForService } from "../lib/onu-connected";
 import {
   splitSuggestedName,
   type MigrationCandidate,
   type MigrationSegmentConfig,
-} from '../lib/onu-migration'
-import type { Zone } from './ZonasSettingsTab'
-import { ModalPortal } from './ModalPortal'
+} from "../lib/onu-migration";
+import type { Zone } from "./ZonasSettingsTab";
+import { ModalPortal } from "./ModalPortal";
 import {
   OperationProgressModal,
   runProgressSteps,
   type ProgressStep,
-} from './OperationProgressModal'
+} from "./OperationProgressModal";
 
 const field =
-  'w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm outline-none ring-[var(--accent)] focus:ring-2'
+  "w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm outline-none ring-[var(--accent)] focus:ring-2";
 
-type ClientMode = 'new' | 'existing'
+type ClientMode = "new" | "existing";
 
 const STEPS = [
-  { n: 1, label: 'Cliente' },
-  { n: 2, label: 'Servicio' },
-  { n: 3, label: 'Red' },
-] as const
+  { n: 1, label: "Cliente" },
+  { n: 2, label: "Servicio" },
+  { n: 3, label: "Red" },
+] as const;
 
 export function MigrationWizardModal({
   open,
@@ -42,146 +39,144 @@ export function MigrationWizardModal({
   onMigrated,
   onPause,
 }: {
-  open: boolean
-  candidate: MigrationCandidate | null
-  segment: MigrationSegmentConfig
-  segmentDone: number
-  segmentTotal: number
-  remaining: number
-  onClose: () => void
+  open: boolean;
+  candidate: MigrationCandidate | null;
+  segment: MigrationSegmentConfig;
+  segmentDone: number;
+  segmentTotal: number;
+  remaining: number;
+  onClose: () => void;
   /** Called after successful migration of current ONU. */
-  onMigrated: (onuIf: string) => void
-  onPause: () => void
+  onMigrated: (onuIf: string) => void;
+  onPause: () => void;
 }) {
-  const queryClient = useQueryClient()
-  const [step, setStep] = useState(1)
-  const [error, setError] = useState<string | null>(null)
-  const [clientMode, setClientMode] = useState<ClientMode>('new')
-  const [clientSearch, setClientSearch] = useState('')
+  const queryClient = useQueryClient();
+  const [step, setStep] = useState(1);
+  const [error, setError] = useState<string | null>(null);
+  const [clientMode, setClientMode] = useState<ClientMode>("new");
+  const [clientSearch, setClientSearch] = useState("");
 
-  const [firstName, setFirstName] = useState('')
-  const [lastName, setLastName] = useState('')
-  const [phone, setPhone] = useState('')
-  const [email, setEmail] = useState('')
-  const [street, setStreet] = useState('')
-  const [city, setCity] = useState('')
-  const [zoneId, setZoneId] = useState('')
-  const [clientId, setClientId] = useState<string | null>(null)
-  const [clientName, setClientName] = useState('')
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
+  const [street, setStreet] = useState("");
+  const [city, setCity] = useState("");
+  const [zoneId, setZoneId] = useState("");
+  const [clientId, setClientId] = useState<string | null>(null);
+  const [clientName, setClientName] = useState("");
 
-  const [serviceName, setServiceName] = useState('Casa')
-  const [servicePlanId, setServicePlanId] = useState('')
+  const [serviceName, setServiceName] = useState("Casa");
+  const [servicePlanId, setServicePlanId] = useState("");
 
-  const [progressOpen, setProgressOpen] = useState(false)
-  const [progressSteps, setProgressSteps] = useState<ProgressStep[]>([])
-  const [progressRunning, setProgressRunning] = useState(false)
-  const [progressFailed, setProgressFailed] = useState(false)
-  const [progressDone, setProgressDone] = useState(false)
-  const runnersRef = useRef<Record<string, () => Promise<string | void>>>({})
+  const [progressOpen, setProgressOpen] = useState(false);
+  const [progressSteps, setProgressSteps] = useState<ProgressStep[]>([]);
+  const [progressRunning, setProgressRunning] = useState(false);
+  const [progressFailed, setProgressFailed] = useState(false);
+  const [progressDone, setProgressDone] = useState(false);
+  const runnersRef = useRef<Record<string, () => Promise<string | void>>>({});
   const ctxRef = useRef<{
-    onuDbId?: string
-    serviceId?: string
-    clientId?: string
-  }>({})
+    onuDbId?: string;
+    serviceId?: string;
+    clientId?: string;
+  }>({});
 
   const plansQuery = useQuery({
-    queryKey: ['app', 'service-plans'],
-    queryFn: () => apiFetch<ServicePlan[]>('/app/service-plans'),
+    queryKey: ["app", "service-plans"],
+    queryFn: () => apiFetch<ServicePlan[]>("/app/service-plans"),
     enabled: open,
-  })
+  });
   const zonesQuery = useQuery({
-    queryKey: ['app', 'zones'],
-    queryFn: () => apiFetch<Zone[]>('/app/zones'),
+    queryKey: ["app", "zones"],
+    queryFn: () => apiFetch<Zone[]>("/app/zones"),
     enabled: open,
-  })
+  });
   const clientsQuery = useQuery({
-    queryKey: ['app', 'clients'],
-    queryFn: () => apiFetch<Client[]>('/app/clients'),
-    enabled: open && clientMode === 'existing',
-  })
+    queryKey: ["app", "clients"],
+    queryFn: () => apiFetch<Client[]>("/app/clients"),
+    enabled: open && clientMode === "existing",
+  });
 
   const plans = useMemo(
     () => (plansQuery.data ?? []).filter((p) => p.isActive),
     [plansQuery.data],
-  )
+  );
 
   const filteredClients = useMemo(() => {
-    const q = clientSearch.trim().toLowerCase()
-    const list = clientsQuery.data ?? []
-    if (!q) return list.slice(0, 40)
+    const q = clientSearch.trim().toLowerCase();
+    const list = clientsQuery.data ?? [];
+    if (!q) return list.slice(0, 40);
     return list
       .filter((c) => clientDisplayName(c).toLowerCase().includes(q))
-      .slice(0, 40)
-  }, [clientsQuery.data, clientSearch])
+      .slice(0, 40);
+  }, [clientsQuery.data, clientSearch]);
 
   useEffect(() => {
-    if (!open || !candidate) return
-    setStep(1)
-    setError(null)
-    setClientMode('new')
-    setClientId(null)
-    setClientSearch('')
-    const split = splitSuggestedName(candidate.suggestedClientName || '')
-    const first = candidate.suggestedFirstName || split.firstName
-    const last = candidate.suggestedLastName || split.lastName
-    const serviceHint = candidate.suggestedServiceName || split.serviceName
-    setFirstName(first)
-    setLastName(last)
+    if (!open || !candidate) return;
+    setStep(1);
+    setError(null);
+    setClientMode("new");
+    setClientId(null);
+    setClientSearch("");
+    const split = splitSuggestedName(candidate.suggestedClientName || "");
+    const first = candidate.suggestedFirstName || split.firstName;
+    const last = candidate.suggestedLastName || split.lastName;
+    const serviceHint = candidate.suggestedServiceName || split.serviceName;
+    setFirstName(first);
+    setLastName(last);
     setClientName(
       candidate.suggestedClientName ||
-        [first, last].filter(Boolean).join(' ').trim(),
-    )
-    setPhone('')
-    setEmail('')
-    setStreet('')
-    setCity('')
-    setZoneId('')
-    setServiceName(serviceHint || 'Casa')
-    setServicePlanId('')
-    setProgressOpen(false)
-    setProgressDone(false)
-    setProgressFailed(false)
-    ctxRef.current = { onuDbId: candidate.onuDbId ?? undefined }
-  }, [open, candidate])
+        [first, last].filter(Boolean).join(" ").trim(),
+    );
+    setPhone("");
+    setEmail("");
+    setStreet("");
+    setCity("");
+    setZoneId("");
+    setServiceName(serviceHint || "Casa");
+    setServicePlanId("");
+    setProgressOpen(false);
+    setProgressDone(false);
+    setProgressFailed(false);
+    ctxRef.current = { onuDbId: candidate.onuDbId ?? undefined };
+  }, [open, candidate]);
 
   useEffect(() => {
     if (!servicePlanId && plans.length === 1) {
-      setServicePlanId(plans[0].id)
+      setServicePlanId(plans[0].id);
     }
-  }, [plans, servicePlanId])
+  }, [plans, servicePlanId]);
 
-  if (!open || !candidate) return null
+  if (!open || !candidate) return null;
 
   const pct =
-    segmentTotal > 0
-      ? Math.round((segmentDone / segmentTotal) * 100)
-      : 0
+    segmentTotal > 0 ? Math.round((segmentDone / segmentTotal) * 100) : 0;
 
   function validateClient(): string | null {
-    if (clientMode === 'existing') {
-      if (!clientId) return 'Selecciona un cliente existente'
-      return null
+    if (clientMode === "existing") {
+      if (!clientId) return "Selecciona un cliente existente";
+      return null;
     }
     if (!firstName.trim() && !lastName.trim()) {
-      return 'Indica al menos el nombre del cliente'
+      return "Indica al menos el nombre del cliente";
     }
-    return null
+    return null;
   }
 
   function validateService(): string | null {
-    if (!serviceName.trim()) return 'Nombre del servicio requerido'
-    if (!servicePlanId) return 'Selecciona un plan'
-    return null
+    if (!serviceName.trim()) return "Nombre del servicio requerido";
+    if (!servicePlanId) return "Selecciona un plan";
+    return null;
   }
 
   async function startMigration() {
-    if (!candidate) return
-    const migrationCandidate = candidate
-    setError(null)
-    const err = validateClient() || validateService()
+    if (!candidate) return;
+    const migrationCandidate = candidate;
+    setError(null);
+    const err = validateClient() || validateService();
     if (err) {
-      setError(err)
-      return
+      setError(err);
+      return;
     }
 
     const vlanBody = {
@@ -190,32 +185,49 @@ export function MigrationWizardModal({
       ...(segment.tr069ProfileId
         ? { tr069ProfileId: segment.tr069ProfileId }
         : {}),
-    }
+    };
 
     const steps: ProgressStep[] = [
-      { id: 'import', label: 'Registrando ONU en Conectadas', status: 'pending' },
-      { id: 'client', label: 'Creando / vinculando cliente', status: 'pending' },
-      { id: 'zone', label: 'Asignando zona', status: 'pending' },
-      { id: 'service', label: 'Creando servicio', status: 'pending' },
-      { id: 'olt', label: 'Reconfigurando VLANs en la OLT', status: 'pending' },
-      { id: 'assign', label: 'Asignando IPs de pools', status: 'pending' },
-      { id: 'apply', label: 'Aplicando configuración a la ONU', status: 'pending' },
       {
-        id: 'verify',
-        label: 'Verificando ONU online y servicio activo',
-        status: 'pending',
+        id: "import",
+        label: "Registrando ONU en Conectadas",
+        status: "pending",
       },
-    ]
+      {
+        id: "client",
+        label: "Creando / vinculando cliente",
+        status: "pending",
+      },
+      { id: "zone", label: "Asignando zona", status: "pending" },
+      { id: "service", label: "Creando servicio", status: "pending" },
+      { id: "olt", label: "Reconfigurando VLANs en la OLT", status: "pending" },
+      { id: "assign", label: "Asignando IPs de pools", status: "pending" },
+      {
+        id: "apply",
+        label: "Aplicando configuración a la ONU",
+        status: "pending",
+      },
+      {
+        id: "verify",
+        label: "Verificando ONU online y servicio activo",
+        status: "pending",
+      },
+      {
+        id: "record",
+        label: "Registrando avance de migración",
+        status: "pending",
+      },
+    ];
 
     const displayName =
-      clientMode === 'existing'
+      clientMode === "existing"
         ? clientName
-        : [firstName, lastName].filter(Boolean).join(' ').trim()
+        : [firstName, lastName].filter(Boolean).join(" ").trim();
 
     const runners: Record<string, () => Promise<string | void>> = {
       import: async () => {
         if (ctxRef.current.onuDbId) {
-          return 'ONU ya estaba en Conectadas'
+          return "ONU ya estaba en Conectadas";
         }
         const snap = {
           onuIf: migrationCandidate.onuIf,
@@ -235,27 +247,27 @@ export function MigrationWizardModal({
           mode: migrationCandidate.mode,
           vlan: migrationCandidate.vlan,
           vlans: migrationCandidate.vlans,
-        }
+        };
         const r = await apiFetch<{ onu?: { id: string } }>(
-          '/app/onus/import-one',
+          "/app/onus/import-one",
           {
-            method: 'POST',
+            method: "POST",
             body: JSON.stringify({ oltId: segment.oltId, ...snap }),
           },
-        )
-        ctxRef.current.onuDbId = r.onu?.id
+        );
+        ctxRef.current.onuDbId = r.onu?.id;
         if (!ctxRef.current.onuDbId) {
-          throw new Error('No se obtuvo ID de ONU tras importar')
+          throw new Error("No se obtuvo ID de ONU tras importar");
         }
-        return `Importada ${migrationCandidate.onuIf}`
+        return `Importada ${migrationCandidate.onuIf}`;
       },
       client: async () => {
-        if (clientMode === 'existing' && clientId) {
-          ctxRef.current.clientId = clientId
-          return `Cliente existente: ${displayName}`
+        if (clientMode === "existing" && clientId) {
+          ctxRef.current.clientId = clientId;
+          return `Cliente existente: ${displayName}`;
         }
-        const r = await apiFetch<Client>('/app/clients', {
-          method: 'POST',
+        const r = await apiFetch<Client>("/app/clients", {
+          method: "POST",
           body: JSON.stringify({
             firstName: firstName.trim(),
             lastName: lastName.trim(),
@@ -266,28 +278,28 @@ export function MigrationWizardModal({
             zoneId: zoneId.trim() || null,
             isActive: true,
           }),
-        })
-        ctxRef.current.clientId = r.id
-        return `Cliente creado: ${clientDisplayName(r)}`
+        });
+        ctxRef.current.clientId = r.id;
+        return `Cliente creado: ${clientDisplayName(r)}`;
       },
       zone: async () => {
-        const cid = ctxRef.current.clientId
-        const oid = ctxRef.current.onuDbId
-        if (!cid || !oid) throw new Error('Falta cliente u ONU')
-        const nextZoneId = zoneId.trim() ? zoneId.trim() : null
-        if (clientMode === 'new' || nextZoneId) {
+        const cid = ctxRef.current.clientId;
+        const oid = ctxRef.current.onuDbId;
+        if (!cid || !oid) throw new Error("Falta cliente u ONU");
+        const nextZoneId = zoneId.trim() ? zoneId.trim() : null;
+        if (clientMode === "new" || nextZoneId) {
           await apiFetch(`/app/clients/${cid}`, {
-            method: 'PATCH',
+            method: "PATCH",
             body: JSON.stringify({ zoneId: nextZoneId }),
-          })
+          });
         }
         await apiFetch(`/app/onus/${oid}/zone`, {
-          method: 'PATCH',
+          method: "PATCH",
           body: JSON.stringify({ zoneId: nextZoneId }),
-        })
+        });
         try {
           await apiFetch(`/app/onus/${oid}/description`, {
-            method: 'PATCH',
+            method: "PATCH",
             body: JSON.stringify({
               description:
                 onuDescriptionForService({
@@ -297,107 +309,118 @@ export function MigrationWizardModal({
                 oltOnuName(displayName, serviceName.trim()) ||
                 displayName,
             }),
-          })
+          });
         } catch {
           // non-fatal
         }
-        return nextZoneId ? 'Zona asignada' : 'Sin zona'
+        return nextZoneId ? "Zona asignada" : "Sin zona";
       },
       service: async () => {
-        const cid = ctxRef.current.clientId
-        const oid = ctxRef.current.onuDbId
-        if (!cid || !oid) throw new Error('Falta cliente u ONU')
+        const cid = ctxRef.current.clientId;
+        const oid = ctxRef.current.onuDbId;
+        if (!cid || !oid) throw new Error("Falta cliente u ONU");
         const r = await apiFetch<{ id: string; name: string }>(
           `/app/clients/${cid}/services`,
           {
-            method: 'POST',
+            method: "POST",
             body: JSON.stringify({
               servicePlanId,
               name: serviceName.trim(),
-              status: 'active',
+              status: "active",
               street: street.trim(),
               city: city.trim(),
               onuId: oid,
             }),
           },
-        )
-        ctxRef.current.serviceId = r.id
-        return `Servicio «${r.name}» activo`
+        );
+        ctxRef.current.serviceId = r.id;
+        return `Servicio «${r.name}» activo`;
       },
       olt: async () => {
-        const oid = ctxRef.current.onuDbId
-        if (!oid) throw new Error('Falta ONU')
+        const oid = ctxRef.current.onuDbId;
+        if (!oid) throw new Error("Falta ONU");
         const r = await apiFetch<{ message?: string }>(
           `/app/onus/${oid}/network-vlans/olt`,
-          { method: 'POST', body: JSON.stringify(vlanBody) },
-        )
-        return r.message || 'VLANs en OLT OK'
+          { method: "POST", body: JSON.stringify(vlanBody) },
+        );
+        return r.message || "VLANs en OLT OK";
       },
       assign: async () => {
-        const oid = ctxRef.current.onuDbId!
+        const oid = ctxRef.current.onuDbId!;
         const r = await apiFetch<{ message?: string }>(
           `/app/onus/${oid}/network-vlans/assign`,
-          { method: 'POST', body: JSON.stringify(vlanBody) },
-        )
-        return r.message || 'IPs asignadas'
+          { method: "POST", body: JSON.stringify(vlanBody) },
+        );
+        return r.message || "IPs asignadas";
       },
       apply: async () => {
-        const oid = ctxRef.current.onuDbId!
-        let lastErr: unknown = null
+        const oid = ctxRef.current.onuDbId!;
+        let lastErr: unknown = null;
         for (let attempt = 1; attempt <= 2; attempt++) {
           try {
             const r = await apiFetch<{ message?: string }>(
               `/app/onus/${oid}/network-vlans/apply`,
-              { method: 'POST', body: JSON.stringify(vlanBody) },
-            )
-            return `${r.message || 'ONU OK'}${attempt > 1 ? ` (intento ${attempt})` : ''}`
+              { method: "POST", body: JSON.stringify(vlanBody) },
+            );
+            return `${r.message || "ONU OK"}${attempt > 1 ? ` (intento ${attempt})` : ""}`;
           } catch (e) {
-            lastErr = e
+            lastErr = e;
           }
         }
         throw new Error(
           lastErr instanceof Error ? lastErr.message : String(lastErr),
-        )
+        );
       },
       verify: async () => {
-        const oid = ctxRef.current.onuDbId!
+        const oid = ctxRef.current.onuDbId!;
         const r = await apiFetch<{
-          ok: boolean
-          message?: string
-          mgmtVlanId?: number | null
-          wanVlanId?: number | null
-        }>(`/app/onus/${oid}/network-vlans/verify`, { method: 'POST' })
+          ok: boolean;
+          message?: string;
+          mgmtVlanId?: number | null;
+          wanVlanId?: number | null;
+        }>(`/app/onus/${oid}/network-vlans/verify`, { method: "POST" });
         if (r.mgmtVlanId !== segment.mgmtVlanId) {
           throw new Error(
-            `Mgmt quedó en VLAN ${r.mgmtVlanId ?? '—'}, se esperaba ${segment.mgmtVlanId}`,
-          )
+            `Mgmt quedó en VLAN ${r.mgmtVlanId ?? "—"}, se esperaba ${segment.mgmtVlanId}`,
+          );
         }
         if (r.wanVlanId !== segment.wanVlanId) {
           throw new Error(
-            `WAN quedó en VLAN ${r.wanVlanId ?? '—'}, se esperaba ${segment.wanVlanId}`,
-          )
+            `WAN quedó en VLAN ${r.wanVlanId ?? "—"}, se esperaba ${segment.wanVlanId}`,
+          );
         }
-        return r.message || 'Servicio verificado y online'
+        return r.message || "Servicio verificado y online";
       },
-    }
+      record: async () => {
+        const oid = ctxRef.current.onuDbId!;
+        await apiFetch("/app/onus/migration/complete", {
+          method: "POST",
+          body: JSON.stringify({
+            onuId: oid,
+            sourceVlan: segment.sourceVlan,
+          }),
+        });
+        return "Avance guardado";
+      },
+    };
 
-    runnersRef.current = runners
-    setProgressSteps(steps)
-    setProgressOpen(true)
-    setProgressRunning(true)
-    setProgressFailed(false)
-    setProgressDone(false)
-    const result = await runProgressSteps(steps, setProgressSteps, runners)
-    setProgressRunning(false)
+    runnersRef.current = runners;
+    setProgressSteps(steps);
+    setProgressOpen(true);
+    setProgressRunning(true);
+    setProgressFailed(false);
+    setProgressDone(false);
+    const result = await runProgressSteps(steps, setProgressSteps, runners);
+    setProgressRunning(false);
     if (result.ok) {
-      setProgressDone(true)
-      void queryClient.invalidateQueries({ queryKey: ['app', 'onus'] })
-      void queryClient.invalidateQueries({ queryKey: ['app', 'clients'] })
+      setProgressDone(true);
+      void queryClient.invalidateQueries({ queryKey: ["app", "onus"] });
+      void queryClient.invalidateQueries({ queryKey: ["app", "clients"] });
       void queryClient.invalidateQueries({
-        queryKey: ['app', 'onus', 'migration'],
-      })
+        queryKey: ["app", "onus", "migration"],
+      });
     } else {
-      setProgressFailed(true)
+      setProgressFailed(true);
     }
   }
 
@@ -416,10 +439,10 @@ export function MigrationWizardModal({
                   <h2 className="text-lg font-semibold">Migrar ONU</h2>
                   <p className="truncate text-xs text-[var(--text-muted)]">
                     {candidate.onuIf}
-                    {candidate.sn ? ` · ${candidate.sn}` : ''}
+                    {candidate.sn ? ` · ${candidate.sn}` : ""}
                     {segment.sourceVlan != null
                       ? ` · origen VLAN ${segment.sourceVlan}`
-                      : ''}
+                      : ""}
                   </p>
                 </div>
                 <button
@@ -449,11 +472,11 @@ export function MigrationWizardModal({
                   <li key={s.n} className="flex flex-1 flex-col gap-1">
                     <div
                       className={[
-                        'h-1 rounded-full',
+                        "h-1 rounded-full",
                         step >= s.n
-                          ? 'bg-[var(--accent)]'
-                          : 'bg-[var(--border)]',
-                      ].join(' ')}
+                          ? "bg-[var(--accent)]"
+                          : "bg-[var(--border)]",
+                      ].join(" ")}
                     />
                     <span className="text-[10px] text-[var(--text-muted)]">
                       {s.label}
@@ -473,54 +496,54 @@ export function MigrationWizardModal({
               {step === 1 && (
                 <div className="space-y-3">
                   <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)]/50 px-3 py-2 text-xs text-[var(--text-muted)]">
-                    ONU name: {candidate.name || '—'}
+                    ONU name: {candidate.name || "—"}
                     {candidate.description ? (
                       <> · desc: {candidate.description}</>
                     ) : null}
                     {candidate.suggestedClientName ? (
                       <>
-                        {' '}
-                        · cliente:{' '}
+                        {" "}
+                        · cliente:{" "}
                         <strong className="text-[var(--text)]">
                           {candidate.suggestedFirstName ||
                             candidate.suggestedClientName}
                           {candidate.suggestedLastName
                             ? ` ${candidate.suggestedLastName}`
-                            : ''}
-                        </strong>{' '}
-                        (desde {candidate.nameSource}/
-                        {candidate.nameConfidence})
+                            : ""}
+                        </strong>{" "}
+                        (desde {candidate.nameSource}/{candidate.nameConfidence}
+                        )
                       </>
                     ) : null}
                   </div>
                   <div className="flex gap-2">
                     <button
                       type="button"
-                      onClick={() => setClientMode('new')}
+                      onClick={() => setClientMode("new")}
                       className={[
-                        'flex-1 rounded-lg border px-3 py-2 text-sm',
-                        clientMode === 'new'
-                          ? 'border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--accent)]'
-                          : 'border-[var(--border)]',
-                      ].join(' ')}
+                        "flex-1 rounded-lg border px-3 py-2 text-sm",
+                        clientMode === "new"
+                          ? "border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--accent)]"
+                          : "border-[var(--border)]",
+                      ].join(" ")}
                     >
                       Cliente nuevo
                     </button>
                     <button
                       type="button"
-                      onClick={() => setClientMode('existing')}
+                      onClick={() => setClientMode("existing")}
                       className={[
-                        'flex-1 rounded-lg border px-3 py-2 text-sm',
-                        clientMode === 'existing'
-                          ? 'border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--accent)]'
-                          : 'border-[var(--border)]',
-                      ].join(' ')}
+                        "flex-1 rounded-lg border px-3 py-2 text-sm",
+                        clientMode === "existing"
+                          ? "border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--accent)]"
+                          : "border-[var(--border)]",
+                      ].join(" ")}
                     >
                       Existente
                     </button>
                   </div>
 
-                  {clientMode === 'new' ? (
+                  {clientMode === "new" ? (
                     <div className="grid gap-3 sm:grid-cols-2">
                       <label className="block text-sm">
                         <span className="mb-1 block text-[var(--text-muted)]">
@@ -615,18 +638,18 @@ export function MigrationWizardModal({
                             <button
                               type="button"
                               onClick={() => {
-                                setClientId(c.id)
-                                setClientName(clientDisplayName(c))
-                                setZoneId(c.zoneId ?? '')
-                                setStreet(c.street || '')
-                                setCity(c.city || '')
+                                setClientId(c.id);
+                                setClientName(clientDisplayName(c));
+                                setZoneId(c.zoneId ?? "");
+                                setStreet(c.street || "");
+                                setCity(c.city || "");
                               }}
                               className={[
-                                'flex w-full px-3 py-2 text-left text-sm hover:bg-[var(--bg)]',
+                                "flex w-full px-3 py-2 text-left text-sm hover:bg-[var(--bg)]",
                                 clientId === c.id
-                                  ? 'bg-[var(--accent)]/10 text-[var(--accent)]'
-                                  : '',
-                              ].join(' ')}
+                                  ? "bg-[var(--accent)]/10 text-[var(--accent)]"
+                                  : "",
+                              ].join(" ")}
                             >
                               {clientDisplayName(c)}
                             </button>
@@ -684,9 +707,7 @@ export function MigrationWizardModal({
                       <dd>
                         {segment.sourceVlan != null
                           ? segment.sourceVlan
-                          : candidate.vlans.join(', ') ||
-                            candidate.vlan ||
-                            '—'}
+                          : candidate.vlans.join(", ") || candidate.vlan || "—"}
                       </dd>
                     </div>
                     <div>
@@ -705,16 +726,20 @@ export function MigrationWizardModal({
                       <dt className="text-[11px] text-[var(--text-muted)]">
                         TR069
                       </dt>
-                      <dd>{segment.tr069ProfileId ? 'Perfil seleccionado' : '—'}</dd>
+                      <dd>
+                        {segment.tr069ProfileId ? "Perfil seleccionado" : "—"}
+                      </dd>
                     </div>
                     <div className="sm:col-span-2">
                       <dt className="text-[11px] text-[var(--text-muted)]">
                         Cliente / servicio
                       </dt>
                       <dd>
-                        {clientMode === 'existing'
+                        {clientMode === "existing"
                           ? clientName
-                          : [firstName, lastName].filter(Boolean).join(' ')}{' '}
+                          : [firstName, lastName]
+                              .filter(Boolean)
+                              .join(" ")}{" "}
                         · {serviceName}
                       </dd>
                     </div>
@@ -736,8 +761,8 @@ export function MigrationWizardModal({
                   <button
                     type="button"
                     onClick={() => {
-                      setError(null)
-                      setStep((s) => s - 1)
+                      setError(null);
+                      setStep((s) => s - 1);
                     }}
                     className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm"
                   >
@@ -748,22 +773,22 @@ export function MigrationWizardModal({
                   <button
                     type="button"
                     onClick={() => {
-                      setError(null)
+                      setError(null);
                       if (step === 1) {
-                        const e = validateClient()
+                        const e = validateClient();
                         if (e) {
-                          setError(e)
-                          return
+                          setError(e);
+                          return;
                         }
                       }
                       if (step === 2) {
-                        const e = validateService()
+                        const e = validateService();
                         if (e) {
-                          setError(e)
-                          return
+                          setError(e);
+                          return;
                         }
                       }
-                      setStep((s) => s + 1)
+                      setStep((s) => s + 1);
                     }}
                     className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white"
                   >
@@ -793,9 +818,9 @@ export function MigrationWizardModal({
         allDone={progressDone}
         onRetry={() => void startMigration()}
         onClose={() => {
-          setProgressOpen(false)
+          setProgressOpen(false);
           if (progressDone) {
-            onMigrated(candidate.onuIf)
+            onMigrated(candidate.onuIf);
           }
         }}
       >
@@ -807,6 +832,5 @@ export function MigrationWizardModal({
         ) : null}
       </OperationProgressModal>
     </>
-  )
+  );
 }
-

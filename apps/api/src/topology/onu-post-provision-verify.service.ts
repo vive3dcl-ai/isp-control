@@ -18,10 +18,12 @@ import {
 import {
   decideVerifyOutcome,
   isVerifyWindowExpired,
+  mapWithConcurrency,
   shouldCloseVerifyWindow,
   shouldRunVerifyTick,
   summarizeVerifyDetail,
   VERIFY_HEAL_MAX_ATTEMPTS,
+  VERIFY_MAX_CONCURRENCY_PER_TENANT,
   type OnuVerifyCheckResult,
   type OnuVerifyDetail,
 } from './onu-post-provision-verify.util';
@@ -87,31 +89,48 @@ export class OnuPostProvisionVerifyService {
     await this.start(schema, onuId);
   }
 
-  /** Un tick de todas las ONUs en `test` del esquema. */
-  async tickSchema(schema: string): Promise<void> {
+  /** ONUs del esquema que toca chequear ahora (ventana/intervalo). */
+  async listDue(
+    schema: string,
+  ): Promise<Array<{ schema: string; id: string; sn: string | null }>> {
     const onuRepo = await this.tenantConnections.getOnuRepository(schema);
     const candidates = await onuRepo.find({
       where: { verifyStatus: 'test' },
+      select: ['id', 'sn', 'verifyStatus', 'verifyCheckedAt'],
     });
-    for (const onu of candidates) {
-      if (
-        !shouldRunVerifyTick({
+    return candidates
+      .filter((onu) =>
+        shouldRunVerifyTick({
           status: onu.verifyStatus,
           checkedAt: onu.verifyCheckedAt,
-        })
-      ) {
-        continue;
-      }
+        }),
+      )
+      .map((onu) => ({ schema, id: onu.id, sn: onu.sn }));
+  }
+
+  /** Un tick de todas las ONUs en `test` del esquema (respeta el tope). */
+  async tickSchema(
+    schema: string,
+    concurrency = VERIFY_MAX_CONCURRENCY_PER_TENANT,
+  ): Promise<void> {
+    const due = await this.listDue(schema);
+    if (!due.length) return;
+    if (due.length > concurrency) {
+      this.logger.log(
+        `verify ${schema}: ${due.length} pendientes, concurrencia≤${concurrency}`,
+      );
+    }
+    await mapWithConcurrency(due, concurrency, async (job) => {
       try {
-        await this.runOne(schema, onu.id);
+        await this.runOne(job.schema, job.id);
       } catch (err) {
         this.logger.warn(
-          `verify ${onu.sn ?? onu.id}: ${
+          `verify ${job.sn ?? job.id}: ${
             err instanceof Error ? err.message : String(err)
           }`,
         );
       }
-    }
+    });
   }
 
   async runOne(schema: string, onuId: string): Promise<Onu> {

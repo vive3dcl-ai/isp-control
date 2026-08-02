@@ -240,6 +240,7 @@ export class Tr069Service {
         state = 'waiting_inform';
       }
       return {
+        onuId: o.id,
         deviceId: acs ? String(acs._id) : o.id,
         serial: sn || o.id,
         oltName: oltName.get(o.oltId) ?? null,

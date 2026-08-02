@@ -1,160 +1,167 @@
-import { useMemo, useState } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { apiFetch } from '../lib/api'
-import type { TopologyDevice } from '../lib/topology'
-import type { IpPoolsResponse } from '../lib/ip-pools'
-import type { Tr069ProfilesResponse } from '../lib/tr069'
+import { useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { apiFetch } from "../lib/api";
+import type { TopologyDevice } from "../lib/topology";
+import type { IpPoolsResponse } from "../lib/ip-pools";
+import type { Tr069ProfilesResponse } from "../lib/tr069";
 import {
   filterBySourceVlan,
   matchesSearch,
   scanMigrationOlts,
   type MigrationCandidate,
   type MigrationSegmentConfig,
-} from '../lib/onu-migration'
-import { MigrationWizardModal } from './MigrationWizardModal'
+} from "../lib/onu-migration";
+import { MigrationWizardModal } from "./MigrationWizardModal";
 
 /** Subset of the VLAN catalog (Ajustes → VLANs) needed to label the segment. */
 type CatalogVlan = {
-  vlanId: number
-  description: string | null
-  oltIds: string[]
-}
+  vlanId: number;
+  description: string | null;
+  oltIds: string[];
+};
 
 type SourceVlanOption = {
-  vlanId: number
-  description: string | null
-  candidates: number
+  vlanId: number;
+  description: string | null;
+  candidates: number;
   /** Present in the VLAN catalog, not just detected on an ONU. */
-  inCatalog: boolean
-}
+  inCatalog: boolean;
+};
 
 export function MigracionSettingsTab({ canWrite }: { canWrite: boolean }) {
-  const queryClient = useQueryClient()
-  const [oltId, setOltId] = useState('')
-  const [sourceVlan, setSourceVlan] = useState<string>('')
-  const [search, setSearch] = useState('')
-  const [mgmtVlanPick, setMgmtVlanPick] = useState('')
-  const [wanVlanPick, setWanVlanPick] = useState('')
-  const [tr069ProfilePick, setTr069ProfilePick] = useState('')
-  const [migratedIfs, setMigratedIfs] = useState<Set<string>>(new Set())
-  const [wizardOpen, setWizardOpen] = useState(false)
-  const [current, setCurrent] = useState<MigrationCandidate | null>(null)
+  const queryClient = useQueryClient();
+  const [oltId, setOltId] = useState("");
+  const [sourceVlan, setSourceVlan] = useState<string>("");
+  const [search, setSearch] = useState("");
+  const [mgmtVlanPick, setMgmtVlanPick] = useState("");
+  const [wanVlanPick, setWanVlanPick] = useState("");
+  const [tr069ProfilePick, setTr069ProfilePick] = useState("");
+  const [migratedIfs, setMigratedIfs] = useState<Set<string>>(new Set());
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const [current, setCurrent] = useState<MigrationCandidate | null>(null);
 
   const topologyQuery = useQuery({
-    queryKey: ['app', 'topology'],
-    queryFn: () =>
-      apiFetch<{ devices: TopologyDevice[] }>('/app/topology'),
-  })
+    queryKey: ["app", "topology"],
+    queryFn: () => apiFetch<{ devices: TopologyDevice[] }>("/app/topology"),
+  });
 
   const olts = useMemo(
     () =>
       (topologyQuery.data?.devices ?? []).filter(
-        (d) => d.type === 'olt' && d.isActive,
+        (d) => d.type === "olt" && d.isActive,
       ),
     [topologyQuery.data?.devices],
-  )
+  );
 
-  const selectedOlt = olts.find((o) => o.id === oltId)
+  const selectedOlt = olts.find((o) => o.id === oltId);
 
   const inventoryQuery = useQuery({
-    queryKey: ['app', 'onus', 'migration', 'scan', oltId],
+    queryKey: ["app", "onus", "migration", "scan", oltId],
     queryFn: () => scanMigrationOlts(oltId),
     enabled: !!oltId && canWrite,
-  })
+  });
 
-  const scan = inventoryQuery.data ?? null
+  const scan = inventoryQuery.data ?? null;
 
   const mgmtPoolsQuery = useQuery({
-    queryKey: ['app', 'settings', 'ip-pools', 'management', oltId],
+    queryKey: ["app", "settings", "ip-pools", "management", oltId],
     queryFn: () =>
       apiFetch<IpPoolsResponse>(
         `/app/settings/ip-pools?purpose=management&oltId=${encodeURIComponent(oltId)}`,
       ),
     enabled: !!oltId,
-  })
+  });
   const wanPoolsQuery = useQuery({
-    queryKey: ['app', 'settings', 'ip-pools', 'internet', oltId],
+    queryKey: ["app", "settings", "ip-pools", "internet", oltId],
     queryFn: () =>
       apiFetch<IpPoolsResponse>(
         `/app/settings/ip-pools?purpose=internet&oltId=${encodeURIComponent(oltId)}`,
       ),
     enabled: !!oltId,
-  })
+  });
   const tr069Query = useQuery({
-    queryKey: ['app', 'settings', 'tr069', 'profiles'],
+    queryKey: ["app", "settings", "tr069", "profiles"],
     queryFn: () =>
-      apiFetch<Tr069ProfilesResponse>('/app/settings/tr069/profiles'),
+      apiFetch<Tr069ProfilesResponse>("/app/settings/tr069/profiles"),
     enabled: !!oltId,
-  })
+  });
   const catalogVlansQuery = useQuery({
-    queryKey: ['app', 'settings', 'vlans'],
-    queryFn: () =>
-      apiFetch<{ vlans: CatalogVlan[] }>('/app/settings/vlans'),
-  })
+    queryKey: ["app", "settings", "vlans"],
+    queryFn: () => apiFetch<{ vlans: CatalogVlan[] }>("/app/settings/vlans"),
+  });
 
-  const mgmtPools = mgmtPoolsQuery.data?.pools ?? []
-  const wanPools = wanPoolsQuery.data?.pools ?? []
+  const mgmtPools = mgmtPoolsQuery.data?.pools ?? [];
+  const wanPools = wanPoolsQuery.data?.pools ?? [];
   const tr069Profiles = useMemo(() => {
-    const all = tr069Query.data?.profiles ?? []
-    if (!oltId) return all
-    return all.filter((p) => !p.oltIds?.length || p.oltIds.includes(oltId))
-  }, [tr069Query.data?.profiles, oltId])
+    const all = tr069Query.data?.profiles ?? [];
+    if (!oltId) return all;
+    return all.filter((p) => !p.oltIds?.length || p.oltIds.includes(oltId));
+  }, [tr069Query.data?.profiles, oltId]);
 
-  const sourceVlanNum = sourceVlan ? Number(sourceVlan) : null
+  const sourceVlanNum = sourceVlan ? Number(sourceVlan) : null;
 
   const segmentCandidates = useMemo(
     () => filterBySourceVlan(scan?.candidates ?? [], sourceVlanNum),
     [scan, sourceVlanNum],
-  )
+  );
 
   const pending = useMemo(
     () => segmentCandidates.filter((c) => !migratedIfs.has(c.onuIf)),
     [segmentCandidates, migratedIfs],
-  )
+  );
 
-  const segmentTotal = segmentCandidates.length
-  const segmentDone = segmentTotal - pending.length
+  const persistedDone =
+    sourceVlanNum == null
+      ? (scan?.completedTotal ?? 0)
+      : (scan?.completedBySource?.[String(sourceVlanNum)] ?? 0);
+  const localDone = segmentCandidates.filter((c) =>
+    migratedIfs.has(c.onuIf),
+  ).length;
+  // Las completadas desaparecen del scan porque ya tienen servicio. Se suman
+  // desde el registro persistente para que refrescar no vuelva el avance a 0.
+  const segmentTotal = segmentCandidates.length + persistedDone;
+  const segmentDone = persistedDone + localDone;
 
   /** Search only narrows the table; progress stays on the whole segment. */
   const visibleCandidates = useMemo(
     () => segmentCandidates.filter((c) => matchesSearch(c, search)),
     [segmentCandidates, search],
-  )
+  );
 
   const sourceVlanOptions = useMemo<SourceVlanOption[]>(() => {
-    const counts = new Map<number, number>()
+    const counts = new Map<number, number>();
     for (const c of scan?.candidates ?? []) {
-      const ids = new Set<number>(c.vlans ?? [])
-      if (c.vlan != null) ids.add(c.vlan)
-      for (const id of ids) counts.set(id, (counts.get(id) ?? 0) + 1)
+      const ids = new Set<number>(c.vlans ?? []);
+      if (c.vlan != null) ids.add(c.vlan);
+      for (const id of ids) counts.set(id, (counts.get(id) ?? 0) + 1);
     }
 
-    const byId = new Map<number, SourceVlanOption>()
+    const byId = new Map<number, SourceVlanOption>();
     for (const v of scan?.sourceVlans ?? []) {
       byId.set(v, {
         vlanId: v,
         description: null,
         candidates: counts.get(v) ?? 0,
         inCatalog: false,
-      })
+      });
     }
     // The scan only reports VLANs it saw on candidate ONUs, so VLANs created in
     // the system are missing until an ONU actually uses them. Merge the catalog
     // in (skipping VLANs pushed only to other OLTs) so they can be picked.
     for (const v of catalogVlansQuery.data?.vlans ?? []) {
-      if (oltId && v.oltIds?.length && !v.oltIds.includes(oltId)) continue
-      const prev = byId.get(v.vlanId)
+      if (oltId && v.oltIds?.length && !v.oltIds.includes(oltId)) continue;
+      const prev = byId.get(v.vlanId);
       byId.set(v.vlanId, {
         vlanId: v.vlanId,
         description: v.description ?? prev?.description ?? null,
         candidates: prev?.candidates ?? counts.get(v.vlanId) ?? 0,
         inCatalog: true,
-      })
+      });
     }
-    return [...byId.values()].sort((a, b) => a.vlanId - b.vlanId)
-  }, [scan, catalogVlansQuery.data?.vlans, oltId])
+    return [...byId.values()].sort((a, b) => a.vlanId - b.vlanId);
+  }, [scan, catalogVlansQuery.data?.vlans, oltId]);
 
-  const busy = inventoryQuery.isFetching
+  const busy = inventoryQuery.isFetching;
 
   const canStart =
     canWrite &&
@@ -162,7 +169,7 @@ export function MigracionSettingsTab({ canWrite }: { canWrite: boolean }) {
     !!mgmtVlanPick &&
     !!wanVlanPick &&
     pending.length > 0 &&
-    !busy
+    !busy;
 
   const segmentConfig: MigrationSegmentConfig | null =
     selectedOlt && mgmtVlanPick && wanVlanPick
@@ -174,36 +181,36 @@ export function MigracionSettingsTab({ canWrite }: { canWrite: boolean }) {
           wanVlanId: Number(wanVlanPick),
           tr069ProfileId: tr069ProfilePick || null,
         }
-      : null
+      : null;
 
   function startWizard(c?: MigrationCandidate) {
-    const next = c ?? pending[0]
-    if (!next || !segmentConfig) return
-    setCurrent(next)
-    setWizardOpen(true)
+    const next = c ?? pending[0];
+    if (!next || !segmentConfig) return;
+    setCurrent(next);
+    setWizardOpen(true);
   }
 
   function handleMigrated(onuIf: string) {
-    const nextSet = new Set(migratedIfs).add(onuIf)
-    setMigratedIfs(nextSet)
+    const nextSet = new Set(migratedIfs).add(onuIf);
+    setMigratedIfs(nextSet);
     void queryClient.invalidateQueries({
-      queryKey: ['app', 'onus', 'migration', 'scan', oltId],
-    })
+      queryKey: ["app", "onus", "migration", "scan", oltId],
+    });
     const nextPending = filterBySourceVlan(
       scan?.candidates ?? [],
       sourceVlanNum,
-    ).filter((c) => !nextSet.has(c.onuIf))
+    ).filter((c) => !nextSet.has(c.onuIf));
     if (nextPending.length > 0 && segmentConfig) {
-      setCurrent(nextPending[0])
-      setWizardOpen(true)
+      setCurrent(nextPending[0]);
+      setWizardOpen(true);
     } else {
-      setWizardOpen(false)
-      setCurrent(null)
+      setWizardOpen(false);
+      setCurrent(null);
     }
   }
 
   const pct =
-    segmentTotal > 0 ? Math.round((segmentDone / segmentTotal) * 100) : 0
+    segmentTotal > 0 ? Math.round((segmentDone / segmentTotal) * 100) : 0;
 
   return (
     <div className="space-y-5">
@@ -229,13 +236,13 @@ export function MigracionSettingsTab({ canWrite }: { canWrite: boolean }) {
             value={oltId}
             disabled={!canWrite}
             onChange={(e) => {
-              setOltId(e.target.value)
-              setMigratedIfs(new Set())
-              setMgmtVlanPick('')
-              setWanVlanPick('')
-              setTr069ProfilePick('')
-              setSourceVlan('')
-              setSearch('')
+              setOltId(e.target.value);
+              setMigratedIfs(new Set());
+              setMgmtVlanPick("");
+              setWanVlanPick("");
+              setTr069ProfilePick("");
+              setSourceVlan("");
+              setSearch("");
             }}
           >
             <option value="">Seleccionar…</option>
@@ -256,19 +263,19 @@ export function MigracionSettingsTab({ canWrite }: { canWrite: boolean }) {
             value={sourceVlan}
             disabled={!oltId}
             onChange={(e) => {
-              setSourceVlan(e.target.value)
-              setMigratedIfs(new Set())
+              setSourceVlan(e.target.value);
+              setMigratedIfs(new Set());
             }}
           >
             <option value="">Todas las candidatas</option>
             {sourceVlanOptions.map((v) => (
               <option key={v.vlanId} value={String(v.vlanId)}>
                 VLAN {v.vlanId}
-                {v.description ? ` — ${v.description}` : ''}
+                {v.description ? ` — ${v.description}` : ""}
                 {v.candidates > 0
-                  ? ` · ${v.candidates} candidata${v.candidates === 1 ? '' : 's'}`
-                  : ' · sin candidatas'}
-                {v.inCatalog ? '' : ' · fuera del catálogo'}
+                  ? ` · ${v.candidates} candidata${v.candidates === 1 ? "" : "s"}`
+                  : " · sin candidatas"}
+                {v.inCatalog ? "" : " · fuera del catálogo"}
               </option>
             ))}
           </select>
@@ -294,7 +301,7 @@ export function MigracionSettingsTab({ canWrite }: { canWrite: boolean }) {
             {mgmtPools.map((p) => (
               <option key={p.id} value={String(p.vlanId)}>
                 VLAN {p.vlanId}
-                {p.name ? ` · ${p.name}` : ''} ({p.available} libres)
+                {p.name ? ` · ${p.name}` : ""} ({p.available} libres)
               </option>
             ))}
           </select>
@@ -314,7 +321,7 @@ export function MigracionSettingsTab({ canWrite }: { canWrite: boolean }) {
             {wanPools.map((p) => (
               <option key={p.id} value={String(p.vlanId)}>
                 VLAN {p.vlanId}
-                {p.name ? ` · ${p.name}` : ''} ({p.available} libres)
+                {p.name ? ` · ${p.name}` : ""} ({p.available} libres)
               </option>
             ))}
           </select>
@@ -331,7 +338,7 @@ export function MigracionSettingsTab({ canWrite }: { canWrite: boolean }) {
             onChange={(e) => setTr069ProfilePick(e.target.value)}
           >
             <option value="">
-              {mgmtVlanPick ? 'Opcional…' : 'Elegir administración primero'}
+              {mgmtVlanPick ? "Opcional…" : "Elegir administración primero"}
             </option>
             {tr069Profiles.map((p) => (
               <option key={p.id} value={p.id}>
@@ -349,9 +356,7 @@ export function MigracionSettingsTab({ canWrite }: { canWrite: boolean }) {
       )}
 
       {oltId && inventoryQuery.isLoading && (
-        <p className="text-sm text-[var(--text-muted)]">
-          Cargando inventario…
-        </p>
+        <p className="text-sm text-[var(--text-muted)]">Cargando inventario…</p>
       )}
 
       {scan && (
@@ -359,7 +364,7 @@ export function MigracionSettingsTab({ canWrite }: { canWrite: boolean }) {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="text-sm text-[var(--text-muted)]">
               OLT <strong className="text-[var(--text)]">{scan.oltName}</strong>
-              : {scan.totalCandidates} sin cliente/servicio · segmento{' '}
+              : {scan.totalCandidates} sin cliente/servicio · segmento{" "}
               {pending.length} pendientes
             </div>
             <button
@@ -386,7 +391,7 @@ export function MigracionSettingsTab({ canWrite }: { canWrite: boolean }) {
                 </span>
                 <button
                   type="button"
-                  onClick={() => setSearch('')}
+                  onClick={() => setSearch("")}
                   className="shrink-0 rounded-lg border border-[var(--border)] px-2 py-1 text-xs hover:border-[var(--accent)] hover:text-[var(--accent)]"
                 >
                   Limpiar
@@ -424,88 +429,81 @@ export function MigracionSettingsTab({ canWrite }: { canWrite: boolean }) {
                 </tr>
               </thead>
               <tbody>
-                {visibleCandidates.map(
-                  (c) => {
-                    const done = migratedIfs.has(c.onuIf)
-                    return (
-                      <tr
-                        key={c.onuIf}
-                        className="border-b border-[var(--border)] last:border-0"
-                      >
-                        <td className="px-3 py-2 font-mono text-xs">
-                          {c.onuIf}
-                        </td>
-                        <td className="px-3 py-2 font-mono text-xs">
-                          {c.sn || '—'}
-                        </td>
-                        <td className="px-3 py-2">
-                          <div className="max-w-[14rem] truncate">
-                            {c.name || '—'}
-                          </div>
-                          <div className="max-w-[14rem] truncate text-xs text-[var(--text-muted)]">
-                            {c.description || ''}
-                          </div>
-                        </td>
-                        <td className="px-3 py-2 text-xs">
-                          {(c.vlans.length
-                            ? c.vlans
-                            : c.vlan != null
-                              ? [c.vlan]
-                              : []
-                          ).join(', ') || '—'}
-                        </td>
-                        <td className="px-3 py-2">
-                          {c.suggestedClientName ? (
-                            <div>
-                              <div className="max-w-[14rem] truncate">
-                                {c.suggestedFirstName ||
-                                  c.suggestedClientName}
-                                {c.suggestedLastName
-                                  ? ` ${c.suggestedLastName}`
-                                  : ''}
-                              </div>
-                              {c.suggestedServiceName ? (
-                                <div className="text-[10px] text-[var(--text-muted)]">
-                                  svc: {c.suggestedServiceName}
-                                </div>
-                              ) : null}
+                {visibleCandidates.map((c) => {
+                  const done = migratedIfs.has(c.onuIf);
+                  return (
+                    <tr
+                      key={c.onuIf}
+                      className="border-b border-[var(--border)] last:border-0"
+                    >
+                      <td className="px-3 py-2 font-mono text-xs">{c.onuIf}</td>
+                      <td className="px-3 py-2 font-mono text-xs">
+                        {c.sn || "—"}
+                      </td>
+                      <td className="px-3 py-2">
+                        <div className="max-w-[14rem] truncate">
+                          {c.name || "—"}
+                        </div>
+                        <div className="max-w-[14rem] truncate text-xs text-[var(--text-muted)]">
+                          {c.description || ""}
+                        </div>
+                      </td>
+                      <td className="px-3 py-2 text-xs">
+                        {(c.vlans.length
+                          ? c.vlans
+                          : c.vlan != null
+                            ? [c.vlan]
+                            : []
+                        ).join(", ") || "—"}
+                      </td>
+                      <td className="px-3 py-2">
+                        {c.suggestedClientName ? (
+                          <div>
+                            <div className="max-w-[14rem] truncate">
+                              {c.suggestedFirstName || c.suggestedClientName}
+                              {c.suggestedLastName
+                                ? ` ${c.suggestedLastName}`
+                                : ""}
                             </div>
-                          ) : (
-                            <span className="text-[var(--text-muted)]">
-                              —
-                            </span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2 text-xs">
-                          {done ? (
-                            <span className="text-emerald-400">Migrada</span>
-                          ) : c.online ? (
-                            <span className="text-emerald-400">Online</span>
-                          ) : (
-                            <span className="text-amber-300">Offline</span>
-                          )}
-                          {!c.inDb && !done && (
-                            <span className="ml-1 text-[var(--text-muted)]">
-                              (sin DB)
-                            </span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2 text-right">
-                          {!done && canWrite && (
-                            <button
-                              type="button"
-                              disabled={!mgmtVlanPick || !wanVlanPick}
-                              onClick={() => startWizard(c)}
-                              className="rounded-md border border-[var(--border)] px-2 py-1 text-xs hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:opacity-40"
-                            >
-                              Migrar
-                            </button>
-                          )}
-                        </td>
-                      </tr>
-                    )
-                  },
-                )}
+                            {c.suggestedServiceName ? (
+                              <div className="text-[10px] text-[var(--text-muted)]">
+                                svc: {c.suggestedServiceName}
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : (
+                          <span className="text-[var(--text-muted)]">—</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-xs">
+                        {done ? (
+                          <span className="text-emerald-400">Migrada</span>
+                        ) : c.online ? (
+                          <span className="text-emerald-400">Online</span>
+                        ) : (
+                          <span className="text-amber-300">Offline</span>
+                        )}
+                        {!c.inDb && !done && (
+                          <span className="ml-1 text-[var(--text-muted)]">
+                            (sin DB)
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        {!done && canWrite && (
+                          <button
+                            type="button"
+                            disabled={!mgmtVlanPick || !wanVlanPick}
+                            onClick={() => startWizard(c)}
+                            className="rounded-md border border-[var(--border)] px-2 py-1 text-xs hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:opacity-40"
+                          >
+                            Migrar
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
                 {visibleCandidates.length === 0 && (
                   <tr>
                     <td
@@ -514,7 +512,7 @@ export function MigracionSettingsTab({ canWrite }: { canWrite: boolean }) {
                     >
                       {search.trim()
                         ? `Ninguna candidata coincide con «${search.trim()}».`
-                        : 'No hay candidatas en este segmento.'}
+                        : "No hay candidatas en este segmento."}
                     </td>
                   </tr>
                 )}
@@ -539,16 +537,16 @@ export function MigracionSettingsTab({ canWrite }: { canWrite: boolean }) {
           segmentTotal={segmentTotal}
           remaining={pending.length}
           onClose={() => {
-            setWizardOpen(false)
-            setCurrent(null)
+            setWizardOpen(false);
+            setCurrent(null);
           }}
           onMigrated={handleMigrated}
           onPause={() => {
-            setWizardOpen(false)
-            setCurrent(null)
+            setWizardOpen(false);
+            setCurrent(null);
           }}
         />
       )}
     </div>
-  )
+  );
 }
