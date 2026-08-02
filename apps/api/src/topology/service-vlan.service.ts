@@ -13,6 +13,12 @@ import {
 import { isMikrotikRouterOsDevice } from './switch.constants';
 import { portMoveError, resolveSwitchBridge } from './switch-bridge.util';
 import { withVlanInCache } from './olt-vlan-cache.util';
+import {
+  planUplinkVlanChanges,
+  uplinksCarryingVlan,
+  withUplinkVlansInCache,
+  type UplinkVlanPlan,
+} from './olt-uplink-vlan.util';
 import { saveDeviceIfPresent } from './device-persist.util';
 import type { NetworkDevice } from './entities/network-device.entity';
 import type { NetworkPort } from './entities/network-port.entity';
@@ -103,6 +109,7 @@ export class ServiceVlanService {
     vlanId: number,
     isolated?: boolean,
     description?: string | null,
+    appliedUplinks?: { tagged: string[]; untagged: string[] },
   ): Promise<void> {
     const deviceRepo =
       await this.tenantConnections.getNetworkDeviceRepository(schema);
@@ -130,7 +137,14 @@ export class ServiceVlanService {
     });
     if (nextCache) device.oltInventoryCache = nextCache;
 
-    if (!metaChanged && !nextCache) return;
+    // Same reasoning for the uplink selector: it reads taggedVlans from this
+    // cache, so without seeding it the VLAN we just tagged looks unassigned.
+    const nextUplinks = appliedUplinks
+      ? withUplinkVlansInCache(device.oltInventoryCache, vlanId, appliedUplinks)
+      : null;
+    if (nextUplinks) device.oltInventoryCache = nextUplinks;
+
+    if (!metaChanged && !nextCache && !nextUplinks) return;
     await saveDeviceIfPresent(deviceRepo, device);
   }
 
@@ -154,6 +168,12 @@ export class ServiceVlanService {
         vlans: cache.vlans.filter((v) => v.vlanId !== vlanId),
       };
     }
+    const withoutUplinkVlan = withUplinkVlansInCache(
+      device.oltInventoryCache,
+      vlanId,
+      { untagged: uplinksCarryingVlan(cache?.uplinks ?? [], vlanId) },
+    );
+    if (withoutUplinkVlan) device.oltInventoryCache = withoutUplinkVlan;
     await saveDeviceIfPresent(deviceRepo, device);
   }
 
@@ -466,6 +486,7 @@ export class ServiceVlanService {
         device,
         row.vlanId,
         row.description,
+        dto.uplinks,
       );
       return {
         ok: true,
@@ -721,30 +742,68 @@ export class ServiceVlanService {
     olt: NetworkDevice,
     vlanId: number,
     description: string | null,
+    uplinks?: string[],
   ): Promise<string> {
     const conn = this.zteConn(olt);
+    const plan = this.planOltUplinks(olt, vlanId, uplinks);
     const live = await this.oltCli(olt).listVlans(conn);
-    if (live.ok && live.vlans.some((v) => v.vlanId === vlanId)) {
-      await this.rememberOltVlan(
-        schema,
-        olt,
-        vlanId,
-        undefined,
-        description,
-      );
+    const exists = live.ok && live.vlans.some((v) => v.vlanId === vlanId);
+
+    // A VLAN that exists on the OLT but is missing from the uplink trunk never
+    // leaves the chassis, so an "already there" VLAN still has to be pushed
+    // when the uplink selection changes.
+    if (exists && !plan) {
+      await this.rememberOltVlan(schema, olt, vlanId, undefined, description);
       return 'ya existía en la OLT';
     }
+
     const result = await this.oltCli(olt).upsertVlan({
       ...conn,
       vlanId,
       description: description ?? undefined,
-      isolated: true,
+      // Isolation is only decided when creating; editing uplinks must not
+      // silently flip it on a VLAN already in service.
+      ...(exists ? {} : { isolated: true }),
+      ...(plan ? { tagUplinks: plan.toTag, untagUplinks: plan.toUntag } : {}),
     });
     if (!result.ok) {
       throw new BadRequestException(result.error || 'No se pudo crear en OLT');
     }
-    await this.rememberOltVlan(schema, olt, vlanId, true, description);
-    return result.message ?? 'creada en la OLT';
+    await this.rememberOltVlan(
+      schema,
+      olt,
+      vlanId,
+      exists ? undefined : true,
+      description,
+      plan ? { tagged: plan.toTag, untagged: plan.toUntag } : undefined,
+    );
+    return (
+      result.message ?? (exists ? 'actualizada en la OLT' : 'creada en la OLT')
+    );
+  }
+
+  /**
+   * Resolve the requested uplink selection against the cached inventory.
+   * Returns null when there is nothing to change, so callers can keep the
+   * cheap "already existed" path.
+   */
+  private planOltUplinks(
+    olt: NetworkDevice,
+    vlanId: number,
+    uplinks?: string[],
+  ): UplinkVlanPlan | null {
+    if (!uplinks) return null;
+    const plan = planUplinkVlanChanges({
+      uplinks: olt.oltInventoryCache?.uplinks ?? [],
+      vlanId,
+      selected: uplinks,
+    });
+    if (plan.unknown.length) {
+      throw new BadRequestException(
+        `Uplink no encontrado en ${olt.name}: ${plan.unknown.join(', ')}`,
+      );
+    }
+    return plan.toTag.length || plan.toUntag.length ? plan : null;
   }
 
   private async ensureOnMikrotik(

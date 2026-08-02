@@ -5,6 +5,7 @@ import {
   portalServices,
   type PortalService,
 } from '../lib/client-portal'
+import { bpsToMbps } from '../lib/onu-connected'
 
 function MiniChart({
   samples,
@@ -79,10 +80,10 @@ function ServiceCard({ service }: { service: PortalService }) {
   const signal = samples.filter((s) => s.kind === 'signal')
   const down = samples
     .filter((s) => s.kind === 'rx_bps')
-    .map((s) => ({ ...s, value: s.value / 1e6 }))
+    .map((s) => ({ ...s, value: bpsToMbps(s.value) }))
   const up = samples
     .filter((s) => s.kind === 'tx_bps')
-    .map((s) => ({ ...s, value: s.value / 1e6 }))
+    .map((s) => ({ ...s, value: bpsToMbps(s.value) }))
 
   return (
     <article className="rounded-2xl border border-[var(--portal-border)] bg-[var(--portal-elevated)]/60 p-5">

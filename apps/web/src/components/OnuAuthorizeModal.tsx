@@ -27,8 +27,11 @@ type Props = {
 
 export function OnuAuthorizeModal({ orphan, onClose, onAuthorized }: Props) {
   const queryClient = useQueryClient()
+  // Sin sugerencia no se inventa un índice: el 1 está ocupado en cualquier
+  // puerto con clientes y la OLT lo acepta como «re-create», dejando el SN sin
+  // registrar y pudiendo pisar al cliente que ya tenía ese índice.
   const [onuId, setOnuId] = useState(
-    orphan.suggestedOnuId != null ? String(orphan.suggestedOnuId) : '1',
+    orphan.suggestedOnuId != null ? String(orphan.suggestedOnuId) : '',
   )
   const [onuType, setOnuType] = useState('')
   const [customType, setCustomType] = useState(false)
@@ -196,7 +199,13 @@ export function OnuAuthorizeModal({ orphan, onClose, onAuthorized }: Props) {
               <span className="mt-1 block text-xs text-[var(--text-muted)]">
                 Sugerido (siguiente libre): {orphan.suggestedOnuId}
               </span>
-            ) : null}
+            ) : (
+              <span className="mt-1 block text-xs text-amber-300">
+                No se pudo leer los índices ocupados del puerto. Consúltalos en
+                la OLT antes de autorizar: un índice en uso se rechaza como
+                «re-create» y el SN no queda registrado.
+              </span>
+            )}
           </label>
 
           <div>

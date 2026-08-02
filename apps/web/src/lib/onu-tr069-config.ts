@@ -19,6 +19,8 @@ export type Tr069EthPort = {
   enabled: boolean | null
   status: string | null
   mac: string | null
+  vlanId?: number | null
+  vlanMode?: 'tag' | 'untag' | 'hybrid' | null
 }
 
 export type Tr069WebUser = {
@@ -30,6 +32,7 @@ export type Tr069WebUser = {
   password: string | null
   enablePath: string | null
   enabled: boolean | null
+  label?: string | null
 }
 
 export type Tr069OnuConfig = {
@@ -56,7 +59,12 @@ export type ApplyTr069OnuConfigBody = {
     key?: string
     enabled?: boolean
   }>
-  ethernet?: Array<{ index: number; enabled?: boolean }>
+  ethernet?: Array<{
+    index: number
+    enabled?: boolean
+    vlanId?: number | null
+    vlanMode?: 'tag' | 'untag' | 'hybrid'
+  }>
   webUsers?: Array<{
     index: number
     username?: string

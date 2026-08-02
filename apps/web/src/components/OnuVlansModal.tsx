@@ -23,6 +23,7 @@ export function OnuVlansModal({
   canWrite,
   mgmtVlanId,
   wanVlanId,
+  wanIp,
   onClose,
   onSaved,
 }: {
@@ -31,6 +32,8 @@ export function OnuVlansModal({
   canWrite: boolean
   mgmtVlanId: number | null
   wanVlanId: number | null
+  /** IP del pool ya asignada. null = la VLAN WAN mostrada aún no tiene IP. */
+  wanIp?: string | null
   onClose: () => void
   onSaved?: () => void
 }) {
@@ -145,7 +148,14 @@ export function OnuVlansModal({
     const nextMgmt = mgmtVlanPick ? Number(mgmtVlanPick) : null
     const nextWan = wanVlanPick ? Number(wanVlanPick) : null
     const mgmtChanged = nextMgmt != null && nextMgmt !== mgmtVlanId
-    const wanChanged = nextWan !== wanVlanId
+    // La VLAN WAN mostrada puede venir heredada de la OLT sin IP de pool
+    // asignada. En ese caso queda trabajo pendiente aunque el número no cambie,
+    // pero solo si existe un pool para esa VLAN (si no, el backend rechazaría).
+    const wanPendingAssign =
+      nextWan != null &&
+      !wanIp &&
+      wanPools.some((p) => p.vlanId === nextWan)
+    const wanChanged = nextWan !== wanVlanId || wanPendingAssign
 
     if (!mgmtChanged && !wanChanged) {
       setError('No hay cambios de VLAN que aplicar')
@@ -215,10 +225,16 @@ export function OnuVlansModal({
           message?: string
           mgmtVlanId?: number | null
           wanVlanId?: number | null
+          wanIp?: string | null
         }>(`/app/onus/${onuId}/network-vlans/verify`, { method: 'POST' })
         if (mgmtChanged && nextMgmt != null && r.mgmtVlanId !== nextMgmt) {
           throw new Error(
             `Mgmt quedó en VLAN ${r.mgmtVlanId ?? '—'}, se esperaba ${nextMgmt}`,
+          )
+        }
+        if (nextWan != null && wanChanged && !r.wanIp) {
+          throw new Error(
+            `La ONU quedó en VLAN WAN ${nextWan} pero sin IP del pool asignada`,
           )
         }
         if (wanChanged && r.wanVlanId !== nextWan) {

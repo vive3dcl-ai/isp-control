@@ -6,7 +6,11 @@ import {
   useQueryClient,
 } from '@tanstack/react-query'
 import { apiFetch } from '../lib/api'
-import type { TopologyDevice } from '../lib/topology'
+import type {
+  OltUplinkRow,
+  OltUplinksResponse,
+  TopologyDevice,
+} from '../lib/topology'
 import {
   OperationProgressModal,
   runProgressSteps,
@@ -64,6 +68,14 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
   /** routerId → parent physical port id (only needed when creating) */
   const [routerParentPort, setRouterParentPort] = useState<
     Record<string, string>
+  >({})
+  /**
+   * oltId → ifName → checked. Only holds what the user actually toggled; the
+   * baseline comes from the OLT itself (taggedVlans), so nothing has to be
+   * synced when the uplink query resolves.
+   */
+  const [oltUplinkOverride, setOltUplinkOverride] = useState<
+    Record<string, Record<string, boolean>>
   >({})
   /** switchId → chosen bridge name, '' = auto, NEW_BRIDGE = create one */
   const [switchBridge, setSwitchBridge] = useState<Record<string, string>>({})
@@ -141,6 +153,34 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
     })),
   })
 
+  // Uplink trunks per OLT: creating a VLAN without tagging it upstream leaves
+  // it trapped inside the chassis, so the selector needs the real interfaces.
+  const uplinkQueries = useQueries({
+    queries: olts.map((o) => ({
+      queryKey: ['app', 'topology', 'devices', o.id, 'uplinks'],
+      queryFn: () =>
+        apiFetch<OltUplinksResponse>(`/app/topology/devices/${o.id}/uplinks`),
+      enabled: modal !== null,
+      staleTime: 60_000,
+    })),
+  })
+
+  const uplinkInfo = useMemo(() => {
+    const out: Record<
+      string,
+      { loading: boolean; failed: boolean; uplinks: OltUplinkRow[] }
+    > = {}
+    olts.forEach((o, i) => {
+      const q = uplinkQueries[i]
+      out[o.id] = {
+        loading: !!q?.isLoading,
+        failed: !!q?.isError,
+        uplinks: (q?.data?.uplinks ?? []).filter((u) => u.adminEnabled),
+      }
+    })
+    return out
+  }, [olts, uplinkQueries])
+
   const bridgeInfo = useMemo(() => {
     const out: Record<
       string,
@@ -183,6 +223,36 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
     return null
   }
 
+  /** Baseline = what the OLT reports today, unless the user changed it. */
+  function uplinkChecked(oltId: string, u: OltUplinkRow): boolean {
+    return (
+      oltUplinkOverride[oltId]?.[u.ifName] ?? u.taggedVlans.includes(currentVlanId)
+    )
+  }
+
+  function toggleUplink(oltId: string, u: OltUplinkRow) {
+    setOltUplinkOverride((prev) => ({
+      ...prev,
+      [oltId]: { ...(prev[oltId] ?? {}), [u.ifName]: !uplinkChecked(oltId, u) },
+    }))
+  }
+
+  function selectedUplinks(oltId: string): string[] {
+    return (uplinkInfo[oltId]?.uplinks ?? [])
+      .filter((u) => uplinkChecked(oltId, u))
+      .map((u) => u.ifName)
+  }
+
+  /**
+   * Omitted while the inventory is unknown: sending an empty list would ask the
+   * backend to strip the VLAN off every trunk that still needs it.
+   */
+  function uplinkPayload(oltId: string): { uplinks?: string[] } {
+    const info = uplinkInfo[oltId]
+    if (!info || info.failed || !info.uplinks.length) return {}
+    return { uplinks: selectedUplinks(oltId) }
+  }
+
   /** Value sent to the API: undefined lets the backend resolve it. */
   function bridgePayload(switchId: string): {
     bridge?: string
@@ -212,6 +282,7 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
     setSwitchBridge({})
     setSwitchNewBridge({})
     setSwitchPortModes({})
+    setOltUplinkOverride({})
     setError(null)
   }
 
@@ -223,6 +294,7 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
     setRouterParentPort({})
     setSwitchBridge({})
     setSwitchNewBridge({})
+    setOltUplinkOverride({})
     // Prefill tagged/untagged from topology port cache so existing VLANs are editable.
     const modes: Record<string, Record<string, SwitchPortMode | ''>> = {}
     for (const d of topologyQuery.data?.devices ?? []) {
@@ -397,7 +469,8 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
     const kindLabel =
       kind === 'olt' ? 'OLT' : kind === 'router' ? 'Router' : 'Switch'
     const actionLabel =
-      kind === 'switch' && switchHasVlan(device, currentVlanId)
+      (kind === 'switch' && switchHasVlan(device, currentVlanId)) ||
+      (kind === 'olt' && oltHasVlan(device.id))
         ? 'actualizar'
         : 'crear'
     const steps: ProgressStep[] = [
@@ -430,6 +503,7 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
               kind,
               parentPortId:
                 kind === 'router' ? routerParentPort[device.id] : undefined,
+              ...(kind === 'olt' ? uplinkPayload(device.id) : {}),
               ...(kind === 'switch' ? bridgePayload(device.id) : {}),
               ports: kind === 'switch' ? switchSelectedPorts(device.id) : undefined,
             }),
@@ -663,48 +737,114 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
                       )}
                       {olts.map((o) => {
                         const exists = oltHasVlan(o.id)
+                        const info = uplinkInfo[o.id]
+                        const chosen = selectedUplinks(o.id)
                         return (
-                          <div
-                            key={o.id}
-                            className="flex items-center justify-between gap-2 px-3 py-2 text-xs"
-                          >
-                            <span className="min-w-0 flex-1 truncate">
-                              {o.name}
-                              <span
-                                className={
-                                  exists
-                                    ? 'ml-2 text-emerald-400'
-                                    : 'ml-2 text-[var(--text-muted)]'
-                                }
-                              >
-                                {exists ? 'creada' : 'no existe'}
+                          <div key={o.id} className="space-y-2 px-3 py-2">
+                            <div className="flex items-center justify-between gap-2 text-xs">
+                              <span className="min-w-0 flex-1 truncate">
+                                {o.name}
+                                <span
+                                  className={
+                                    exists
+                                      ? 'ml-2 text-emerald-400'
+                                      : 'ml-2 text-[var(--text-muted)]'
+                                  }
+                                >
+                                  {exists ? 'creada' : 'no existe'}
+                                </span>
                               </span>
-                            </span>
-                            {canWrite &&
-                              (exists ? (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setDeleteConfirm('')
-                                    setPendingDelete({
-                                      device: o,
-                                      kind: 'olt',
-                                      vlanId: currentVlanId,
-                                    })
-                                  }}
-                                  className="shrink-0 rounded-lg border border-[var(--danger)]/50 px-2 py-1 text-[var(--danger)] hover:bg-[var(--danger)]/10"
+                              {canWrite && (
+                                <div className="flex shrink-0 items-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => createOnDevice(o, 'olt')}
+                                    className="rounded-lg bg-[var(--accent)] px-2 py-1 font-medium text-white hover:bg-[var(--accent-hover)]"
+                                  >
+                                    {exists ? 'Actualizar' : 'Crear'}
+                                  </button>
+                                  {exists && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setDeleteConfirm('')
+                                        setPendingDelete({
+                                          device: o,
+                                          kind: 'olt',
+                                          vlanId: currentVlanId,
+                                        })
+                                      }}
+                                      className="rounded-lg border border-[var(--danger)]/50 px-2 py-1 text-[var(--danger)] hover:bg-[var(--danger)]/10"
+                                    >
+                                      Eliminar
+                                    </button>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+
+                            <p className="text-[11px] text-[var(--text-muted)]">
+                              Uplinks que transportan la VLAN
+                            </p>
+                            {info?.loading && (
+                              <p className="text-[11px] text-[var(--text-muted)]">
+                                Leyendo uplinks…
+                              </p>
+                            )}
+                            {info?.failed && (
+                              <p className="text-[11px] text-amber-400">
+                                No se pudieron leer los uplinks; se dejará el
+                                trunk como está.
+                              </p>
+                            )}
+                            {!info?.loading &&
+                              !info?.failed &&
+                              info?.uplinks.length === 0 && (
+                                <p className="text-[11px] text-[var(--text-muted)]">
+                                  Sin uplinks habilitados. Sincroniza la OLT en
+                                  Equipos.
+                                </p>
+                              )}
+                            {(info?.uplinks ?? []).map((u) => {
+                              const checked = uplinkChecked(o.id, u)
+                              return (
+                                <label
+                                  key={u.ifName}
+                                  className="flex cursor-pointer items-center gap-2 text-[11px]"
                                 >
-                                  Eliminar
-                                </button>
-                              ) : (
-                                <button
-                                  type="button"
-                                  onClick={() => createOnDevice(o, 'olt')}
-                                  className="shrink-0 rounded-lg bg-[var(--accent)] px-2 py-1 font-medium text-white hover:bg-[var(--accent-hover)]"
-                                >
-                                  Crear
-                                </button>
-                              ))}
+                                  <input
+                                    type="checkbox"
+                                    className="shrink-0"
+                                    checked={checked}
+                                    disabled={!canWrite}
+                                    onChange={() => toggleUplink(o.id, u)}
+                                  />
+                                  <span className="min-w-0 flex-1 truncate font-mono">
+                                    {u.ifName}
+                                    {u.description ? ` · ${u.description}` : ''}
+                                  </span>
+                                  <span className="shrink-0 text-[var(--text-muted)]">
+                                    {u.status}
+                                    {u.taggedVlans.includes(currentVlanId)
+                                      ? ' · actual'
+                                      : ''}
+                                  </span>
+                                </label>
+                              )
+                            })}
+                            {!!info?.uplinks.length && (
+                              <p
+                                className={`min-h-[28px] text-[11px] ${
+                                  chosen.length
+                                    ? 'text-[var(--text-muted)]'
+                                    : 'text-amber-400'
+                                }`}
+                              >
+                                {chosen.length
+                                  ? `Se etiquetará en ${chosen.join(', ')}.`
+                                  : 'Sin uplink la VLAN se crea en la OLT pero no sale de ella: las ONUs no verán su gateway.'}
+                              </p>
+                            )}
                           </div>
                         )
                       })}

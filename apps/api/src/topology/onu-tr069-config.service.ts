@@ -12,6 +12,7 @@ import {
   boolVal,
   genieChildIndices,
   genieGet,
+  genieNodeExists,
   resolveNbiBaseUrl,
   strVal,
 } from './genieacs-nbi.client';
@@ -24,6 +25,14 @@ import {
   isManagedOltDevice,
 } from './olt.constants';
 import { stripHuaweiDialectTag } from './huawei-olt-firmware.util';
+import {
+  buildConnReqParameterValues,
+  detectDataModelRoot,
+} from './onu-connreq-credentials.util';
+import {
+  pickServiceWanConnection,
+  type WanConnectionCandidate,
+} from './onu-wan-connection.util';
 import { computeIpNetwork } from './ip-pool.util';
 import type { NetworkDevice } from './entities/network-device.entity';
 import type { Tr069Profile } from './entities/tr069-profile.entity';
@@ -84,6 +93,9 @@ export type Tr069EthPort = {
   enabled: boolean | null;
   status: string | null;
   mac: string | null;
+  /** Binding OMCI `vlan port eth_0/N` (IPTV / bridge). */
+  vlanId: number | null;
+  vlanMode: 'tag' | 'untag' | 'hybrid' | null;
 };
 
 export type Tr069WebUser = {
@@ -95,6 +107,8 @@ export type Tr069WebUser = {
   password: string | null;
   enablePath: string | null;
   enabled: boolean | null;
+  /** admin / user / etc. when the vendor exposes roles. */
+  label: string | null;
 };
 
 export type Tr069OnuConfigView = {
@@ -423,6 +437,8 @@ export class OnuTr069ConfigService {
         enabled: boolVal(genieGet(device, `${prefix}.Enable`)),
         status: strVal(genieGet(device, `${prefix}.Status`)),
         mac: strVal(genieGet(device, `${prefix}.MACAddress`)),
+        vlanId: null,
+        vlanMode: null,
       });
     }
 
@@ -439,6 +455,8 @@ export class OnuTr069ConfigService {
           enabled: boolVal(genieGet(device, `${prefix}.Enable`)),
           status: strVal(genieGet(device, `${prefix}.Status`)),
           mac: strVal(genieGet(device, `${prefix}.MACAddress`)),
+          vlanId: null,
+          vlanMode: null,
         });
       }
     }
@@ -456,48 +474,102 @@ export class OnuTr069ConfigService {
         password: strVal(genieGet(device, `${prefix}.Password`)),
         enablePath: `${prefix}.Enable`,
         enabled: boolVal(genieGet(device, `${prefix}.Enable`)),
+        label: null,
       });
     }
 
-    // —— Vendor / TR-098 user interface (best-effort) ——
+    // —— FiberHome (HG6244C etc.): flat WebSuper*/Web* under DeviceInfo ——
+    if (webUsers.length === 0) {
+      const fhBase =
+        'InternetGatewayDevice.DeviceInfo.X_FH_Account.X_FH_WebUserInfo';
+      if (
+        genieNodeExists(device, fhBase) ||
+        genieGet(device, `${fhBase}.WebSuperPassword`) ||
+        genieGet(device, `${fhBase}.WebSuperUsername`)
+      ) {
+        webUsers.push({
+          index: 1,
+          pathPrefix: fhBase,
+          usernamePath: `${fhBase}.WebSuperUsername`,
+          passwordPath: `${fhBase}.WebSuperPassword`,
+          username: strVal(genieGet(device, `${fhBase}.WebSuperUsername`)),
+          password: strVal(genieGet(device, `${fhBase}.WebSuperPassword`)),
+          enablePath: genieNodeExists(device, `${fhBase}.Enable`)
+            ? `${fhBase}.Enable`
+            : null,
+          enabled: boolVal(genieGet(device, `${fhBase}.Enable`)),
+          label: 'Admin',
+        });
+        webUsers.push({
+          index: 2,
+          pathPrefix: fhBase,
+          usernamePath: `${fhBase}.WebUsername`,
+          passwordPath: `${fhBase}.WebPassword`,
+          username: strVal(genieGet(device, `${fhBase}.WebUsername`)),
+          password: strVal(genieGet(device, `${fhBase}.WebPassword`)),
+          enablePath: genieNodeExists(device, `${fhBase}.UserEnable`)
+            ? `${fhBase}.UserEnable`
+            : null,
+          enabled: boolVal(genieGet(device, `${fhBase}.UserEnable`)),
+          label: 'Usuario',
+        });
+      }
+    }
+
+    // —— Vendor / TR-098 user interface (Huawei / ZTE) ——
     if (webUsers.length === 0) {
       const candidates = [
         {
           prefix: 'InternetGatewayDevice.UserInterface.X_HW_WebUserInfo.1',
           user: 'UserName',
           pass: 'Password',
+          label: 'Admin',
         },
         {
           prefix: 'InternetGatewayDevice.UserInterface.X_HW_WebUserInfo.2',
           user: 'UserName',
           pass: 'Password',
+          label: 'Usuario',
         },
         {
           prefix: 'InternetGatewayDevice.UserInterface.X_ZTE-COM_WebUserInfo.1',
           user: 'UserName',
           pass: 'Password',
+          label: 'Admin',
+        },
+        {
+          prefix: 'InternetGatewayDevice.UserInterface.X_ZTE-COM_WebUserInfo.2',
+          user: 'UserName',
+          pass: 'Password',
+          label: 'Usuario',
         },
         {
           prefix: 'InternetGatewayDevice.X_ZTE-COM_User',
           user: 'Username',
           pass: 'Password',
+          label: 'Admin',
         },
       ];
       let idx = 1;
       for (const c of candidates) {
-        const u = strVal(genieGet(device, `${c.prefix}.${c.user}`));
-        if (u != null || genieGet(device, `${c.prefix}.${c.user}`)) {
-          webUsers.push({
-            index: idx++,
-            pathPrefix: c.prefix,
-            usernamePath: `${c.prefix}.${c.user}`,
-            passwordPath: `${c.prefix}.${c.pass}`,
-            username: u,
-            password: strVal(genieGet(device, `${c.prefix}.${c.pass}`)),
-            enablePath: null,
-            enabled: null,
-          });
+        if (
+          !genieNodeExists(device, c.prefix) &&
+          !genieGet(device, `${c.prefix}.${c.user}`) &&
+          !genieGet(device, `${c.prefix}.${c.pass}`)
+        ) {
+          continue;
         }
+        webUsers.push({
+          index: idx++,
+          pathPrefix: c.prefix,
+          usernamePath: `${c.prefix}.${c.user}`,
+          passwordPath: `${c.prefix}.${c.pass}`,
+          username: strVal(genieGet(device, `${c.prefix}.${c.user}`)),
+          password: strVal(genieGet(device, `${c.prefix}.${c.pass}`)),
+          enablePath: null,
+          enabled: null,
+          label: c.label,
+        });
       }
     }
 
@@ -531,6 +603,78 @@ export class OnuTr069ConfigService {
       softwareVersion,
       lastInform,
     };
+  }
+
+  /** Mezcla bindings OMCI `vlan port eth_0/N` sobre los puertos TR-069. */
+  private async mergeOmciEthVlans(
+    schema: string,
+    onu: { oltId: string; onuIf: string | null },
+    ethernet: Tr069EthPort[],
+  ): Promise<Tr069EthPort[]> {
+    if (!onu.onuIf) return ethernet;
+    try {
+      const deviceRepo =
+        await this.tenantConnections.getNetworkDeviceRepository(schema);
+      const olt = await deviceRepo.findOne({ where: { id: onu.oltId } });
+      if (
+        !olt ||
+        !isManagedOltDevice(olt.type, olt.subtype) ||
+        isHuaweiOltDevice(olt.type, olt.subtype) ||
+        !olt.mgmtHost ||
+        !olt.mgmtUsername ||
+        !olt.mgmtPassword
+      ) {
+        return ethernet;
+      }
+      const result = await this.zteOlt.getOmciEthPortVlans({
+        ...this.zteConn(olt),
+        onuIf: onu.onuIf,
+        subtypeHint: olt.subtype,
+        firmwareHint: oltFirmwareHint(olt),
+      });
+      if (!result.ok) return ethernet;
+      const byIndex = new Map(result.ports.map((p) => [p.portIndex, p]));
+      const merged = ethernet.map((e) => {
+        const omci = byIndex.get(e.index);
+        if (!omci) return e;
+        return { ...e, vlanId: omci.vlanId, vlanMode: omci.mode };
+      });
+      // Si el ACS aún no tiene ETH pero la OLT sí tiene bindings, exponerlos.
+      if (merged.length === 0 && result.ports.length > 0) {
+        return result.ports.map((p) => ({
+          index: p.portIndex,
+          pathPrefix: '',
+          enablePath: null,
+          name: `eth_0/${p.portIndex}`,
+          enabled: null,
+          status: null,
+          mac: null,
+          vlanId: p.vlanId,
+          vlanMode: p.mode,
+        }));
+      }
+      // Asegurar índices presentes en OMCI aunque falten en ACS.
+      for (const p of result.ports) {
+        if (merged.some((e) => e.index === p.portIndex)) continue;
+        merged.push({
+          index: p.portIndex,
+          pathPrefix: '',
+          enablePath: null,
+          name: `eth_0/${p.portIndex}`,
+          enabled: null,
+          status: null,
+          mac: null,
+          vlanId: p.vlanId,
+          vlanMode: p.mode,
+        });
+      }
+      return merged.sort((a, b) => a.index - b.index);
+    } catch (e) {
+      this.logger.debug(
+        `OMCI eth VLAN merge: ${e instanceof Error ? e.message : e}`,
+      );
+      return ethernet;
+    }
   }
 
   async getConfig(user: AuthUser, onuId: string): Promise<Tr069OnuConfigView> {
@@ -577,6 +721,7 @@ export class OnuTr069ConfigService {
       }
       const id = deviceIdString(device._id);
       const parsed = this.parseDevice(device);
+      const ethernet = await this.mergeOmciEthVlans(schema, onu, parsed.ethernet);
       return {
         ...base,
         acsDeviceId: id || null,
@@ -587,9 +732,12 @@ export class OnuTr069ConfigService {
         softwareVersion: parsed.softwareVersion,
         dataModel: parsed.dataModel,
         wifi: parsed.wifi,
-        ethernet: parsed.ethernet,
+        ethernet,
         webUsers: parsed.webUsers,
-        message: null,
+        message:
+          parsed.webUsers.length === 0
+            ? 'Sin usuarios web en el árbol. Pulsa «Refrescar desde ONU» para pedir DeviceInfo/UserInterface al ACS.'
+            : null,
       };
     } catch (e) {
       base.message = `No se pudo hablar con GenieACS NBI: ${e instanceof Error ? e.message : e}`;
@@ -607,7 +755,12 @@ export class OnuTr069ConfigService {
         key?: string;
         enabled?: boolean;
       }>;
-      ethernet?: Array<{ index: number; enabled?: boolean }>;
+      ethernet?: Array<{
+        index: number;
+        enabled?: boolean;
+        vlanId?: number | null;
+        vlanMode?: 'tag' | 'untag' | 'hybrid';
+      }>;
       webUsers?: Array<{
         index: number;
         username?: string;
@@ -639,13 +792,33 @@ export class OnuTr069ConfigService {
     const deviceId = deviceIdString(device._id);
     const parsed = this.parseDevice(device);
     const params: Array<[string, string | number | boolean, string?]> = [];
+    const omciNotes: string[] = [];
 
     if (dto.refresh) {
-      // First Inform is often DeviceInfo-only; pull LAN subtree (WiFi/ETH).
+      // First Inform is often DeviceInfo-only; pull LAN + web-user trees.
+      const refreshTargets = [
+        'InternetGatewayDevice.LANDevice',
+        'InternetGatewayDevice.DeviceInfo.X_FH_Account',
+        'InternetGatewayDevice.UserInterface',
+        'Device.Users',
+      ];
+      for (const objectName of refreshTargets) {
+        try {
+          await client.refreshObject(deviceId, objectName);
+        } catch {
+          /* best-effort per vendor tree */
+        }
+      }
+      // FiberHome a veces solo descubre el path; fuerza get de las hojas.
       try {
-        await client.refreshObject(deviceId, 'InternetGatewayDevice.LANDevice');
+        await client.getParameterValues(deviceId, [
+          'InternetGatewayDevice.DeviceInfo.X_FH_Account.X_FH_WebUserInfo.WebSuperUsername',
+          'InternetGatewayDevice.DeviceInfo.X_FH_Account.X_FH_WebUserInfo.WebSuperPassword',
+          'InternetGatewayDevice.DeviceInfo.X_FH_Account.X_FH_WebUserInfo.WebUsername',
+          'InternetGatewayDevice.DeviceInfo.X_FH_Account.X_FH_WebUserInfo.WebPassword',
+        ]);
       } catch {
-        await client.refreshObject(deviceId, '');
+        /* optional */
       }
     }
 
@@ -665,15 +838,71 @@ export class OnuTr069ConfigService {
       }
     }
 
+    const ethVlanPatches = (dto.ethernet ?? []).filter(
+      (e) =>
+        Object.prototype.hasOwnProperty.call(e, 'vlanId') ||
+        Object.prototype.hasOwnProperty.call(e, 'vlanMode'),
+    );
+
     for (const e of dto.ethernet ?? []) {
       const port = parsed.ethernet.find((x) => x.index === e.index);
-      if (!port) {
+      // VLAN OMCI no requiere que el puerto exista aún en el árbol ACS.
+      if (!port && e.enabled != null) {
         throw new BadRequestException(
           `Ethernet index ${e.index} no encontrado`,
         );
       }
-      if (e.enabled != null && port.enablePath) {
+      if (port && e.enabled != null && port.enablePath) {
         params.push([port.enablePath, e.enabled, 'xsd:boolean']);
+      }
+    }
+
+    if (ethVlanPatches.length > 0) {
+      const deviceRepo =
+        await this.tenantConnections.getNetworkDeviceRepository(schema);
+      const olt = await deviceRepo.findOne({ where: { id: onu.oltId } });
+      if (
+        !olt ||
+        !isManagedOltDevice(olt.type, olt.subtype) ||
+        !olt.mgmtHost ||
+        !olt.mgmtUsername ||
+        !olt.mgmtPassword
+      ) {
+        throw new BadRequestException(
+          'OLT sin credenciales para aplicar VLAN de puerto Ethernet (OMCI)',
+        );
+      }
+      if (isHuaweiOltDevice(olt.type, olt.subtype)) {
+        throw new BadRequestException(
+          'Asignar VLAN a puerto Ethernet vía OMCI aún no está soportado en Huawei',
+        );
+      }
+      if (!onu.onuIf) {
+        throw new BadRequestException('ONU sin interfaz OLT (onuIf)');
+      }
+      for (const e of ethVlanPatches) {
+        const vlanSpecified = Object.prototype.hasOwnProperty.call(
+          e,
+          'vlanId',
+        );
+        const vlanId = vlanSpecified ? (e.vlanId ?? null) : null;
+        if (!vlanSpecified) continue;
+        const mode = e.vlanMode ?? 'untag';
+        const omci = await this.zteOlt.applyOnuEthPortVlan({
+          ...this.zteConn(olt),
+          onuIf: onu.onuIf,
+          portIndex: e.index,
+          vlanId,
+          mode,
+          subtypeHint: olt.subtype,
+          firmwareHint: oltFirmwareHint(olt),
+        });
+        if (!omci.ok) {
+          throw new BadRequestException(
+            omci.error || `No se pudo aplicar VLAN en eth_0/${e.index}`,
+          );
+        }
+        if (omci.message) omciNotes.push(omci.message);
       }
     }
 
@@ -692,7 +921,7 @@ export class OnuTr069ConfigService {
       }
     }
 
-    if (params.length === 0 && !dto.refresh) {
+    if (params.length === 0 && !dto.refresh && omciNotes.length === 0) {
       throw new BadRequestException('No hay cambios para aplicar');
     }
 
@@ -704,20 +933,23 @@ export class OnuTr069ConfigService {
 
     // Re-read after apply (may still be stale if 202 queued)
     const view = await this.getConfig(user, onuId);
+    const omciSuffix = omciNotes.length ? ` · ${omciNotes.join(' · ')}` : '';
     return {
       ok: true,
       taskStatus,
       queued: taskStatus === 202,
       message:
         taskStatus === 202
-          ? 'Cambios encolados; se aplicarán en el próximo Inform o Connection Request.'
+          ? `Cambios encolados; se aplicarán en el próximo Inform o Connection Request.${omciSuffix}`
           : taskStatus === 200
-            ? 'Cambios aplicados vía TR069.'
+            ? `Cambios aplicados vía TR069.${omciSuffix}`
             : dto.refresh
               ? parsedAfterRefreshEmpty(view)
-                ? 'Refresh pedido. Si Wi‑Fi sigue vacío, espera el Inform y pulsa «Refrescar desde ONU» de nuevo.'
-                : 'Parámetros actualizados desde la ONU.'
-              : 'OK',
+                ? 'Refresh pedido. Si Wi‑Fi / usuarios siguen vacíos, espera el Inform y pulsa «Refrescar desde ONU» de nuevo.'
+                : `Parámetros actualizados desde la ONU.${omciSuffix}`
+              : omciNotes.length
+                ? omciNotes.join(' · ')
+                : 'OK',
       config: view,
     };
   }
@@ -1249,6 +1481,15 @@ export class OnuTr069ConfigService {
       }
       const deviceId = deviceIdString(device._id);
 
+      const notes: string[] = [];
+      const credNote = await this.ensureConnReqCredentials(
+        client,
+        deviceId,
+        device,
+        onu.sn,
+      );
+      if (credNote) notes.push(credNote);
+
       // Ensure WAN tree is present
       try {
         await client.refreshObject(deviceId, 'InternetGatewayDevice.WANDevice');
@@ -1257,16 +1498,41 @@ export class OnuTr069ConfigService {
         /* continue with what we have */
       }
 
-      const conn = this.findWanIpConnection(device);
-      if (!conn) {
-        return 'WAN en DB; no se encontró WANIPConnection en el árbol TR069 — pulsa Refrescar en Configurar ONU';
+      const withNotes = (msg: string) => [...notes, msg].join(' · ');
+
+      const found = this.findWanIpConnection(device, onu.mgmtIp);
+      if (!found) {
+        return withNotes(
+          'WAN en DB; no se encontró WANIPConnection en el árbol TR069 — pulsa Refrescar en Configurar ONU',
+        );
+      }
+      if (found.isMgmt) {
+        // La única conexión WAN del CPE es la de gestión. Escribir la IP de
+        // servicio encima deja a la ONU sin camino de gestión y sin TR-069:
+        // el servicio necesita su propia conexión, no reutilizar esta.
+        return withNotes(
+          'WAN en DB; el CPE sólo expone la conexión de gestión ' +
+            `(${onu.mgmtIp}) — hace falta crear una WAN de servicio aparte, no se toca`,
+        );
+      }
+      const { conn, connDevice } = found;
+
+      // Sin refrescar la conexión, GenieACS conoce el nodo pero no sus hojas y
+      // no hay forma de saber qué acepta este CPE.
+      try {
+        await client.refreshObject(deviceId, connDevice);
+        device = (await client.findBySerial(onu.sn)) ?? device;
+      } catch {
+        /* seguimos con lo que haya */
       }
 
       const dns = wan.wanDns2 ? `${wan.wanDns1},${wan.wanDns2}` : wan.wanDns1;
-      const params: Array<[string, string | number | boolean, string?]> = [
+      // Hojas estándar TR-098. NATEnabled es lo que hace que LAN y WiFi salgan
+      // por la IP WAN; sin él la ONU enruta pero nadie traduce.
+      const core: Array<[string, string | number | boolean, string?]> = [
         [`${conn}.Enable`, true, 'xsd:boolean'],
-        // Modo router por defecto: la conexión WAN queda enrutada (NAT/IP_Routed)
         [`${conn}.ConnectionType`, 'IP_Routed', 'xsd:string'],
+        [`${conn}.NATEnabled`, true, 'xsd:boolean'],
         [`${conn}.AddressingType`, 'Static', 'xsd:string'],
         [`${conn}.ExternalIPAddress`, wan.wanIp, 'xsd:string'],
         [`${conn}.SubnetMask`, wan.wanMask, 'xsd:string'],
@@ -1274,40 +1540,155 @@ export class OnuTr069ConfigService {
         [`${conn}.DNSServers`, dns, 'xsd:string'],
       ];
 
-      // Vendor VLAN id (Huawei / ZTE common leaves)
-      params.push([`${conn}.X_HW_VLAN`, wan.wanVlan, 'xsd:unsignedInt']);
-      params.push([`${conn}.X_ZTE-COM_VLANID`, wan.wanVlan, 'xsd:unsignedInt']);
+      const result = await client.setParameterValues(deviceId, core);
+      if (result.status === 200) notes.push('WAN estática aplicada por TR069');
+      else if (result.status === 202) notes.push('WAN encolada en ACS');
+      else notes.push(`WAN TR069 status ${result.status}`);
 
-      const result = await client.setParameterValues(deviceId, params);
-      return result.status === 200
-        ? 'WAN estática aplicada por TR069'
-        : result.status === 202
-          ? 'WAN encolada en ACS (Connection Request)'
-          : `WAN TR069 status ${result.status}`;
+      // La VLAN va en una hoja propietaria distinta por fabricante y sólo se
+      // manda si el árbol la expone: SetParameterValues es atómico, así que una
+      // hoja inexistente tumbaría también el NAT si fuese en el mismo lote.
+      const vlanLeaf = this.findWanVlanLeaf(device, conn, connDevice);
+      if (!vlanLeaf) {
+        notes.push('VLAN WAN sin hoja TR069 conocida (queda la de OMCI)');
+      } else {
+        try {
+          const vlanParams: Array<[string, string | number | boolean, string]> =
+            [[vlanLeaf, wan.wanVlan, 'xsd:unsignedInt']];
+          // Sin el marcado activo el CPE guarda el VLAN ID pero saca la WAN sin
+          // etiqueta, que en esta red es lo mismo que dejarla muda.
+          const enableLeaf = `${conn}.VLANEnable`;
+          if (
+            vlanLeaf === `${conn}.VLANID` &&
+            genieNodeExists(device, enableLeaf)
+          ) {
+            vlanParams.push([enableLeaf, true, 'xsd:boolean']);
+          }
+          const r = await client.setParameterValues(deviceId, vlanParams);
+          notes.push(
+            r.status === 200
+              ? `VLAN ${wan.wanVlan} aplicada (${vlanLeaf.split('.').pop()})`
+              : `VLAN ${wan.wanVlan} encolada (status ${r.status})`,
+          );
+        } catch (e) {
+          notes.push(
+            `VLAN WAN falló: ${e instanceof Error ? e.message : String(e)}`,
+          );
+        }
+      }
+
+      return notes.join(' · ');
     } catch (e) {
       return `WAN en DB; TR069 falló: ${e instanceof Error ? e.message : e}`;
     }
   }
 
-  private findWanIpConnection(device: Record<string, unknown>): string | null {
+  /**
+   * Deja al ACS en condiciones de forzar una conexión con el CPE.
+   *
+   * Sin estas credenciales el CPE responde 401 a la petición de conexión y todo
+   * lo que mandemos se queda en cola hasta el siguiente Inform periódico, que en
+   * algunos modelos pasa de la hora. Se fija una sola vez por equipo y a partir
+   * de ahí las órdenes se aplican al momento.
+   */
+  private async ensureConnReqCredentials(
+    client: GenieAcsNbiClient,
+    deviceId: string,
+    device: Record<string, unknown>,
+    serial: string,
+  ): Promise<string | null> {
+    const root = detectDataModelRoot(device);
+    const base = `${root}.ManagementServer`;
+    const usernamePath = `${base}.ConnectionRequestUsername`;
+
+    // Si ya hay usuario puesto, damos por hecho que la clave la pusimos con él.
+    if (strVal(genieGet(device, usernamePath))) return null;
+
+    // El nodo tiene que existir en el árbol: escribir a ciegas sólo genera un
+    // fallo que GenieACS reintenta para siempre.
+    if (!genieNodeExists(device, usernamePath)) {
+      try {
+        await client.refreshObject(deviceId, base);
+      } catch {
+        /* seguimos: puede llegar en el próximo Inform */
+      }
+      return 'credenciales de conexión: falta descubrir ManagementServer';
+    }
+
+    try {
+      const r = await client.setParameterValues(
+        deviceId,
+        buildConnReqParameterValues(serial, root),
+      );
+      return r.status === 200
+        ? 'credenciales de conexión fijadas'
+        : `credenciales de conexión encoladas (status ${r.status})`;
+    } catch (e) {
+      return `credenciales de conexión: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  /**
+   * Hoja donde vive el VLAN ID de la WAN. FiberHome la cuelga del
+   * WANConnectionDevice (`X_FH_WANGponLinkConfig`), Huawei y ZTE de la propia
+   * conexión, y algunos modelos (HG6246R) sólo publican el `VLANID` estándar.
+   * Las propietarias van primero: cuando conviven, es la que manda. Se devuelve
+   * sólo si el CPE la publica.
+   */
+  private findWanVlanLeaf(
+    device: Record<string, unknown>,
+    conn: string,
+    connDevice: string,
+  ): string | null {
+    const candidates = [
+      `${connDevice}.X_FH_WANGponLinkConfig.VLANID`,
+      `${conn}.X_HW_VLAN`,
+      `${conn}.X_ZTE-COM_VLANID`,
+      `${conn}.X_CT-COM_VLAN`,
+      `${conn}.VLANID`,
+    ];
+    for (const path of candidates) {
+      if (genieNodeExists(device, path)) return path;
+    }
+    return null;
+  }
+
+  /**
+   * Conexión WAN sobre la que escribir el servicio. Se descarta la de gestión
+   * (la que lleva la IP de mgmt): es por donde viaja el TR-069 y sobreescribirla
+   * deja la ONU incomunicada. Si es la única, se avisa en vez de tocarla.
+   */
+  private findWanIpConnection(
+    device: Record<string, unknown>,
+    mgmtIp?: string | null,
+  ): { conn: string; connDevice: string; isMgmt: boolean } | null {
     const wanDevBase = 'InternetGatewayDevice.WANDevice';
+    const candidates: WanConnectionCandidate[] = [];
     for (const wd of genieChildIndices(device, wanDevBase)) {
       const connBase = `${wanDevBase}.${wd}.WANConnectionDevice`;
       for (const cd of genieChildIndices(device, connBase)) {
-        const ipBase = `${connBase}.${cd}.WANIPConnection`;
+        const connDevice = `${connBase}.${cd}`;
+        const ipBase = `${connDevice}.WANIPConnection`;
         for (const ip of genieChildIndices(device, ipBase)) {
-          return `${ipBase}.${ip}`;
+          const conn = `${ipBase}.${ip}`;
+          candidates.push({
+            conn,
+            connDevice,
+            externalIp: strVal(genieGet(device, `${conn}.ExternalIPAddress`)),
+            name: strVal(genieGet(device, `${conn}.Name`)),
+          });
         }
         // Sometimes only PPP exists — skip
       }
     }
-    // Fallback well-known path
-    const fallback =
-      'InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1';
-    if (genieGet(device, `${fallback}.Enable`) || genieGet(device, fallback)) {
-      return fallback;
-    }
-    return fallback; // still try — GenieACS may create on set
+
+    const picked = pickServiceWanConnection(candidates, mgmtIp);
+    if (!picked) return null;
+    return {
+      conn: picked.chosen.conn,
+      connDevice: picked.chosen.connDevice,
+      isMgmt: picked.isMgmt,
+    };
   }
 }
 

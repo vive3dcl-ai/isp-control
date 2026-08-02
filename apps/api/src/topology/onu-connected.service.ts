@@ -27,6 +27,7 @@ import {
   type AuthorizeProbeStep,
 } from './onu-type-olt-sync.service';
 import { vendorFromSn } from './zte-olt-onu-type.util';
+import { octetsRateBytesPerSec } from './onu-traffic-rate.util';
 
 export type OnuImportSnapshot = {
   onuIf: string;
@@ -1135,6 +1136,10 @@ export class OnuConnectedService {
         message: lastError,
         typeName: cand.name,
       });
+
+      // El índice ocupado no depende del tipo: seguir probando los demás solo
+      // repite el mismo rechazo y acaba culpando al modelo de ONU.
+      if (result.code === 'onu_index_taken') break;
     }
 
     if (!authorizedType || !onuIf) {
@@ -1784,11 +1789,18 @@ export class OnuConnectedService {
       if (prev && atMs > prev.atMs) {
         const dt = (atMs - prev.atMs) / 1000;
         if (dt >= 1.5) {
-          const dIn = counterDelta(prev.inOctets, snap.inOctets);
-          const dOut = counterDelta(prev.outOctets, snap.outOctets);
-          const uploadBps = (dIn * 8) / dt;
-          const downloadBps = (dOut * 8) / dt;
-          if (Number.isFinite(downloadBps) && downloadBps >= 0) {
+          // OLT input = upload (tx_bps); OLT output = download (rx_bps)
+          const uploadBps = octetsRateBytesPerSec({
+            prevOctets: prev.inOctets,
+            nextOctets: snap.inOctets,
+            seconds: dt,
+          });
+          const downloadBps = octetsRateBytesPerSec({
+            prevOctets: prev.outOctets,
+            nextOctets: snap.outOctets,
+            seconds: dt,
+          });
+          if (downloadBps != null) {
             sampleRows.push({
               onuId: row.id,
               kind: 'rx_bps',
@@ -1796,7 +1808,7 @@ export class OnuConnectedService {
               sampledAt: now,
             });
           }
-          if (Number.isFinite(uploadBps) && uploadBps >= 0) {
+          if (uploadBps != null) {
             sampleRows.push({
               onuId: row.id,
               kind: 'tx_bps',
@@ -2164,9 +2176,12 @@ export class OnuConnectedService {
       wanVlanId = persisted.vlan;
     }
 
+    const client = row ? await this.findClientForOnu(schema, row.id) : null;
+
     return {
       probedAt: live?.probedAt ?? row?.lastProbedAt?.toISOString() ?? null,
       fromDatabase: !!row,
+      client,
       onu: {
         ...persisted,
         ...(o
@@ -2219,6 +2234,36 @@ export class OnuConnectedService {
         speedProfile: { download: null, upload: null },
         imageUrl: null,
       },
+    };
+  }
+
+  /**
+   * Cliente dueño de la ONU según `client_services.onu_id`.
+   *
+   * No se resuelve desde el mapa de red: ese endpoint descarta los servicios
+   * sin coordenadas, así que un cliente sin geolocalizar aparecía como
+   * "Sin cliente" aunque el servicio estuviera ligado.
+   */
+  private async findClientForOnu(schema: string, onuDbId: string) {
+    const serviceRepo =
+      await this.tenantConnections.getClientServiceRepository(schema);
+    const service = await serviceRepo
+      .createQueryBuilder('s')
+      .leftJoinAndSelect('s.client', 'c')
+      .where('s.onu_id = :onuDbId', { onuDbId })
+      .andWhere("s.status != 'ended'")
+      .orderBy('s.createdAt', 'DESC')
+      .getOne();
+    if (!service?.client) return null;
+
+    const c = service.client;
+    const person = [c.firstName, c.lastName].filter(Boolean).join(' ').trim();
+    return {
+      clientId: c.id,
+      serviceId: service.id,
+      label: person || c.companyName || 'Cliente',
+      serviceName: service.name ?? null,
+      serviceStatus: service.status ?? null,
     };
   }
 
@@ -2676,12 +2721,18 @@ export class OnuConnectedService {
         if (prev && atMs > prev.atMs) {
           const dt = (atMs - prev.atMs) / 1000;
           if (dt >= 5) {
-            const dIn = counterDelta(prev.inOctets, snap.inOctets);
-            const dOut = counterDelta(prev.outOctets, snap.outOctets);
             // OLT input = upload (tx_bps); OLT output = download (rx_bps)
-            const uploadBps = (dIn * 8) / dt;
-            const downloadBps = (dOut * 8) / dt;
-            if (Number.isFinite(downloadBps) && downloadBps >= 0) {
+            const uploadBps = octetsRateBytesPerSec({
+              prevOctets: prev.inOctets,
+              nextOctets: snap.inOctets,
+              seconds: dt,
+            });
+            const downloadBps = octetsRateBytesPerSec({
+              prevOctets: prev.outOctets,
+              nextOctets: snap.outOctets,
+              seconds: dt,
+            });
+            if (downloadBps != null) {
               sampleRows.push({
                 onuId: row.id,
                 kind: 'rx_bps',
@@ -2689,7 +2740,7 @@ export class OnuConnectedService {
                 sampledAt: now,
               });
             }
-            if (Number.isFinite(uploadBps) && uploadBps >= 0) {
+            if (uploadBps != null) {
               sampleRows.push({
                 onuId: row.id,
                 kind: 'tx_bps',
@@ -2859,15 +2910,6 @@ export class OnuConnectedService {
   }
 }
 
-function counterDelta(prev: number, next: number): number {
-  if (next >= prev) return next - prev;
-  // 32-bit wrap
-  if (prev <= 0xffffffff && next <= 0xffffffff) {
-    return next + (0xffffffff - prev) + 1;
-  }
-  // 64-bit wrap (approx)
-  return next;
-}
 
 async function onuRepoUpdateSafe(
   onuRepo: Awaited<ReturnType<TenantConnectionService['getOnuRepository']>>,

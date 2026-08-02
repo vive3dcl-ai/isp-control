@@ -2,11 +2,13 @@ import {
   ArrayMaxSize,
   IsArray,
   IsBoolean,
+  IsIn,
   IsInt,
   IsOptional,
   IsString,
   MaxLength,
   Min,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -41,6 +43,18 @@ export class Tr069EthPatchDto {
   @IsOptional()
   @IsBoolean()
   enabled?: boolean;
+
+  /** null = quitar binding OMCI del puerto. */
+  @IsOptional()
+  @ValidateIf((_, v) => v != null)
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  vlanId?: number | null;
+
+  @IsOptional()
+  @IsIn(['tag', 'untag', 'hybrid'])
+  vlanMode?: 'tag' | 'untag' | 'hybrid';
 }
 
 export class Tr069WebUserPatchDto {

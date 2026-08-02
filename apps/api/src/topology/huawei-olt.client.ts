@@ -541,7 +541,17 @@ export class HuaweiOltClient {
     }
   }
   async upsertVlan(
-    params: CliParams & { vlanId: number; description?: string },
+    params: CliParams & {
+      vlanId: number;
+      description?: string;
+      /**
+       * Uplink ifNames that must carry this VLAN upstream. Without these the
+       * VLAN exists on the OLT but never leaves it, so ONUs cannot reach their
+       * gateway.
+       */
+      tagUplinks?: string[];
+      untagUplinks?: string[];
+    },
   ) {
     if (
       !Number.isInteger(params.vlanId) ||
@@ -549,12 +559,59 @@ export class HuaweiOltClient {
       params.vlanId > 4094
     )
       return { ok: false, error: 'VLAN ID inválido (1–4094)' };
+    const id = params.vlanId;
     return this.write(params, async (io) => {
-      await this.config(io, `vlan ${params.vlanId} smart`);
+      await this.config(io, `vlan ${id} smart`);
       await io.read();
       await io.send('quit');
       await io.read();
-      return `VLAN ${params.vlanId} guardada`;
+
+      // Reported rather than applied silently: a VLAN that fails to reach the
+      // uplink looks created but strands every ONU behind it.
+      const warnings: string[] = [];
+      const tagged: string[] = [];
+      const untagged: string[] = [];
+      const onUplink = async (ifName: string, command: string) => {
+        await io.send(`interface ${ifName}`);
+        if (cliRejected(await io.read())) {
+          warnings.push(`uplink ${ifName}: no existe en la OLT`);
+          return false;
+        }
+        await io.send(command);
+        const rejected = cliRejected(await io.read());
+        await io.send('quit');
+        await io.read();
+        return !rejected;
+      };
+
+      for (const ifName of new Set(params.tagUplinks ?? [])) {
+        if (await onUplink(ifName, `port trunk allow-pass vlan ${id}`)) {
+          tagged.push(ifName);
+        } else {
+          warnings.push(`no se pudo etiquetar en el uplink ${ifName}`);
+        }
+      }
+      for (const ifName of new Set(params.untagUplinks ?? [])) {
+        if (await onUplink(ifName, `undo port trunk allow-pass vlan ${id}`)) {
+          untagged.push(ifName);
+        } else {
+          warnings.push(`no se pudo quitar del uplink ${ifName}`);
+        }
+      }
+
+      const detail = [
+        tagged.length ? `uplinks +${tagged.join(', ')}` : null,
+        untagged.length ? `uplinks -${untagged.join(', ')}` : null,
+      ]
+        .filter(Boolean)
+        .join(' · ');
+
+      return [
+        `VLAN ${id} guardada${detail ? ` (${detail})` : ''}`,
+        warnings.length ? `— ${warnings.join('; ')}` : null,
+      ]
+        .filter(Boolean)
+        .join(' ');
     });
   }
   async deleteVlan(params: CliParams & { vlanId: number }) {

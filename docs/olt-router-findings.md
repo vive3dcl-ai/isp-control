@@ -576,6 +576,251 @@ Los parsers se **ampliaron**, no se reemplazaron: `zte-olt-onu.util.ts`, `zte-ol
 
 ---
 
+## P8 — “Esperando Inform”: el CWMP del ACS estaba en un agujero negro (2026-08-02)
+
+### P8.1 DNAT del puerto CWMP a loopback → ningún Inform llegó nunca — RESUELTO Y VERIFICADO EN PRODUCCIÓN
+- **Verificación (2026-08-02, tras desplegar `vive3d/isp-control-vpn:latest`
+  `sha256:1ebc8283…`):** desde el túnel, `curl http://10.69.1.1:14501/` responde
+  `HTTP/1.1 405 Method Not Allowed` con `Allow: POST` — la respuesta propia del
+  CWMP de GenieACS. Antes: timeout. El camino ONU→ACS ya está abierto.
+
+- **Archivos:** `deploy/vpn-concentrator/entrypoint.sh` (`sync_tunnel_gateway_ips`), `docker-compose.prod.yml` (`VPN_ACS_HOST: 127.0.0.1`)
+- **Qué:** El concentrador publica el CWMP con
+  `iptables -t nat -A PREROUTING -d 10.69.x.1 -p tcp --dport 14501 -j DNAT --to-destination 127.0.0.1:14501`.
+  Linux descarta como **marciano** todo paquete que entra por `tun+`/`wg0` y acaba enrutado a `127.0.0.0/8`, salvo que se active `net.ipv4.conf.<dev>.route_localnet=1` — que no se activa en ninguna parte del repo. El SYN de cada ONU muere ahí, sin log y sin RST.
+- **Lo peor:** el DNAT además **sobra**. Desde `27c20aa` GenieACS comparte netns con el concentrador (`network_mode: service:vpn-concentrator`) y CWMP escucha en `0.0.0.0:14501`, así que `10.69.x.1` ya es una IP local y el paquete se entregaría solo. La regla convierte un paquete entregable en uno descartado.
+- **Evidencia (producción, desde el túnel, cliente 10.69.1.3):**
+
+  | Destino | Resultado |
+  |---------|-----------|
+  | `ping 10.69.1.1` | 0% pérdida |
+  | `10.69.1.1:1194` (OpenVPN, mismo netns) | abierto |
+  | `10.69.1.1:3000` (UI GenieACS, mismo netns) | abierto — **HTTP 200** |
+  | `10.69.1.1:14501` (CWMP, **único puerto con DNAT**) | timeout |
+  | `10.69.1.1:7557` / `:7567` | cerrado (correcto, `isolate_acs_admin_ports`) |
+
+  GenieACS está vivo y el netns es alcanzable por TCP desde el túnel; falla exactamente y solo el puerto que pasa por el DNAT.
+- **Por qué el panel no avisa:** el probe del ACS entra por `eth0` (`vpn-concentrator:14501`, 172.28.10.20). El DNAT solo matchea `-d <IP de gateway del túnel>`, así que el probe no lo toca y el dashboard reporta el ACS sano mientras ninguna ONU puede informar.
+- **Cuándo se rompió:** `27c20aa` metió GenieACS en el netns del concentrador y puso `VPN_ACS_HOST: 127.0.0.1` en el compose (el entrypoint aún tenía default `acs`); `f264077` cambió también el default del entrypoint a `127.0.0.1`. Antes el ACS era un contenedor aparte en `isp_net` con IP enrutable y el DNAT funcionaba.
+- **Fix:** si el ACS es loopback y CWMP escucha en el comodín (se lee de `/proc/net/tcp`, sin depender de `ss`/`netstat`), no se instala DNAT y se purgan los que dejaron arranques anteriores; si el listener fuera loopback-only se mantiene el DNAT pero activando `route_localnet` en `tun0/tun1/wg0`.
+- **Comprobación rápida en el servidor** (se auto-revierte en ≤30 s, cuando el sync reinstala la regla):
+  ```sh
+  docker exec isp-control-vpn sh -c \
+    'iptables -t nat -S PREROUTING | grep -- "--dport 14501" | sed "s/^-A /-D /" \
+     | while read r; do iptables -t nat $r; done'
+  # y desde el túnel, en el acto:  curl -m5 http://10.69.1.1:14501/
+  ```
+
+### P8.4 Estado del ACS de producción: nunca recibió un solo Inform
+- **Medido por SSH en el servidor (aaPanel + Docker), 2026-08-02:**
+  - La base `genieacs` en `isp-control-acs-mongo` solo tiene las colecciones
+    `cache`, `locks`, `tasks`. **No existe la colección `devices`**, que GenieACS
+    crea al primer Inform → ningún CPE ha informado nunca contra este stack.
+  - `faults=0`, `tasks=0`, `db.devices.countDocuments({})=0`.
+  - `genieacs-cwmp.log` solo tiene los `Worker listening; address="0.0.0.0" port=14501`
+    del arranque; no hay access log.
+  - El volumen `isp-control_acs_mongo` nace el **2026-07-28**; existe otro,
+    `isp-control_lab_mongo_data`, congelado el **2026-07-27** (el laboratorio
+    `deploy/lab-tr069`). El “antes funcionaba” corresponde a ese entorno de
+    laboratorio, no a este stack de producción.
+- **Conclusión:** en producción el aprovisionamiento automático por TR-069 nunca
+  llegó a completarse ni una vez; no es una regresión que rompiera un flujo que
+  aquí estuviera vivo.
+
+### P8.5 Camino VLAN de gestión → CWMP: abierto y verificado
+- **Método:** el contenedor no tiene `/proc/net/nf_conntrack` (módulo no cargado
+  en su netns), así que una sonda basada en conntrack da **falso negativo**. Hay
+  que leer `/proc/net/tcp`: puerto en hex (`14501` = `38A5`) e IPs en
+  little-endian (`0101450A` = `10.69.1.1`).
+- **Prueba:** `POST http://10.69.1.1:14501/` desde el 4011 con
+  `src-address=30.30.20.1` (gateway de la VLAN 401). Sockets al 14501 en el
+  concentrador: **0 antes → 1 después**, `desde 172.10.220.2 estado=TIME_WAIT`
+  (el 4011 tras su masquerade). La conexión TCP se completa y se cierra limpia.
+- **Conclusión:** de la VLAN de gestión al ACS no queda nada roto. El único tramo
+  que falla es ONU → VLAN 401 (`rx-pkt=0` en `vlan_401`, 0 MACs en la OLT).
+
+### P8.2 El camino L3 desde la VLAN de gestión sí estaba bien
+- Descartado como causa: el 4011 enmascara `30.30.20.0/24` hacia `Wan_RedCentral` (única regla srcnat), y la ruta al ACS sale justo por ahí, así que el Inform llega al concentrador con origen `172.10.220.2`, red que el túnel sí publica. `ping 10.69.1.1` con `src-address=30.30.20.1` da 0% de pérdida.
+- Que el router BGP no tenga rutas a `30.30.20.0/24` / `40.40.20.0/24` es irrelevante por ese masquerade. No hace falta publicar esas redes en el túnel.
+
+### P8.3 La plantilla OMCI del panel no abre camino de gestión en la ONU — PENDIENTE
+- **Archivo:** `zte-olt.client.ts` `applyOnuTr069Mgmt`
+- **Qué:** Sobre `gpon-onu_1/2/4:12` (SN `FHTT967F69A0`, `Config state: success`, sin config-fail) el running-config queda así:
+  - `service-port 2 vport 2 user-vlan 401 vlan 401` y `gemport 2 tcont 2` — pero **no hay `flow 2 pri 2 vlan 401` ni `gemport 2 flow 2`**. El código los manda “best-effort” y **nunca mira la respuesta**, así que el gemport de gestión se queda sin flow y la ONU no sabe qué cursar por él.
+  - La IP de gestión va a `ip-host 2`, pero el único etiquetado que se aplica es `vlan-filter veip 1 pri 2 vlan 401`. **No existe `vlan-filter iphost 2`**, así que el tráfico del ip-host sale sin etiqueta y lo come `untag-filter discard`.
+  - Causa de fondo: el modo router del cliente (`wan-ip 1 … host 1`) ocupa el índice 1 y empuja la gestión al `ip-host 2`.
+- **Medición:** `show mac vlan` en la OLT → **0 MACs** en 401, 402, 701 y 702 (todas VLAN creadas por el panel) frente a 65/56/40/30 en 350/351/500/501 (creadas por SmartOLT). Ninguna de las ~12 ONUs aprovisionadas por el panel cursa tráfico, ni de gestión ni de cliente.
+- **No es incompatibilidad de modelo:** el mismo HG6244C funciona en 10 ONUs de la VLAN 500 y 1 de la 350. La forma que sí funciona es la de SmartOLT: `switchport-bind switch_0/1 iphost 1` + `ip-host 1 …` + `vlan-filter-mode iphost 1 …` + `vlan-filter iphost 1 pri 0 vlan N`, con la VLAN en el flow del gemport.
+- **No es regresión de `b3e49a7`:** el diff de `applyOnuTr069Mgmt` contra `9fd0a47` solo cambia la resolución de ifName (que en C320 devuelve el mismo string), el fallback C6xx y los defaults de credenciales. `ip-host 2`, `veip 1`, `flow 2 pri`, `gemport 2 flow 2` y `vlan-filter veip` no se tocan desde el commit inicial.
+- **Acción:** decidir plantilla (alinear con la forma SmartOLT vs arreglar gestión sobre `ip-host 2`) y, en cualquier caso, dejar de devolver “TR069 aplicado” cuando esos comandos son rechazados.
+- **Uplinks descartados:** `show vlan 401` incluye `xgei_1/3/2`, el mismo uplink que usa la 350. El etiquetado de uplink no era el problema aquí.
+
+### P8.6 La única ONU que informó en la vida lo hizo con una WAN puesta a mano, no por OMCI — CONFIRMA P8.3
+Forense sobre el lab local (`isp-control-lab-mongo`, volumen `isp-control_lab_mongo_data`), que es el entorno donde “antes funcionaba” con túnel inverso.
+
+- **Un solo device en toda la historia del ACS del lab:** `00259E-HG8245W5-48575443314E23A3` (Huawei HG8245W5, `HWTC314E23A3`, FW `V5R019C10S170`). Alta 2026-07-24 11:32, último Inform 11:43. Once minutos de vida y nunca volvió.
+- **Por dónde llegó al ACS:** una **única WAN enrutada `1_INTERNET_R_VID_500`** — VLAN **500, la de servicio**, no una VLAN de gestión:
+  - `AddressingType = DHCP` → `ExternalIPAddress = 10.20.10.205`, `DefaultGateway = 10.20.10.1`, `DNSServers = 10.20.10.1,8.8.8.8`, `NATEnabled = true`, `ConnectionStatus = Connected`.
+  - Esa IP sale del **propio 4011**: servidor `dhcp1` sobre `vlan500_quilicura_dhcp` con pool `dhcp_pool0 = 10.20.10.2-10.20.10.254`.
+  - No hay segunda WAN, ni WAN de gestión, ni IP estática. El camino de gestión y el de cliente eran **el mismo**.
+- **Quién creó esa WAN:** el `DeviceLog` de la propia ONU lo deja por escrito. A los 2-3 minutos de arrancar, alguien entra por la web como `telecomadmin` y la crea a mano:
+  - `00:02:32 Terminal:WEB(192.168.100.66) Type:Login Username:telecomadmin`
+  - `00:03:12 Terminal:WEB(192.168.100.66) Type:Set WANDevice.WANConnectionDevice.WANIPConnection:1.1.1 Enable:1 X_HW_IPv4Enable:1 …`
+  - y **después** de eso: `Terminal:ACS(10.69.70.2) Result:Success Type:Authorization`.
+- **El panel sí encoló trabajo TR-069, pero llegó tarde:** 12 tasks (`refreshObject` / `setParameterValues`) siguen *pendientes* desde el 24-jul contra ese device. Se pusieron en cola y la ONU nunca volvió a informar para recogerlas. `presets`, `provisions` y `files` están a 0.
+- **Conclusión:** el aprovisionamiento automático **nunca ha empujado una red de gestión utilizable a una ONU**. El único Inform de la historia del proyecto lo produjo una WAN creada a mano por la web de la ONU, sobre la VLAN de servicio y con DHCP. Coincide con lo que se ve en producción (P8.3): las ONUs que cursan tráfico son las de SmartOLT en 350/500, y ninguna de las ~12 del panel.
+- **Agravante en el 4011 de hoy:** `vlan_401` (`30.30.20.1/24`, la de gestión del panel) **no tiene servidor DHCP**. Los únicos son `dhcp1`/`dhcp2` sobre `vlan500_quilicura_dhcp` y `vlan501_san_jose_dhcp`. La gestión depende al 100 % de la IP estática por OMCI, que es justo lo que P8.3 demuestra que no se aplica. Cero leases en `30.30.20.0/24` y `40.40.20.0/24`.
+- **Acción:** replicar el modelo que sí funcionó — gestión sobre la VLAN de servicio con DHCP — o, si se mantiene la VLAN de gestión dedicada, levantar DHCP en `vlan_401` **y** arreglar la plantilla OMCI de P8.3. Hoy no se sostiene ninguna de las dos.
+
+### P8.7 Plantilla de gestión: qué se probó en la ONU de test y qué rechaza la OLT
+Intento de replicar en `gpon-onu_1/2/4:12` la forma de SmartOLT. Se aplicó y se revirtió; la ONU está de nuevo en su estado literal previo.
+
+- **La comparación en la propia OLT es concluyente.** 26 ONUs tienen `ip-host`, y se parten en dos grupos exactos:
+  - **13 de SmartOLT:** `ip-host 1 ip …`, `switchport-bind switch_0/1 iphost 1` *y* `veip 1`, `vlan-filter-mode iphost 1 …`, `vlan-filter iphost 1 pri 0 vlan 350`, con la VLAN de gestión metida en el mismo `flow 1` del `gemport 1` que el servicio. **Ninguna tiene `tr069-mgmt`**: la gestión se hace sobre la IP del ip-host.
+  - **13 del panel:** `ip-host 2 ip …` pero `vlan-filter iphost 1 pri 0 vlan 80` y `tr069-mgmt 1 tag pri 2 vlan 401`. **El índice no cuadra**: `tr069-mgmt 1` y el vlan-filter miran al ip-host 1, y la IP está en el 2, así que el agente TR-069 se queda sin dirección de origen. Además el filtro etiqueta en la VLAN 80, no en la 401.
+- **Origen en el código:** `zte-olt.client.ts` `applyOnuTr069Mgmt` prueba `ip-host 2` **primero** y corta al primer acierto, con el comentario “VEIP TR069 usually binds ip-host 2”. La OLT dice lo contrario. El filtro se aplica sobre `veip`, no sobre `iphost`, y nunca se manda `switchport-bind switch_0/1 iphost 1`.
+- **Lo que la OLT rechaza (HG6244C):** no admite un segundo flow. `flow mode 2`, `flow 2 pri 0 vlan 401` y `gemport 2 flow 2` devuelven `%Code 63953-GPONRM : Flow does not exist`. Por eso el `gemport 2` de gestión que crea el panel nunca puede cursar nada: **el diseño de dos gemports no es viable en este modelo**, hay que ir a un solo flow como SmartOLT.
+- **Tampoco valen algunos `no`:** `no switchport-bind switch_0/1 iphost 1` y `no switchport-bind switch_0/1` se rechazan; el binding se corrige reescribiendo `switchport-bind switch_0/1 veip 1`.
+- **Resultado de la prueba:** con `ip-host 1` bien puesto y la 401 dentro del `flow 1`, la ONU **siguió sin emitir** (0 MACs en la 401, ping a `30.30.20.13` al 100 % de pérdida, ACS sin devices). Falta entender qué hace SmartOLT que nosotros no.
+- **Siguiente paso:** capturar a SmartOLT en vivo (P8.8).
+
+### P8.8 Montaje temporal para capturar a SmartOLT — DESMONTAR AL TERMINAR
+Para ver la receta real se intercala un proxy telnet entre SmartOLT y la OLT.
+
+- `vpn.local/olt-telnet-tap.ts` escucha en el 2323 del PC de trabajo, reenvía a `10.181.2.3:23` y registra la sesión en `vpn.local/tap/` (transcripción y `commands.txt`). Enmascara las credenciales: lo que se responde a un prompt de usuario o contraseña no se guarda.
+- `vpn.local/watch-onu-config.ts` vigila en paralelo el running-config de la ONU y muestra solo las altas y bajas de líneas. Sirve aunque SmartOLT entre por SSH.
+- **Reglas temporales en Core BGP** (`vpn.local/apply-tap-nat.ts`, marcadas con el comentario `isp-control TAP OLT temporal`):
+  - `dstnat tcp 45.191.101.177:23334 → 10.69.1.3:2323`
+  - `srcnat masquerade` hacia `10.69.1.3:2323` — sin esto el PC contestaría por su salida a internet y la sesión no se establece.
+  - El `23333 → 10.181.2.3:23` de siempre **no se toca** y queda como respaldo.
+- **Deshacer:** `npx tsx vpn.local/apply-tap-nat.ts --undo`. No dejar estas reglas puestas en el router de borde más allá de la prueba.
+
+### P8.9 CWMP/NBI/FS de SmartOLT en rojo: al túnel le faltan las rutas de vuelta
+El túnel `SmartOLT-VPN` (OpenVPN a `raio.smartolt.com:19649`, usuario `tunnel1@`) está arriba en el 4011 y tiene IP `10.69.69.2/24`. El servidor de SmartOLT es el `10.69.69.1`.
+
+- **Los servicios de SmartOLT están perfectamente vivos.** Desde la IP del túnel responden los tres: CWMP `7547`, NBI `7557` y FS `7567`, y el ping al `10.69.69.1` va al 0 % de pérdida. El problema no está en su lado.
+- **Solo funciona la IP del túnel.** Con origen en cualquier red nuestra el ping al `10.69.69.1` se pierde al 100 %: `172.10.220.2`, `30.30.20.1` (gestión de ONUs), `40.40.20.1` y `20.20.10.3`. La regla `srcnat accept out=SmartOLT-VPN` está bien puesta y por delante del masquerade, así que el tráfico sale sin traducir con su IP de origen real — y SmartOLT no sabe devolverlo.
+- **Causa:** en el alta del túnel no se declararon las *private connected subnets*. El manual lo pide en el paso 1 ("fill in with your private connected subnets"), y sin eso SmartOLT solo enruta la IP del extremo.
+- **Falta además ruta en el borde.** Core BGP no tiene ninguna entrada para `10.69.69.0/24`, así que tampoco alcanza el `10.69.69.1`. Hace falta `10.69.69.0/24 via 172.10.220.2` para que SmartOLT pueda hablar con la IP privada de la OLT y ahorrarse el port-forward `23333`.
+- **Encaja con P8.6/P8.7.** El manual condiciona el Inform a poder hacer ping a la IP de gestión de la ONT desde el MikroTik (paso 7), que es exactamente lo que nunca hemos conseguido (`30.30.20.13` al 100 % de pérdida). Y el paso 8 confirma el modelo que queremos: gestión primero y luego elegir OMCI o TR-069 para la WAN.
+- **Acción:** declarar en SmartOLT `30.30.20.0/24`, `10.181.2.0/24` y `40.40.20.0/24`, y añadir la ruta en Core BGP.
+- **Hecho:** ruta `10.69.69.0/24 via 172.10.220.2` añadida en Core BGP (`vpn.local/apply-smartolt-route.ts`).
+
+### P8.10 Captura de SmartOLT: el comando que nos faltaba es `flow N switch switch_0/1`
+Capturado en vivo con el tap de P8.8 mientras SmartOLT aprovisionaba `gpon-onu_1/2/4:12` (SN `FHTT967F69A0`). Receta literal en `vpn.local/tap/*.commands.txt`.
+
+**Lo que hace SmartOLT** (tres sesiones telnet: alta, gestión, TR-069):
+
+```
+interface gpon-olt_1/2/4
+ onu 12 type HG6244C sn FHTT967F69A0
+interface gpon-onu_1/2/4:12
+ tcont 1 profile SMARTOLT-1000MB-UP / gemport 1 tcont 1
+ service-port 1 vport 1 user-vlan 80 vlan 80
+pon-onu-mng gpon-onu_1/2/4:12
+ flow 1 switch switch_0/1          <-- CREA el flow
+ gemport 1 flow 1
+ flow mode 1 tag-filter vlan-filter untag-filter discard
+ flow 1 pri 0 vlan 80
+ switchport-bind switch_0/1 veip 1
+ switchport-bind switch_0/1 iphost 1
+ vlan-filter-mode iphost 1 … / vlan-filter iphost 1 pri 0 vlan 80
+--- luego, gestión sobre VLAN 600 ---
+interface …: switchport mode hybrid vport 2 / no service-port 2
+             service-port 2 vport 2 user-vlan 600 vlan 600
+pon-onu-mng …:
+ no switchport-bind iphost 2 / no ip-host 2 / no voip-ip / no flow 2   (limpieza)
+ flow 2 switch switch_0/1          <-- CREA el flow
+ flow mode 2 tag-filter vlan-filter untag-filter discard
+ flow 2 pri 2 vlan 600
+ gemport 2 flow 2
+ switchport-bind switch_0/1 iphost 2
+ ip-host 2 ip 10.50.10.239 mask 255.255.255.0 gateway 10.50.10.1
+ ip-host 2 primary-dns 8.8.8.8 second-dns 8.8.4.4
+ vlan-filter-mode iphost 2 … / vlan-filter iphost 2 pri 2 vlan 600
+--- y por último TR-069 ---
+ veip 1 port udp 1232 host 2
+ tr069-mgmt 1 acs http://10.69.69.1:14501 validate basic username … password …
+ tr069-mgmt 1 tag pri 2 vlan 600 state unlock
+```
+
+**Diferencias contra `applyOnuTr069Mgmt`, por orden de gravedad:**
+1. **Falta `flow N switch switch_0/1`.** Es lo que crea el flow y lo ata al switch interno. Sin él, `flow N pri…` y `gemport N flow N` devuelven `%Code 63953 : Flow does not exist`. Esto invalida la conclusión de P8.7 de que el modelo no admite dos flows: **sí los admite**, solo hay que crearlos.
+2. **Los índices tienen que ser el mismo en todo el bloque.** SmartOLT usa el 2 de punta a punta: `ip-host 2`, `switchport-bind switch_0/1 iphost 2`, `vlan-filter-mode iphost 2`, `vlan-filter iphost 2`. Nosotros ponemos la IP en el 2 y los filtros en el 1, y encima filtramos sobre `veip` en vez de sobre `iphost`.
+3. **Falta `switchport-bind switch_0/1 iphost N`**: solo atamos el veip, así que el ip-host no tiene salida.
+4. **Falta `veip 1 port udp 1232 host N`**, que es por donde el ACS hace el Connection Request.
+5. **Falta `switchport mode hybrid vport N`** antes del service-port.
+6. Falta la limpieza idempotente previa (`no flow N`, `no ip-host N`, …) que hace SmartOLT antes de escribir.
+7. `pri 2` y el `state unlock` en la misma línea del `tag` son detalles menores, pero conviene copiarlos.
+
+**Corregido en** `apps/api/src/topology/zte-onu-mgmt-omci.util.ts`, una utilidad pura que construye la secuencia y marca qué comandos son críticos; `zte-olt.client.ts` la ejecuta. Cubierto por `zte-onu-mgmt-omci.util.spec.ts`, que fija el orden del `flow … switch` y la coherencia de índices. Además `applyOnuTr069Mgmt` ya **no devuelve éxito** si la OLT rechazó algún comando crítico: antes decía "TR069 aplicado" y el fallo solo se veía horas después como una ONU "esperando informe".
+
+**Resultado en la OLT:** por primera vez una ONU aprovisionada por OMCI **cursa tráfico de gestión**. `show mac vlan 600` aprende `9055.de7f.69a4` en `gpon-onu_1/2/4:12 vport 2`, y el 4011 tiene el ARP completo de `10.50.10.239`. El camino L2 funciona de extremo a extremo.
+
+### P8.12 Prueba del código corregido: la red funciona, el agente TR-069 de la ONU no arranca
+Reaprovisionada `gpon-onu_1/2/4:12` (SN `FHTT967F69A0`) desde cero con el código ya corregido (`vpn.local/test-panel-provision.ts`), sobre nuestra VLAN 401, IP `30.30.20.30/24`, gateway `30.30.20.1`, ACS `http://10.69.1.1:14501`.
+
+**Lo que sí funciona ahora** (y antes no):
+- La OLT aceptó **todos** los comandos críticos, incluido `flow 2 switch switch_0/1`. Los únicos rechazos fueron los `no …` de limpieza sobre una ONU nueva, que es lo esperado.
+- La OLT aprende la MAC de gestión `9055.de7f.69a4` en la VLAN 401, vport 2.
+- El MikroTik la resuelve por ARP y responde a `ping 30.30.20.30`.
+- La ONU **enruta**: contesta a pings originados en otras subredes (`20.20.10.3`, `10.181.1.1`, `10.0.24x.1`), así que su pila IP y su ruta por defecto están bien.
+- El ACS es alcanzable desde la red de gestión: `10.69.1.1:14501` responde.
+- La configuración OMCI leída de vuelta coincide con la receta de SmartOLT.
+
+**Lo que sigue sin funcionar:** la ONU no emite ni un paquete por iniciativa propia (0 paquetes en 30 s en `vlan_401`, ninguna sesión en la tabla de conexiones). Solo contesta a lo que se le pregunta. Dos reinicios (`Online Duration` confirma que se reiniciaron de verdad) no cambian nada.
+
+**Única divergencia concreta que queda contra la ejecución de SmartOLT:** `security-mgmt 999 state enable ingress-type lan protocol ftp telnet ssh snmp tr069`, que declara tr069 entre los protocolos de gestión permitidos. SmartOLT lo aplicó sin problema; a nosotros la ONU nos lo rechaza con `%Code 63990-GPONRM : ONT return error:command processing error` en las tres variantes probadas (con y sin `mode forward`, `ingress-type lan` y `wan`).
+
+**Hipótesis a probar:** SmartOLT lo manda en la **primera** sesión, justo después del alta y antes del resto de la configuración. Puede que la ONU solo acepte `security-mgmt` en esa ventana inicial de aprovisionamiento. Si se confirma, el panel tendría que aplicarlo dentro de `authorizeOnu`, no después.
+
+### P8.13 Segunda captura de SmartOLT (aprovisionamiento exitoso): la receta es idéntica y el `security-mgmt` TAMBIÉN le falla
+Se reconstruyó el tap desde cero (puerto 23334, ONU borrada) y se capturó un aprovisionamiento completo de SmartOLT que **sí levantó**. Receta en `vpn.local/tap/` (la anterior quedó en `tap/archive/`). Hallazgos que **invalidan las dos sospechas de P8.12**:
+
+1. **`security-mgmt 999` NO es la causa.** En esta captura exitosa la OLT le responde a SmartOLT el mismo `%Code 63990-GPONRM : ONT return error:command processing error` en `security-mgmt 999`, y la ONU informa igual. Es una pista falsa.
+2. **`Config state: fail` NO es la causa.** La ONU de SmartOLT queda en `Config state: fail` (por el objeto OMCI 65305, que es justo `security-mgmt`) y aun así informa. También descartado.
+3. **`Validation scheme: lock` es normal.** Aparece igual en la ONU de SmartOLT que informa; no es un bloqueo.
+4. **La receta es byte a byte idéntica** a la que ya replicamos con `test-panel-provision.ts` / `replay-smartolt-recipe.ts`. Los únicos errores (`Record already exists`, `UNI does not exist`, `Flow does not exist` en los `no …`, `security-mgmt`) son idénticos en ambos.
+
+### P8.14 Causa raíz del retorno del ACS y migración del túnel al 4011
+Con el túnel `Router1` sano (tras un `HUP`, ver más abajo) el concentrador **ya instalaba** el `iroute` de `30.30.20.0/24`, pero apuntando al cliente `Router1` = `10.69.1.2`, que vivía en **Core BGP**. La VLAN 401 (`30.30.20.0/24`) está conectada en el **4011**, no en Core BGP, así que el ACS nunca podía devolverle tráfico a la ONU: el `iroute` de la red de gestión estaba en el router equivocado.
+
+**Migración hecha (scripts en `vpn.local/`, todos reversibles):**
+- `apply-router1-4011.ts`: recrea el cliente OVPN `Router1` en el 4011 (Core Clientes) — interfaz, ruta al ACS/peer `10.69.1.1`, redes del túnel, `no-masquerade` en el túnel y forward/input + MSS. Misma credencial (leída de la BD, nunca impresa). Modos `--enable/--disable/--undo/--status`.
+- `apply-corebgp-backup.ts`: ruta de respaldo en Core BGP a `10.69.1.0/24` y `10.69.1.1/32` vía el 4011 (`172.10.220.2`, distancia 5) para que Core BGP no pierda el ACS al apagar su túnel.
+- `toggle-corebgp-router1.ts --disable`: apaga el cliente OVPN de Core BGP (recuperación con `--enable`).
+- `apply-4011-transit.ts`: rutas de tránsito en el 4011 hacia redes que cuelgan detrás de Core BGP (OLT `10.181.2.0/24`, switch `20.20.10.0/24`) vía `172.10.220.1`, porque ahora el 4011 las publica por el túnel pero no las tiene conectadas.
+
+**Estado final verificado:** el 4011 es el `Router1` del túnel (running=true); Core BGP con su cliente deshabilitado pero alcanzando el ACS por la ruta de respaldo; el concentrador alcanza 4011, Core BGP y la OLT (`10.181.2.3`). El retorno ACS→VLAN 401 ahora es directo al 4011. Verificado: el concentrador hace ping a `30.30.20.1` con 0% de pérdida incluso con origen `10.69.1.1`.
+
+**RESULTADO — Inform confirmado.** Tras reaprovisionar la ONU `FHTT967F69A0` con el código del panel (`vpn.local/test-panel-provision.ts --apply`) hacia `http://10.69.1.1:14501` por VLAN 401, GenieACS registró el device `000AC2-HG6244C-46485454967F69A0` (el `46485454` = `FHTT` en hex) con `_lastInform` fresco y `faults=0`. La ONU aparece conectada en el panel. **El auto-aprovisionamiento por TR-069 contra nuestro ACS funciona.** Nota: el comando `ip-host N ping-response/traceroute-response` lo rechaza este modelo (`%Error 20201`), por eso la IP de gestión no responde a ping — es cosmético y no afecta al Inform; conviene omitirlo o hacerlo tolerante en el cliente ZTE.
+
+**Incidente durante el trabajo (recuperado):** el túnel `Router1` (TCP, único camino al 4011/OLT) reconectó a un estado zombie (en `CLIENT_LIST` pero sin `ROUTING_TABLE`/iroute), probablemente por saturación al hacer un `/ip/route/print` completo del 4011 (tabla enorme). Todo lo que colgaba detrás de Core BGP quedó inalcanzable. Se recuperó con un `HUP` al `openvpn-tcp` del concentrador (`vpn.local/free-onu-index.ts`), que es la misma señal del sync. Lección: nunca hacer prints completos de rutas en estos routers; filtrar del lado del router por `dst-address` (la API **no** soporta `?comment~`, que es solo del CLI).
+
+**Nota de bookkeeping:** los cambios de los routers se hicieron en vivo por API; la BD del panel aún asocia el cliente `Router1` al device de Core BGP. El concentrador autentica por username (sin cambio), así que funciona; conviene re-asociar el cliente al 4011 en el panel más adelante.
+
+**Conclusión: el código OMCI del panel ya es correcto.** La diferencia entre la ONU que informa y nuestra réplica que no era **solo el destino**:
+
+| | SmartOLT (informa) | Nuestra réplica (no informó) |
+|---|---|---|
+| ACS | `http://10.69.69.1:14501` | `http://10.69.1.1:14501` |
+| VLAN gestión | 600 | 401 |
+| IP gestión | 10.50.10.239 | 30.30.20.30 |
+| credenciales | `soltcpe` / real | `acs` / `acs` |
+
+Nuestra réplica tenía IP, respondía al ping y enrutaba a otras subredes, pero emitió **0 paquetes**: el cliente TR-069 nunca marcó. El siguiente paso es aislar por qué el camino VLAN 401 → `10.69.1.1` (nuestro GenieACS) no dispara el Inform, mientras VLAN 600 → `10.69.69.1` (SmartOLT) sí. Sospechas ordenadas: (a) el 4011 hace ping a `10.69.1.1` desde sí mismo pero quizá no **reenvía** tráfico de la VLAN 401 hacia `10.69.1.0/24`; (b) el túnel a `10.69.1.1` lo levanta esta máquina, no el 4011, así que la ruta de retorno puede faltar; (c) credenciales/relleno del perfil ACS del panel.
+
+### P8.11 Por qué tampoco informa con SmartOLT: la IP de gestión del MikroTik es /32
+- En el 4011, `vlan3` (VLAN 600, sobre `sfp-sfpplus1`, comentario "Vlan tr069 smartolt") tiene **`10.50.10.1/32`** con `network 10.50.10.1`.
+- Con /32 no hay subred conectada: la única ruta 10.50.x es `10.50.10.1/32 via vlan3`. **No existe ruta para `10.50.10.0/24`**, así que el router no sabe devolver nada a `10.50.10.239` y esos paquetes se van por la default.
+- El ARP sí está resuelto (`10.50.10.239 → 90:55:DE:7F:69:A4, completa=true`), o sea que el problema es puramente de enrutado, no de L2.
+- **Arreglo aplicado:** dirección cambiada a `10.50.10.1/24` (`vpn.local/apply-mgmt-netmask.ts`, con `--undo`). Aparece la ruta conectada `10.50.10.0/24 via vlan3`.
+- **Resultado inmediato:** `ping 10.50.10.239` desde el 4011 pasa de 100 % de pérdida a 0 %. Es la condición que el manual de SmartOLT marca en el paso 7 para que la ONT empiece a informar.
+- **No hacía falta declarar nada en el túnel para esta red:** con origen `10.50.10.1` el ACS `10.69.69.1` responde al ping y el puerto CWMP 14501 contesta, así que SmartOLT ya enrutaba `10.50.10.0/24` de vuelta (es su propio pool de gestión). Lo de P8.9 sigue aplicando a *nuestras* redes (`30.30.20.0/24`, `40.40.20.0/24`, `10.181.2.0/24`), que siguen sin ruta de retorno.
+- **TR-069 vivo y bidireccional.** En la tabla de conexiones del 4011 aparecen sesiones TCP completadas en ambos sentidos: `10.50.10.239 → 10.69.69.1` (el Inform de la ONU) y `10.69.69.1 → 10.50.10.239` (el Connection Request del ACS). Primera vez en todo el diagnóstico que una ONU habla con un ACS.
+
+---
+
 ## Checklist de resolución (vacío — marcar al ir cerrando)
 
 | ID | Estado | Notas |
@@ -589,6 +834,20 @@ Los parsers se **ampliaron**, no se reemplazaron: `zte-olt-onu.util.ts`, `zte-ol
 | P6.2 | pendiente | aislamiento VLAN ZTE: comandos a ciegas |
 | P6.3 | resuelto | delete VLAN silencioso + caché que la revivía |
 | P6.4 | parcial | auditoría CLI ZTE: 10 arreglados; enable-password, PON light y óptica de uplinks pendientes |
+| P8.1 | resuelto y verificado | DNAT CWMP a loopback tragaba todos los Inform |
+| P8.2 | descartado | camino L3 gestión→ACS correcto (masquerade del 4011) |
+| P8.3 | pendiente | plantilla OMCI: gemport de gestión sin flow y `ip-host 2` sin vlan-filter |
+| P8.4 | informativo | el ACS de producción nunca recibió un Inform (Mongo sin `devices`) |
+| P8.5 | verificado | VLAN gestión → CWMP abierto (TIME_WAIT desde 172.10.220.2) |
+| P8.6 | pendiente | el único Inform de la historia salió de una WAN puesta a mano en VLAN 500 con DHCP; `vlan_401` no tiene DHCP |
+| P8.7 | pendiente | el panel usa `ip-host 2` con filtros al índice 1; el modelo no admite un segundo flow |
+| P8.8 | temporal | tap telnet + 2 reglas NAT en Core BGP para capturar a SmartOLT — DESMONTAR |
+| P8.9 | parcial | ruta en Core BGP añadida; falta declarar nuestras subredes en el túnel de SmartOLT |
+| P8.10 | corregido en código | `applyOnuTr069Mgmt` reescrito con la secuencia capturada; falta probarlo contra una ONU real |
+| P8.11 | resuelto | `10.50.10.1/32` → `/24` en vlan3: la ONU responde y hay Inform bidireccional con el ACS |
+| P8.12 | revisado | descartadas las sospechas de `security-mgmt`/`config-fail`; ver P8.13 |
+| P8.13 | revisado | receta OMCI del panel confirmada correcta; el corte estaba en el retorno del ACS hacia VLAN 401; ver P8.14 |
+| P8.14 | hecho | causa raíz del retorno + migración del túnel Router1 de Core BGP al 4011 |
 | P7.1 | pendiente | SwitchOS write (API no oficial; solo lectura ahora) |
 | P7.3 | resuelto | push VLAN de catálogo a switch RouterOS con puertos tagged/untagged |
 | P0.1 | pendiente | TLS MikroTik |

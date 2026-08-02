@@ -145,6 +145,14 @@ export class GenieAcsNbiClient {
       { connectionRequest: true, timeoutMs: 60_000 },
     );
   }
+
+  async getParameterValues(deviceId: string, parameterNames: string[]) {
+    return this.enqueueTask(
+      deviceId,
+      { name: 'getParameterValues', parameterNames },
+      { connectionRequest: true, timeoutMs: 60_000 },
+    );
+  }
 }
 
 /** Read `_value` leaf from GenieACS nested device document. */
@@ -157,9 +165,17 @@ export function genieGet(obj: unknown, path: string): GenieParamValue | null {
     cur = (cur as Record<string, unknown>)[p];
   }
   if (cur == null) return null;
-  if (typeof cur === 'object' && cur !== null && '_value' in cur) {
-    const leaf = cur as { _value?: unknown; _type?: string };
-    return { value: leaf._value, type: leaf._type };
+  if (typeof cur === 'object' && cur !== null) {
+    const leaf = cur as {
+      _value?: unknown;
+      _type?: string;
+      _object?: boolean;
+      _writable?: boolean;
+    };
+    // GenieACS a veces descubre el path (_writable) antes de traer _value.
+    if ('_value' in leaf || leaf._object === false || '_type' in leaf) {
+      return { value: leaf._value, type: leaf._type };
+    }
   }
   if (
     typeof cur === 'string' ||
@@ -169,6 +185,19 @@ export function genieGet(obj: unknown, path: string): GenieParamValue | null {
     return { value: cur };
   }
   return null;
+}
+
+/** True if the dotted path exists in the GenieACS device document. */
+export function genieNodeExists(obj: unknown, path: string): boolean {
+  if (!obj || typeof obj !== 'object') return false;
+  const parts = path.split('.');
+  let cur: unknown = obj;
+  for (const p of parts) {
+    if (!cur || typeof cur !== 'object') return false;
+    if (!(p in (cur as Record<string, unknown>))) return false;
+    cur = (cur as Record<string, unknown>)[p];
+  }
+  return cur != null;
 }
 
 export function genieChildIndices(obj: unknown, path: string): number[] {

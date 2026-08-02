@@ -11,6 +11,7 @@ import {
   toZteCliOnuIf,
   type ZteFwFamily,
 } from './zte-olt-firmware.util';
+import { parseOmciEthPortVlans } from './zte-onu-eth-vlan.util';
 import {
   formatOnuStatusReport,
   oltIfFromOnuIf,
@@ -84,6 +85,13 @@ import {
   type OltOnuTypeSummary,
   type OnuTypeProfileSpec,
 } from './zte-olt-onu-type.util';
+import {
+  buildZteOnuMgmtCleanup,
+  buildZteOnuFlowCommands,
+  buildZteOnuVeipVlanCommands,
+  buildZteOnuMgmtIpHostCommands,
+  type ZteOmciCommand,
+} from './zte-onu-mgmt-omci.util';
 
 export interface ZteConnectedOnu {
   onuIf: string;
@@ -777,6 +785,41 @@ export class ZteOltClient {
     }
   }
 
+  /**
+   * `reboot` dentro de `pon-onu-mng` abre una confirmación
+   * «Confirm to reboot? [yes/no]:» que no termina en prompt: la lectura expira,
+   * nadie responde y la ONU nunca se reinicia. Verificado en producción sobre
+   * una C320 (el tiempo en línea seguía subiendo tras el supuesto reinicio).
+   */
+  private async confirmOnuReboot(
+    send: (line: string) => Promise<void>,
+    read: (ms?: number) => Promise<string>,
+  ): Promise<boolean> {
+    await send('reboot');
+    let out = '';
+    let timedOut = false;
+    try {
+      out = await read(10_000);
+    } catch (err) {
+      timedOut = true;
+      out = err instanceof Error ? err.message : String(err);
+    }
+    const asksConfirm = /\[\s*yes\s*\/\s*no\s*\]|\(\s*y\s*\/\s*n\s*\)/i.test(
+      out,
+    );
+    if (!asksConfirm && !timedOut) {
+      // Firmware que reinicia sin preguntar.
+      return !/%\s*Error|Invalid|Failed/i.test(out);
+    }
+    await send('yes');
+    try {
+      return !/%\s*Error|Invalid|Failed/i.test(await read(20_000));
+    } catch {
+      // Algunos firmwares no devuelven prompt tras aceptar el reinicio.
+      return true;
+    }
+  }
+
   async rebootOnu(params: {
     host: string;
     port: number;
@@ -795,12 +838,17 @@ export class ZteOltClient {
         await read(12_000);
         await send(`pon-onu-mng ${ctx.onuIf}`);
         await read(8_000);
-        await send('reboot');
-        await read(10_000);
+        const rebooted = await this.confirmOnuReboot(send, read);
         await send('exit');
-        await read(8_000);
+        await read(8_000).catch(() => '');
         await send('exit');
-        await read(8_000);
+        await read(8_000).catch(() => '');
+        if (!rebooted) {
+          return {
+            ok: false,
+            error: `La OLT no confirmó el reinicio de ${ctx.onuIfCanon}; la ONU sigue como estaba.`,
+          };
+        }
         return {
           ok: true,
           message: `Reinicio enviado a ${ctx.onuIfCanon}`,
@@ -866,25 +914,50 @@ export class ZteOltClient {
           return out;
         };
 
+        // Todo el bloque de gestión tiene que usar el MISMO índice: la OLT liga
+        // `ip-host N` con `switchport-bind … iphost N`, `vlan-filter iphost N` y
+        // el `host N` del veip. Mezclar índices —la IP en el 2 y los filtros en
+        // el 1— deja al agente TR-069 sin dirección de origen y no informa nunca.
+        const MGMT = 2;
+        const MGMT_PRI = 2;
+        // Reaplicar sobre una ONU ya configurada devuelve "already exists".
+        // Eso no es un fallo: el estado final es el que queremos.
+        const alreadyThere = (out: string) => /already\s+exist/i.test(out);
+        const rejected = (out: string) =>
+          !alreadyThere(out) &&
+          /%Error|Invalid|Unknown|Unrecognized|%Code\s*6\d{4}/i.test(out);
+        /** Comandos sin los que la gestión no puede funcionar. */
+        const failures: string[] = [];
+        const must = async (line: string, waitMs?: number) => {
+          const res = await step(line, waitMs);
+          if (rejected(res)) {
+            failures.push(`${line} → ${this.cleanCliNoise(res).slice(0, 120)}`);
+            return false;
+          }
+          return true;
+        };
+
         await step('configure terminal', 12_000);
 
-        // Best-effort L2 path for mgmt VLAN (gemport + service-port on vport 2).
+        // Camino L2 de la VLAN de gestión (tcont + gemport + service-port).
         if (params.enable && params.mgmtVlan != null) {
-          let outIf = await step(`interface ${onuIf}`, 10_000);
-          if (!/%Error|Invalid|Unknown/i.test(outIf)) {
-            await step('tcont 2 profile SMARTOLT-1000MB-UP', 8_000);
-            await step('gemport 2 tcont 2', 8_000);
-            outIf = await step(
-              `service-port 2 vport 2 user-vlan ${params.mgmtVlan} vlan ${params.mgmtVlan}`,
+          const outIf = await step(`interface ${onuIf}`, 10_000);
+          if (!rejected(outIf)) {
+            // Para gestión basta un perfil de poco caudal; si la OLT no lo
+            // tiene se usa el general.
+            if (!(await must(`tcont ${MGMT} profile SMARTOLT-VOIPMNG-10M`, 8_000))) {
+              failures.pop();
+              await must(`tcont ${MGMT} profile SMARTOLT-1000MB-UP`, 8_000);
+            }
+            await must(`gemport ${MGMT} tcont ${MGMT}`, 8_000);
+            // Sin modo híbrido el vport no cursa el service-port etiquetado.
+            await step(`switchport mode hybrid vport ${MGMT}`, 8_000);
+            // Se reescribe siempre: si ya existía con otra VLAN, el alta falla.
+            await step(`no service-port ${MGMT}`, 8_000);
+            await must(
+              `service-port ${MGMT} vport ${MGMT} user-vlan ${params.mgmtVlan} vlan ${params.mgmtVlan}`,
               10_000,
             );
-            if (/already existed|already exist/i.test(outIf)) {
-              await step('no service-port 2', 8_000);
-              await step(
-                `service-port 2 vport 2 user-vlan ${params.mgmtVlan} vlan ${params.mgmtVlan}`,
-                10_000,
-              );
-            }
             await step('exit', 5_000);
           }
           // C6xx Titan fallback: vport interface. Con `unknown` el resto del
@@ -892,14 +965,14 @@ export class ZteOltClient {
           if (family === 'c6xx') {
             const vportIf = buildZteC6xxVportIf(
               toZteCanonicalOnuIf(params.onuIf),
-              2,
+              MGMT,
             );
             if (vportIf) {
               const outV = await step(`interface ${vportIf}`, 10_000);
-              if (!/%Error|Invalid|Unknown/i.test(outV)) {
-                await step('no service-port 2', 8_000);
+              if (!rejected(outV)) {
+                await step(`no service-port ${MGMT}`, 8_000);
                 await step(
-                  `service-port 2 user-vlan ${params.mgmtVlan} vlan ${params.mgmtVlan}`,
+                  `service-port ${MGMT} user-vlan ${params.mgmtVlan} vlan ${params.mgmtVlan}`,
                   10_000,
                 );
                 await step('exit', 5_000);
@@ -909,14 +982,31 @@ export class ZteOltClient {
         }
 
         let out = await step(`pon-onu-mng ${onuIf}`, 10_000);
-        if (/%Error|Invalid|Unknown/i.test(out)) {
+        if (rejected(out)) {
           throw new Error(`No se pudo entrar a pon-onu-mng ${onuIf}`);
         }
 
+        /** Ejecuta una secuencia, exigiendo solo lo que marca la utilidad. */
+        const runOmci = async (cmds: ZteOmciCommand[]) => {
+          for (const cmd of cmds) {
+            if (cmd.critical) await must(cmd.line, 8_000);
+            else await step(cmd.line, 8_000);
+          }
+        };
+
         if (params.enable && params.mgmtVlan != null) {
-          // Map gemport 2 to a flow toward the switch/VEIP when the OLT allows it.
-          await step(`flow 2 pri 2 vlan ${params.mgmtVlan}`, 8_000);
-          await step('gemport 2 flow 2', 8_000);
+          // Limpieza previa: si quedan restos de un intento anterior, la OLT
+          // rechaza el alta con "already exists" y el bloque queda a medias.
+          for (const line of buildZteOnuMgmtCleanup(MGMT)) {
+            await step(line, 8_000);
+          }
+          await runOmci(
+            buildZteOnuFlowCommands({
+              index: MGMT,
+              priority: MGMT_PRI,
+              vlan: params.mgmtVlan,
+            }),
+          );
         }
 
         if (!params.enable) {
@@ -930,6 +1020,23 @@ export class ZteOltClient {
           const user = (params.acsUsername?.trim() || 'acs').replace(/"/g, '');
           const pass = (params.acsPassword?.trim() || 'acs').replace(/"/g, '');
           const ep = params.acsEndpoint.trim().replace(/^https?:\/\//i, '');
+
+          // La gestión IP va antes que el agente TR-069: si se arranca el
+          // agente sin dirección de origen, el primer Inform sale mal y la ONU
+          // se queda esperando al siguiente ciclo.
+          if (params.mgmtVlan != null) {
+            await runOmci(
+              buildZteOnuMgmtIpHostCommands({
+                index: MGMT,
+                priority: MGMT_PRI,
+                vlan: params.mgmtVlan,
+                ip: params.mgmtIp,
+                mask: params.mgmtMask,
+                gateway: params.mgmtGateway,
+              }),
+            );
+          }
+
           // Huawei HG / ZTE: ACS URL with http:// is what actually triggers Inform.
           out = await step(
             `tr069-mgmt 1 acs http://${ep} validate basic username ${user} password ${pass}`,
@@ -948,61 +1055,23 @@ export class ZteOltClient {
           }
           if (params.mgmtVlan != null) {
             out = await step(
-              `tr069-mgmt 1 tag pri 2 vlan ${params.mgmtVlan}`,
+              `tr069-mgmt 1 tag pri ${MGMT_PRI} vlan ${params.mgmtVlan} state unlock`,
               12_000,
             );
-            if (/%Error|Invalid/i.test(out)) {
-              logs.push(
-                `tr069 tag vlan skip: ${this.cleanCliNoise(out).slice(0, 120)}`,
+            if (rejected(out)) {
+              // Firmwares antiguos no admiten el estado en la misma línea.
+              out = await step(
+                `tr069-mgmt 1 tag pri ${MGMT_PRI} vlan ${params.mgmtVlan}`,
+                12_000,
               );
-            }
-            out = await step(
-              `vlan-filter-mode veip 1 tag-filter vlan-filter untag-filter discard`,
-              10_000,
-            );
-            if (!/%Error|Invalid|Unrecognized/i.test(out)) {
-              await step(
-                `vlan-filter veip 1 pri 2 vlan ${params.mgmtVlan}`,
-                10_000,
-              );
+              if (rejected(out)) {
+                failures.push(
+                  `tr069-mgmt tag vlan → ${this.cleanCliNoise(out).slice(0, 120)}`,
+                );
+              }
             }
           }
           await step('tr069-mgmt 1 state unlock');
-
-          if (
-            params.mgmtIp &&
-            params.mgmtMask &&
-            params.mgmtGateway &&
-            params.mgmtVlan != null
-          ) {
-            // VEIP TR069 usually binds ip-host 2 (host 1 is often LAN/switch).
-            // CLI is `ip-host` (hyphen); VLAN is set via tr069 tag / vlan-filter / service-port.
-            const ipLines = [
-              `ip-host 2 ip ${params.mgmtIp} mask ${params.mgmtMask} gateway ${params.mgmtGateway}`,
-              `ip-host 1 ip ${params.mgmtIp} mask ${params.mgmtMask} gateway ${params.mgmtGateway}`,
-              `iphost 1 ip ${params.mgmtIp} mask ${params.mgmtMask} gateway ${params.mgmtGateway}`,
-            ];
-            let ipOk = false;
-            for (const ipLine of ipLines) {
-              out = await step(ipLine, 12_000);
-              if (!/%Error|Invalid|Unrecognized/i.test(out)) {
-                ipOk = true;
-                // Best-effort: allow ICMP (lab diagnostics)
-                const hostNum = /ip-host 2/.test(ipLine) ? 2 : 1;
-                await step(
-                  `ip-host ${hostNum} ping-response enable traceroute-response enable`,
-                  8_000,
-                );
-                break;
-              }
-              logs.push(
-                `ip-host try fail: ${this.cleanCliNoise(out).slice(0, 120)}`,
-              );
-            }
-            if (!ipOk) {
-              logs.push('ip-host: no syntax accepted by OLT');
-            }
-          }
         }
 
         // Use shared helper (end + write) — raw `write` inside submode hangs/fails
@@ -1010,6 +1079,16 @@ export class ZteOltClient {
         logs.push(
           `write (${Date.now() - t0}ms total) → ${this.cleanCliNoise(writeOut).slice(0, 120)}`,
         );
+
+        // Si la OLT rechazó algo del camino de gestión, la ONU no va a informar.
+        // Decir que se aplicó correctamente solo esconde el fallo hasta que
+        // alguien mira por qué la ONU lleva horas "esperando informe".
+        if (failures.length) {
+          throw new Error(
+            `La OLT rechazó ${failures.length} comando(s) de gestión, la ONU no podrá informar al ACS:\n` +
+              failures.map((f) => `  · ${f}`).join('\n'),
+          );
+        }
 
         this.logger.log(
           `OMCI TR069 OK ${params.onuIf} in ${Date.now() - t0}ms`,
@@ -1522,12 +1601,28 @@ export class ZteOltClient {
           await upsert(2, 2, params.mgmtVlan ?? null, 'Mgmt');
         }
 
-        // Best-effort flow mapping for WAN when set
+        // Camino L2 de la VLAN de servicio. Igual que en la gestión, el flow
+        // hay que crearlo con `flow 1 switch switch_0/1` antes de configurarlo;
+        // si no, queda un `gemport 1 flow 1` apuntando a un flow inexistente y
+        // el tráfico del cliente no sale.
         if (touchWan && params.wanVlan != null) {
           const out = await step(`pon-onu-mng ${onuIf}`, 10_000);
           if (!/%Error|Invalid|Unknown/i.test(out)) {
-            await step(`flow 1 pri 0 vlan ${params.wanVlan}`, 8_000);
-            await step('gemport 1 flow 1', 8_000);
+            for (const cmd of buildZteOnuFlowCommands({
+              index: 1,
+              priority: 0,
+              vlan: params.wanVlan,
+            })) {
+              await step(cmd.line, 8_000);
+            }
+            // El flow deja la VLAN en el switch interno, pero el router del CPE
+            // cuelga del veip y este descarta lo que no esté en su lista blanca.
+            for (const cmd of buildZteOnuVeipVlanCommands({
+              priority: 0,
+              vlan: params.wanVlan,
+            })) {
+              await step(cmd.line, 8_000);
+            }
             await step('exit', 5_000);
           }
         }
@@ -1679,6 +1774,117 @@ export class ZteOltClient {
   }
 
   /**
+   * Ligar un puerto LAN de la ONU a una VLAN (OMCI), igual que SmartOLT/IPTV:
+   * `vlan port eth_0/N mode tag|untag vlan VID`
+   */
+  async applyOnuEthPortVlan(params: {
+    host: string;
+    port: number;
+    protocol: 'telnet' | 'ssh';
+    username: string;
+    password: string;
+    onuIf: string;
+    /** 1-based → eth_0/N */
+    portIndex: number;
+    /** null = quitar el binding */
+    vlanId: number | null;
+    mode?: 'tag' | 'untag' | 'hybrid';
+    firmwareHint?: string | null;
+    subtypeHint?: string | null;
+  }): Promise<{ ok: boolean; error?: string; message?: string }> {
+    const family = this.resolveFwFamily(params);
+    const onuIf = this.cliOnuIf(params.onuIf, family);
+    const eth = `eth_0/${params.portIndex}`;
+    const mode = params.mode ?? 'untag';
+    this.logger.log(
+      `ONU eth VLAN ${onuIf} ${eth} (${family}) → ${
+        params.vlanId == null ? 'quitar' : `${mode} vlan ${params.vlanId}`
+      }`,
+    );
+    try {
+      return await this.runConfigWrite(params, async (send, read) => {
+        const step = async (line: string, waitMs = 10_000) => {
+          await send(line);
+          return read(waitMs);
+        };
+        await step('configure terminal', 12_000);
+        let out = await step(`pon-onu-mng ${onuIf}`, 10_000);
+        if (/%Error|Invalid|Unknown/i.test(out)) {
+          throw new Error(`No se pudo entrar a pon-onu-mng ${onuIf}`);
+        }
+        await step(`no vlan port ${eth}`, 8_000);
+        if (params.vlanId == null) {
+          await step('exit', 5_000);
+          await this.persistRunningConfig(send, read);
+          return { ok: true, message: `${eth}: VLAN liberada` };
+        }
+        out = await step(
+          `vlan port ${eth} mode ${mode} vlan ${params.vlanId}`,
+          10_000,
+        );
+        if (/%Error|Invalid|Failed|640\d+/i.test(out)) {
+          throw new Error(
+            `vlan port ${eth} falló: ${this.cleanCliNoise(out)
+              .replace(/\s+/g, ' ')
+              .slice(0, 160)}`,
+          );
+        }
+        await step('exit', 5_000);
+        await this.persistRunningConfig(send, read);
+        return {
+          ok: true,
+          message: `${eth}: ${mode} VLAN ${params.vlanId}`,
+        };
+      });
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
+
+  /** Lee los bindings `vlan port eth_0/N` del running OMCI. */
+  async getOmciEthPortVlans(params: {
+    host: string;
+    port: number;
+    protocol: 'telnet' | 'ssh';
+    username: string;
+    password: string;
+    onuIf: string;
+    firmwareHint?: string | null;
+    subtypeHint?: string | null;
+  }): Promise<{
+    ok: boolean;
+    ports: Array<{
+      portIndex: number;
+      mode: 'tag' | 'untag' | 'hybrid';
+      vlanId: number | null;
+    }>;
+    error?: string;
+  }> {
+    const family = this.resolveFwFamily(params);
+    const onuIf = this.cliOnuIf(params.onuIf, family);
+    try {
+      return await this.runConfigWrite(params, async (send, read) => {
+        await send('end');
+        await read(5_000).catch(() => '');
+        await send('terminal length 0');
+        await read(5_000).catch(() => '');
+        await send(`show onu running config ${onuIf}`);
+        const raw = await read(45_000);
+        return { ok: true, ports: parseOmciEthPortVlans(raw) };
+      });
+    } catch (err) {
+      return {
+        ok: false,
+        ports: [],
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
+
+  /**
    * Authorize (provision) an ONU by SN on a PON port, optional name.
    * Verifies the OLT accepted the SN (left uncfg / appears in state) and `write`s.
    */
@@ -1701,6 +1907,11 @@ export class ZteOltClient {
     error?: string;
     message?: string;
     onuIf?: string;
+    /**
+     * `onu_index_taken`: el índice ya pertenece a otra ONU del puerto. Probar
+     * otros tipos no cambia nada, así que quien llama debe cortar el barrido.
+     */
+    code?: 'onu_index_taken';
   }> {
     const family = this.resolveFwFamily({
       host: params.host,
@@ -1765,6 +1976,22 @@ export class ZteOltClient {
         this.logger.log(
           `authorizeOnu CLI [${oltIf}] «${cmd}» → ${onuOut.replace(/\s+/g, ' ').slice(0, 240)}`,
         );
+
+        // El índice ya está tomado por otra ONU del puerto. ZTE no lo devuelve
+        // como %Error ni como «already exist», sino como
+        // «%Code 62391-GPONSRV : The entry is existed. This is a re-create
+        // operation.», así que sin este caso el flujo seguía como si hubiera
+        // autorizado y luego culpaba al tipo de ONU.
+        if (/entry\s+is\s+existed|re-?create\s+operation/i.test(onuOut)) {
+          return {
+            ok: false,
+            code: 'onu_index_taken' as const,
+            error:
+              `El índice ${onuId} ya está en uso en ${oltIf}: la OLT lo trata como «re-create» y ${sn} no queda registrado. ` +
+              `Elige un índice libre del puerto (no es problema del tipo de ONU). ` +
+              `Respuesta CLI: ${onuOut.replace(/\s+/g, ' ').trim().slice(0, 200)}`,
+          };
+        }
 
         if (
           /%Error|Invalid|Failed|does\s*not\s*exist|not\s*exist|unknown\s*onu\s*type|already\s*exist|duplicate/i.test(
@@ -2061,10 +2288,22 @@ export class ZteOltClient {
       if (nextId === undefined) {
         try {
           const oltIfCli = this.cliOltIf(row.oltIf, dialect);
+          // Mismo presupuesto que el barrido de inventario: un puerto PON lleno
+          // tarda >15 s en V1.2. Con menos, la lectura expira, el índice queda
+          // sin sugerencia y el operador autoriza sobre un índice ya ocupado
+          // (la OLT responde «The entry is existed. This is a re-create
+          // operation.» y el SN nunca llega a registrarse).
           await send(`show ${row.ponType} onu state ${oltIfCli}`);
-          const stateOut = await read(12_000);
+          const stateOut = await read(25_000);
           const occupied = parseOnuIdsFromState(stateOut);
-          nextId = suggestNextOnuId(occupied, defaultMaxOnus(row.ponType));
+          // Cero ids parseados pero el pie declara ONUs: el puerto no está
+          // vacío, así que sugerir el primer índice pisaría a un cliente en
+          // servicio. Mejor no sugerir nada.
+          const counts = parseOnuStateCounts(stateOut);
+          nextId =
+            occupied.length === 0 && counts.total > 0
+              ? null
+              : suggestNextOnuId(occupied, defaultMaxOnus(row.ponType));
         } catch {
           nextId = null;
         }
@@ -3023,21 +3262,29 @@ export class ZteOltClient {
         const ids = parseOnuIdsFromState(stateOut);
         await send('configure terminal');
         await read(12_000);
+        let rebooted = 0;
         for (const id of ids) {
           const onuIf = this.cliOnuIf(onuIfFromOltIf(params.ifName, id), fw);
           await send(`pon-onu-mng ${onuIf}`);
           await read(8_000);
-          await send('reboot');
-          await read(10_000);
+          if (await this.confirmOnuReboot(send, read)) rebooted += 1;
           await send('exit');
-          await read(8_000);
+          await read(8_000).catch(() => '');
         }
         await send('exit');
-        await read(8_000);
+        await read(8_000).catch(() => '');
         return {
-          ok: true,
-          count: ids.length,
-          message: `Reinicio enviado a ${ids.length} ONUs en ${params.ifName}`,
+          ok: rebooted > 0 || ids.length === 0,
+          count: rebooted,
+          message:
+            rebooted === ids.length
+              ? `Reinicio enviado a ${rebooted} ONUs en ${params.ifName}`
+              : `Reinicio enviado a ${rebooted} de ${ids.length} ONUs en ${params.ifName}`,
+          ...(rebooted === 0 && ids.length > 0
+            ? {
+                error: `La OLT no confirmó ningún reinicio en ${params.ifName}.`,
+              }
+            : {}),
         };
       });
     } catch (err) {
@@ -3703,6 +3950,13 @@ export class ZteOltClient {
     /** PON ifNames that should tag this VLAN (others that had it get untagged). */
     defaultPonPorts?: string[];
     previousDefaultPonPorts?: string[];
+    /**
+     * Uplink ifNames (gei_/xgei_) that must carry this VLAN upstream. Without
+     * these the VLAN exists on the OLT but never leaves it, so ONUs cannot
+     * reach their gateway.
+     */
+    tagUplinks?: string[];
+    untagUplinks?: string[];
   }): Promise<{ ok: boolean; error?: string; message?: string }> {
     const id = params.vlanId;
     if (!Number.isInteger(id) || id < 1 || id > 4094) {
@@ -3766,13 +4020,57 @@ export class ZteOltClient {
           }
         }
 
+        // Uplinks are reported instead of applied silently: a VLAN that fails
+        // to tag upstream looks created but strands every ONU behind it. The
+        // port mode is left untouched on purpose — flipping a live uplink to
+        // trunk would drop the traffic already crossing it.
+        const tagged: string[] = [];
+        const untagged: string[] = [];
+        for (const ifName of new Set(params.tagUplinks ?? [])) {
+          const entered = await step(`interface ${ifName}`);
+          if (failed(entered)) {
+            warnings.push(`uplink ${ifName}: no existe en la OLT`);
+            continue;
+          }
+          const out = await step(`switchport vlan ${id} tag`);
+          if (failed(out)) {
+            warnings.push(
+              `no se pudo etiquetar en el uplink ${ifName} (¿está en modo trunk?)`,
+            );
+          } else {
+            tagged.push(ifName);
+          }
+          await step('exit');
+        }
+        for (const ifName of new Set(params.untagUplinks ?? [])) {
+          const entered = await step(`interface ${ifName}`);
+          if (failed(entered)) continue;
+          const out = await step(`no switchport vlan ${id} tag`);
+          if (failed(out)) {
+            warnings.push(`no se pudo quitar del uplink ${ifName}`);
+          } else {
+            untagged.push(ifName);
+          }
+          await step('exit');
+        }
+
         await step('exit');
+
+        const detail = [
+          tagged.length ? `uplinks +${tagged.join(', ')}` : null,
+          untagged.length ? `uplinks -${untagged.join(', ')}` : null,
+        ]
+          .filter(Boolean)
+          .join(' · ');
 
         return {
           ok: true,
-          message: warnings.length
-            ? `VLAN ${id} guardada — ${warnings.join('; ')}`
-            : `VLAN ${id} guardada en la OLT`,
+          message: [
+            `VLAN ${id} guardada${detail ? ` (${detail})` : ' en la OLT'}`,
+            warnings.length ? `— ${warnings.join('; ')}` : null,
+          ]
+            .filter(Boolean)
+            .join(' '),
         };
       });
     } catch (err) {

@@ -225,7 +225,10 @@ export function MobileInstallWizard() {
 
   function pickOrphan(o: UncfgOnu) {
     setOrphan(o)
-    setOnuNumber(o.suggestedOnuId != null ? String(o.suggestedOnuId) : '1')
+    // Sin sugerencia se deja vacío: el índice 1 está ocupado en cualquier
+    // puerto con clientes y la OLT lo trata como «re-create», dejando el SN
+    // sin registrar.
+    setOnuNumber(o.suggestedOnuId != null ? String(o.suggestedOnuId) : '')
   }
 
   function chooseMode(mode: ClientMode) {

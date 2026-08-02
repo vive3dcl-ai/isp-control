@@ -85,6 +85,39 @@ isolate_acs_admin_ports() {
   echo "vpn-concentrator: GenieACS NBI/FS aislados de peers VPN"
 }
 
+is_loopback_ip() {
+  case "$1" in
+    127.*|::1|0:0:0:0:0:0:0:1) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# ¿Escucha CWMP en 0.0.0.0/:: ? Se lee de /proc para no depender de ss/netstat,
+# que no están en la imagen. El puerto va en hexadecimal y la IP en little-endian.
+cwmp_listens_on_wildcard() {
+  hexport=$(printf '%04X' "$ACS_CWMP_PORT")
+  awk -v p=":$hexport" '
+    $4 == "0A" && index($2, p) {           # 0A = LISTEN
+      split($2, a, ":")
+      if (a[1] ~ /^0+$/) { found = 1 }     # 0.0.0.0 o ::
+    }
+    END { exit(found ? 0 : 1) }
+  ' /proc/net/tcp /proc/net/tcp6 2>/dev/null
+}
+
+# Purga DNAT de CWMP dejados por arranques anteriores (o por la versión que
+# apuntaba a loopback), para que un contenedor reiniciado no herede el bloqueo.
+drop_cwmp_dnat_rules() {
+  while iptables -t nat -S PREROUTING 2>/dev/null \
+    | grep -q -- "--dport $ACS_CWMP_PORT .*-j DNAT"; do
+    rule=$(iptables -t nat -S PREROUTING \
+      | grep -m1 -- "--dport $ACS_CWMP_PORT .*-j DNAT" \
+      | sed 's/^-A /-D /')
+    # shellcheck disable=SC2086
+    iptables -t nat $rule 2>/dev/null || break
+  done
+}
+
 add_gateway_ips_to_dev() {
   # Cada túnel tiene serverAddress 10.69.x.1 — el cliente lo usa como peer.
   # OpenVPN solo pone el .1 del pool en el tun; añadimos los .1 secundarios.
@@ -140,6 +173,25 @@ sync_tunnel_gateway_ips() {
       acs_ip="$(getent hosts "$ACS_HOST" 2>/dev/null | awk '{print $1; exit}')"
       ;;
   esac
+
+  # DNAT a loopback = Inform perdido. El kernel descarta como marciano todo
+  # paquete que entra por tun/wg y acaba enrutado a 127.0.0.0/8, salvo que se
+  # active route_localnet. Como CWMP ya escucha en el comodín dentro de este
+  # mismo netns, la IP 10.69.x.1 es local y el paquete llega solo: el DNAT
+  # sobra y encima lo rompe. Solo se mantiene si el listener es loopback-only.
+  if [ -n "$acs_ip" ] && is_loopback_ip "$acs_ip"; then
+    if cwmp_listens_on_wildcard; then
+      drop_cwmp_dnat_rules
+      echo "vpn-concentrator: CWMP $ACS_CWMP_PORT en comodín — sin DNAT (entrega directa)"
+      return
+    fi
+    # Listener atado a loopback: hace falta el DNAT y habilitar route_localnet.
+    for dev in all tun0 tun1 wg0; do
+      sysctl -w "net.ipv4.conf.${dev}.route_localnet=1" >/dev/null 2>&1 || true
+    done
+    echo "vpn-concentrator: CWMP solo en loopback — DNAT + route_localnet"
+  fi
+
   if [ -n "$acs_ip" ] && [ -f "$SERVER_IPS_FILE" ]; then
     while IFS= read -r ip || [ -n "$ip" ]; do
       ip=$(echo "$ip" | tr -d '[:space:]')

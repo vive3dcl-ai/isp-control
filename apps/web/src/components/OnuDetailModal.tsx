@@ -272,7 +272,16 @@ export function OnuDetailModal({
       apiFetch<NetworkMapLocations>('/app/network-map/locations'),
   })
 
+  const serviceClient = detailQuery.data?.client
   const clientLink = useMemo(() => {
+    // El servicio ligado es la fuente fiable; el mapa solo trae ONUs con
+    // coordenadas, así que sirve únicamente como respaldo.
+    if (serviceClient) {
+      return {
+        clientId: serviceClient.clientId,
+        label: serviceClient.label,
+      }
+    }
     const locs = locationsQuery.data
     if (!locs || !onuDbId) return null
     const marker = locs.onus.find((o) => o.onuId === onuDbId)
@@ -282,7 +291,7 @@ export function OnuDetailModal({
       clientId: marker.clientId,
       label: client?.label ?? marker.label,
     }
-  }, [locationsQuery.data, onuDbId])
+  }, [serviceClient, locationsQuery.data, onuDbId])
 
   const napName = useMemo(() => {
     if (!clientLink) return null
@@ -1380,6 +1389,7 @@ export function OnuDetailModal({
           canWrite={canWrite}
           mgmtVlanId={o.mgmtVlanId ?? null}
           wanVlanId={o.wanVlanId ?? null}
+          wanIp={o.wanIp ?? null}
           onClose={() => setVlansModalOpen(false)}
           onSaved={() => {
             void detailQuery.refetch()

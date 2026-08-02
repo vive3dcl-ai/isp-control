@@ -33,7 +33,16 @@ export function OnuTr069ConfigModal({
   const [wifiDraft, setWifiDraft] = useState<
     Record<number, { ssid: string; key: string; enabled: boolean }>
   >({})
-  const [ethDraft, setEthDraft] = useState<Record<number, boolean>>({})
+  const [ethDraft, setEthDraft] = useState<
+    Record<
+      number,
+      {
+        enabled: boolean
+        vlanId: string
+        vlanMode: 'tag' | 'untag' | 'hybrid'
+      }
+    >
+  >({})
   const [userDraft, setUserDraft] = useState<
     Record<number, { username: string; password: string }>
   >({})
@@ -63,7 +72,11 @@ export function OnuTr069ConfigModal({
     setWifiDraft(w)
     const e: typeof ethDraft = {}
     for (const p of c.ethernet) {
-      e[p.index] = p.enabled ?? true
+      e[p.index] = {
+        enabled: p.enabled ?? true,
+        vlanId: p.vlanId != null ? String(p.vlanId) : '',
+        vlanMode: p.vlanMode ?? 'untag',
+      }
     }
     setEthDraft(e)
     const u: typeof userDraft = {}
@@ -99,15 +112,16 @@ export function OnuTr069ConfigModal({
     },
   })
 
-  // First Inform often only has DeviceInfo — pull LAN/WiFi tree on open.
+  // First Inform often only has DeviceInfo — pull LAN/WiFi/users on open.
   useEffect(() => {
     const c = configQuery.data
     if (!c?.inAcs || autoRefreshDone.current) return
-    if (c.wifi.length > 0 || c.ethernet.length > 0 || c.webUsers.length > 0) {
-      return
-    }
+    const needsRefresh =
+      c.webUsers.length === 0 ||
+      (c.wifi.length === 0 && c.ethernet.length === 0)
+    if (!needsRefresh) return
     autoRefreshDone.current = true
-    setMsg('Solicitando Wi‑Fi / Ethernet al ACS…')
+    setMsg('Solicitando Wi‑Fi / Ethernet / usuarios web al ACS…')
     void applyMutation.mutateAsync({ refresh: true })
     // mutateAsync identity is stable enough; only react to first empty config
     // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot on open
@@ -138,11 +152,24 @@ export function OnuTr069ConfigModal({
     }
     const ethernet: NonNullable<ApplyTr069OnuConfigBody['ethernet']> = []
     for (const p of c.ethernet) {
-      const enabled = ethDraft[p.index]
-      if (enabled == null) continue
-      if (enabled !== (p.enabled ?? true)) {
-        ethernet.push({ index: p.index, enabled })
+      const d = ethDraft[p.index]
+      if (!d) continue
+      const patch: (typeof ethernet)[number] = { index: p.index }
+      let changed = false
+      if (d.enabled !== (p.enabled ?? true)) {
+        patch.enabled = d.enabled
+        changed = true
       }
+      const nextVlan = d.vlanId.trim() ? Number(d.vlanId.trim()) : null
+      const prevVlan = p.vlanId ?? null
+      const nextMode = d.vlanMode
+      const prevMode = p.vlanMode ?? 'untag'
+      if (nextVlan !== prevVlan || (nextVlan != null && nextMode !== prevMode)) {
+        patch.vlanId = nextVlan
+        if (nextVlan != null) patch.vlanMode = nextMode
+        changed = true
+      }
+      if (changed) ethernet.push(patch)
     }
     const webUsers: NonNullable<ApplyTr069OnuConfigBody['webUsers']> = []
     for (const u of c.webUsers) {
@@ -394,7 +421,7 @@ export function OnuTr069ConfigModal({
                       className="rounded-lg border border-[var(--border)] p-3"
                     >
                       <p className="mb-2 text-sm font-medium">
-                        Usuario {u.index}
+                        {u.label || `Usuario ${u.index}`}
                       </p>
                       <label className="mb-2 block text-sm">
                         <span className="mb-1 block text-[var(--text-muted)]">
@@ -447,50 +474,117 @@ export function OnuTr069ConfigModal({
             <div className="space-y-2">
               {c.ethernet.length === 0 ? (
                 <p className="text-sm text-[var(--text-muted)]">
-                  Sin puertos Ethernet en el árbol TR069.
+                  Sin puertos Ethernet en el árbol TR069. Pulsa «Refrescar desde
+                  ONU» o espera el Inform.
                 </p>
               ) : (
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="text-left text-[var(--text-muted)]">
-                      <th className="py-1 font-medium">Puerto</th>
-                      <th className="py-1 font-medium">Estado</th>
-                      <th className="py-1 font-medium">MAC</th>
-                      <th className="py-1 font-medium">Activo</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {c.ethernet.map((p) => (
-                      <tr
-                        key={p.index}
-                        className="border-t border-[var(--border)]"
-                      >
-                        <td className="py-2">{p.name ?? `ETH${p.index}`}</td>
-                        <td className="py-2 text-[var(--text-muted)]">
-                          {p.status ?? '—'}
-                        </td>
-                        <td className="py-2 font-mono text-xs">
-                          {p.mac ?? '—'}
-                        </td>
-                        <td className="py-2">
-                          <input
-                            type="checkbox"
-                            checked={ethDraft[p.index] ?? true}
-                            disabled={
-                              !canWrite || !c.inAcs || !p.enablePath
-                            }
-                            onChange={(e) =>
-                              setEthDraft((prev) => ({
-                                ...prev,
-                                [p.index]: e.target.checked,
-                              }))
-                            }
-                          />
-                        </td>
+                <>
+                  <p className="text-xs text-[var(--text-muted)]">
+                    La VLAN del puerto se aplica por OMCI en la OLT (
+                    <code className="text-[11px]">vlan port eth_0/N</code>
+                    ), típico IPTV/bridge hacia el proveedor.
+                  </p>
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-left text-[var(--text-muted)]">
+                        <th className="py-1 font-medium">Puerto</th>
+                        <th className="py-1 font-medium">Estado</th>
+                        <th className="py-1 font-medium">VLAN</th>
+                        <th className="py-1 font-medium">Modo</th>
+                        <th className="py-1 font-medium">Activo</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {c.ethernet.map((p) => {
+                        const d = ethDraft[p.index] ?? {
+                          enabled: true,
+                          vlanId: '',
+                          vlanMode: 'untag' as const,
+                        }
+                        return (
+                          <tr
+                            key={p.index}
+                            className="border-t border-[var(--border)]"
+                          >
+                            <td className="py-2">
+                              {p.name ?? `ETH${p.index}`}
+                              <div className="font-mono text-[10px] text-[var(--text-muted)]">
+                                eth_0/{p.index}
+                              </div>
+                            </td>
+                            <td className="py-2 text-[var(--text-muted)]">
+                              {p.status ?? '—'}
+                            </td>
+                            <td className="py-2">
+                              <input
+                                className={`${inputClass} w-20`}
+                                inputMode="numeric"
+                                placeholder="—"
+                                value={d.vlanId}
+                                disabled={!canWrite || !c.inAcs}
+                                onChange={(e) =>
+                                  setEthDraft((prev) => ({
+                                    ...prev,
+                                    [p.index]: {
+                                      ...d,
+                                      vlanId: e.target.value.replace(
+                                        /\D+/g,
+                                        '',
+                                      ),
+                                    },
+                                  }))
+                                }
+                              />
+                            </td>
+                            <td className="py-2">
+                              <select
+                                className={inputClass}
+                                value={d.vlanMode}
+                                disabled={
+                                  !canWrite || !c.inAcs || !d.vlanId.trim()
+                                }
+                                onChange={(e) =>
+                                  setEthDraft((prev) => ({
+                                    ...prev,
+                                    [p.index]: {
+                                      ...d,
+                                      vlanMode: e.target.value as
+                                        | 'tag'
+                                        | 'untag'
+                                        | 'hybrid',
+                                    },
+                                  }))
+                                }
+                              >
+                                <option value="untag">untag</option>
+                                <option value="tag">tag</option>
+                                <option value="hybrid">hybrid</option>
+                              </select>
+                            </td>
+                            <td className="py-2">
+                              <input
+                                type="checkbox"
+                                checked={d.enabled}
+                                disabled={
+                                  !canWrite || !c.inAcs || !p.enablePath
+                                }
+                                onChange={(e) =>
+                                  setEthDraft((prev) => ({
+                                    ...prev,
+                                    [p.index]: {
+                                      ...d,
+                                      enabled: e.target.checked,
+                                    },
+                                  }))
+                                }
+                              />
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </>
               )}
             </div>
           )}

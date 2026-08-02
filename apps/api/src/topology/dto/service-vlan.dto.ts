@@ -95,6 +95,19 @@ export class SyncServiceVlanDeviceDto {
   createBridge?: boolean;
 
   /**
+   * Only for kind=olt: uplink ifNames (gei_/xgei_ on ZTE) that must carry this
+   * VLAN upstream. Creating the VLAN alone leaves it trapped inside the OLT.
+   * Omit to leave the current trunk membership untouched; send an empty array
+   * to remove the VLAN from every uplink.
+   */
+  @IsOptional()
+  @IsArray()
+  @ArrayUnique()
+  @IsString({ each: true })
+  @MaxLength(80, { each: true })
+  uplinks?: string[];
+
+  /**
    * Required when kind=switch: physical ports and tagged/untagged membership
    * for `/interface/bridge/vlan`.
    */

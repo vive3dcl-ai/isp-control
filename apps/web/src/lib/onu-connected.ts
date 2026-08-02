@@ -234,6 +234,14 @@ export type ConnectedOnuDetail = ConnectedOnu & {
 export type ConnectedOnuDetailResponse = {
   probedAt: string | null
   fromDatabase?: boolean
+  /** Cliente dueño según el servicio ligado (no depende del mapa/coordenadas). */
+  client?: {
+    clientId: string
+    serviceId: string
+    label: string
+    serviceName: string | null
+    serviceStatus: string | null
+  } | null
   onu: ConnectedOnuDetail
 }
 
