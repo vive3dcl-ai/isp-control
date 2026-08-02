@@ -102,6 +102,11 @@ export type ConnectedOnu = {
   tr069ProfileId?: string | null
   tr069Enabled?: boolean
   provisionMode?: 'auto' | 'manual'
+  verifyStatus?: 'idle' | 'test' | 'ok' | 'fail'
+  verifyStartedAt?: string | null
+  verifyCheckedAt?: string | null
+  verifyAttempt?: number
+  verifyDetail?: Record<string, unknown>
 }
 
 export type OnuManualConfig = {

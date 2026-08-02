@@ -137,6 +137,31 @@ export class Onu {
   })
   provisionMode: string;
 
+  /**
+   * Chequeo silencioso post-aprovisionamiento.
+   * idle = no corre · test = en curso · ok = pasó · fail = falló (habilita Resync).
+   */
+  @Column({
+    name: 'verify_status',
+    type: 'varchar',
+    length: 12,
+    default: 'idle',
+  })
+  verifyStatus: string;
+
+  @Column({ name: 'verify_started_at', type: 'timestamptz', nullable: true })
+  verifyStartedAt: Date | null;
+
+  @Column({ name: 'verify_checked_at', type: 'timestamptz', nullable: true })
+  verifyCheckedAt: Date | null;
+
+  @Column({ name: 'verify_attempt', type: 'int', default: 0 })
+  verifyAttempt: number;
+
+  /** Último resultado por check: arp, connreq, wan, traffic. */
+  @Column({ name: 'verify_detail', type: 'jsonb', default: () => "'{}'" })
+  verifyDetail: Record<string, unknown>;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

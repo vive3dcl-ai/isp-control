@@ -14,6 +14,8 @@ import { HuaweiOltClient } from './huawei-olt.client';
 import { HuaweiOltSnmpClient } from './huawei-olt-snmp.client';
 import { MikrotikPollService } from './mikrotik-poll.service';
 import { OnuMetricsPollService } from './onu-metrics-poll.service';
+import { OnuPostProvisionVerifyService } from './onu-post-provision-verify.service';
+import { OnuPostProvisionVerifyPollService } from './onu-post-provision-verify-poll.service';
 import { OltInventoryPollService } from './olt-inventory-poll.service';
 import { VpnService } from './vpn.service';
 import { VpnController, VpnPublicController } from './vpn.controller';
@@ -81,6 +83,8 @@ import { SupportModule } from '../support/support.module';
     HuaweiOltSnmpClient,
     MikrotikPollService,
     OnuMetricsPollService,
+    OnuPostProvisionVerifyService,
+    OnuPostProvisionVerifyPollService,
     OltInventoryPollService,
     VpnService,
     Tr069Service,

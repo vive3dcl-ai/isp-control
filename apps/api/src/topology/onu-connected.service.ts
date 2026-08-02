@@ -318,6 +318,11 @@ export class OnuConnectedService {
       wanPoolId: row.wanPoolId ?? null,
       tr069ProfileId: row.tr069ProfileId ?? null,
       provisionMode: (row.provisionMode as 'auto' | 'manual') ?? 'auto',
+      verifyStatus: (row.verifyStatus as 'idle' | 'test' | 'ok' | 'fail') ?? 'idle',
+      verifyStartedAt: row.verifyStartedAt?.toISOString() ?? null,
+      verifyCheckedAt: row.verifyCheckedAt?.toISOString() ?? null,
+      verifyAttempt: row.verifyAttempt ?? 0,
+      verifyDetail: row.verifyDetail ?? {},
     };
   }
 

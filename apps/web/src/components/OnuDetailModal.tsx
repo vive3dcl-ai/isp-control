@@ -25,6 +25,11 @@ import { OnuLiveTrafficModal } from './OnuLiveTrafficModal'
 import { OnuTr069ConfigModal } from './OnuTr069ConfigModal'
 import { OnuVlansModal } from './OnuVlansModal'
 import { OnuManualModal } from './OnuManualModal'
+import {
+  OperationProgressModal,
+  runProgressSteps,
+  type ProgressStep,
+} from './OperationProgressModal'
 import type { Tr069OnuConfig } from '../lib/onu-tr069-config'
 import type { Tr069ProfilesResponse } from '../lib/tr069'
 import type { Zone } from './ZonasSettingsTab'
@@ -46,6 +51,60 @@ function pendingBtn(label: string) {
 
 function isUuid(id: string | undefined): id is string {
   return !!id && /^[0-9a-f-]{36}$/i.test(id)
+}
+
+function verifyTooltip(detail: Record<string, unknown> | undefined): string {
+  if (!detail || typeof detail !== 'object') return ''
+  const parts: string[] = []
+  for (const key of ['arp', 'connreq', 'wan', 'traffic'] as const) {
+    const c = detail[key] as { ok?: boolean; message?: string } | undefined
+    if (!c?.message) continue
+    parts.push(`${key}: ${c.ok ? 'ok' : 'fail'} (${c.message})`)
+  }
+  const healed = detail.healed
+  if (Array.isArray(healed) && healed.length) {
+    parts.push(`curado: ${healed.join('; ')}`)
+  }
+  return parts.join(' · ')
+}
+
+function VerifyStatusPill({
+  status,
+  detail,
+}: {
+  status: 'idle' | 'test' | 'ok' | 'fail' | undefined
+  detail?: Record<string, unknown>
+}) {
+  if (!status || status === 'idle') return null
+  const title = verifyTooltip(detail) || undefined
+  if (status === 'ok') {
+    return (
+      <span
+        title={title}
+        className="rounded-full bg-emerald-600/20 px-2 py-0.5 text-[10px] font-medium text-emerald-400"
+      >
+        OK
+      </span>
+    )
+  }
+  if (status === 'test') {
+    return (
+      <span
+        title={title || 'Chequeo silencioso en curso'}
+        className="rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-medium text-amber-300"
+      >
+        test
+      </span>
+    )
+  }
+  return (
+    <span
+      title={title || 'Chequeo fallido — usa Resync config'}
+      className="rounded-full bg-red-600/20 px-2 py-0.5 text-[10px] font-medium text-red-400"
+    >
+      fail
+    </span>
+  )
 }
 
 export function OnuDetailModal({
@@ -85,6 +144,19 @@ export function OnuDetailModal({
   const [error, setError] = useState<string | null>(null)
   const [tr069Error, setTr069Error] = useState<string | null>(null)
   const [chartWindow, setChartWindow] = useState<MetricWindowKey>('1h')
+  const [resyncOpen, setResyncOpen] = useState(false)
+  const [resyncSteps, setResyncSteps] = useState<ProgressStep[]>([])
+  const [resyncRunning, setResyncRunning] = useState(false)
+  const [resyncFailed, setResyncFailed] = useState(false)
+  const [resyncDone, setResyncDone] = useState(false)
+  const [resyncRunners, setResyncRunners] = useState<
+    Record<string, () => Promise<string | void>>
+  >({})
+  const [checkOpen, setCheckOpen] = useState(false)
+  const [checkSteps, setCheckSteps] = useState<ProgressStep[]>([])
+  const [checkRunning, setCheckRunning] = useState(false)
+  const [checkFailed, setCheckFailed] = useState(false)
+  const [checkDone, setCheckDone] = useState(false)
 
   const detailQuery = useQuery({
     queryKey: ['app', 'onus', 'detail', oltId, onuIf],
@@ -92,8 +164,9 @@ export function OnuDetailModal({
       apiFetch<ConnectedOnuDetailResponse>(
         `/app/onus/detail?oltId=${encodeURIComponent(oltId)}&onuIf=${encodeURIComponent(onuIf)}`,
       ),
-    // Live SNMP sample (via metrics?live=1) updates DB; refresh header often.
-    refetchInterval: 3_000,
+    // Mientras el chequeo corre, refresca el indicador; si no, cada 3 s basta.
+    refetchInterval: (q) =>
+      q.state.data?.onu?.verifyStatus === 'test' ? 5_000 : 3_000,
   })
 
   const onuDbId = detailQuery.data?.onu?.id
@@ -485,6 +558,226 @@ export function OnuDetailModal({
     }
   }, [tr069LocalOn, tr069OnFromServer])
 
+  async function executeResync(
+    steps: ProgressStep[],
+    runners: Record<string, () => Promise<string | void>>,
+  ) {
+    setResyncRunning(true)
+    setResyncFailed(false)
+    setResyncDone(false)
+    const result = await runProgressSteps(steps, setResyncSteps, runners)
+    setResyncRunning(false)
+    if (result.ok) {
+      setResyncDone(true)
+      void queryClient.invalidateQueries({
+        queryKey: ['app', 'onus', 'detail', oltId, onuIf],
+      })
+    } else {
+      setResyncFailed(true)
+    }
+  }
+
+  function startResync() {
+    if (!isUuid(onuDbId) || !o) return
+    const body: {
+      mgmtVlanId?: number
+      wanVlanId?: number | null
+    } = {}
+    if (o.mgmtVlanId != null) body.mgmtVlanId = o.mgmtVlanId
+    if (o.wanVlanId != null) body.wanVlanId = o.wanVlanId
+
+    const steps: ProgressStep[] = [
+      {
+        id: 'olt',
+        label: 'Reaplicando VLANs en la OLT (service-port)',
+        status: 'pending',
+      },
+      {
+        id: 'assign',
+        label: 'Confirmando IPs del pool (mgmt / WAN)',
+        status: 'pending',
+      },
+      {
+        id: 'apply',
+        label: 'Reaplicando a la ONU (OMCI + TR069)',
+        status: 'pending',
+      },
+      {
+        id: 'verify',
+        label: 'Arrancando chequeo silencioso (15 min)',
+        status: 'pending',
+      },
+    ]
+
+    const runners: Record<string, () => Promise<string | void>> = {
+      olt: async () => {
+        const r = await apiFetch<{ message?: string }>(
+          `/app/onus/${onuDbId}/network-vlans/olt`,
+          { method: 'POST', body: JSON.stringify(body) },
+        )
+        return r.message || 'OLT OK'
+      },
+      assign: async () => {
+        const r = await apiFetch<{ message?: string }>(
+          `/app/onus/${onuDbId}/network-vlans/assign`,
+          { method: 'POST', body: JSON.stringify(body) },
+        )
+        return r.message || 'Asignación OK'
+      },
+      apply: async () => {
+        const r = await apiFetch<{ message?: string }>(
+          `/app/onus/${onuDbId}/network-vlans/apply`,
+          { method: 'POST', body: JSON.stringify(body) },
+        )
+        return r.message || 'ONU OK'
+      },
+      verify: async () => {
+        const r = await apiFetch<{ message?: string }>(
+          `/app/onus/${onuDbId}/verify/start`,
+          { method: 'POST' },
+        )
+        return r.message || 'Chequeo arrancado'
+      },
+    }
+
+    setResyncSteps(steps)
+    setResyncRunners(runners)
+    setResyncOpen(true)
+    void executeResync(steps, runners)
+  }
+
+  async function executeCheck(
+    steps: ProgressStep[],
+    runners: Record<string, () => Promise<string | void>>,
+  ) {
+    setCheckRunning(true)
+    setCheckFailed(false)
+    setCheckDone(false)
+    const result = await runProgressSteps(steps, setCheckSteps, runners)
+    setCheckRunning(false)
+    if (result.ok) {
+      setCheckDone(true)
+      void queryClient.invalidateQueries({
+        queryKey: ['app', 'onus', 'detail', oltId, onuIf],
+      })
+    } else {
+      setCheckFailed(true)
+      void queryClient.invalidateQueries({
+        queryKey: ['app', 'onus', 'detail', oltId, onuIf],
+      })
+    }
+  }
+
+  function startCheckOnu() {
+    if (!isUuid(onuDbId)) return
+
+    const pause = (ms: number) =>
+      new Promise<void>((resolve) => setTimeout(resolve, ms))
+
+    const steps: ProgressStep[] = [
+      {
+        id: 'run',
+        label: 'Consultando router del gateway y ACS',
+        status: 'pending',
+      },
+      {
+        id: 'arp',
+        label: 'ARP en el router del gateway',
+        status: 'pending',
+      },
+      {
+        id: 'connreq',
+        label: 'Credenciales de petición de conexión',
+        status: 'pending',
+      },
+      {
+        id: 'wan',
+        label: 'WAN TR-069 (IP, máscara, VLAN, NAT)',
+        status: 'pending',
+      },
+      {
+        id: 'traffic',
+        label: 'Tráfico / conexiones activas',
+        status: 'pending',
+      },
+      {
+        id: 'result',
+        label: 'Resultado final',
+        status: 'pending',
+      },
+    ]
+
+    let detail: Record<string, unknown> = {}
+    let status = 'fail'
+    let healedNote = ''
+
+    const checkOf = (key: string) =>
+      detail[key] as { ok?: boolean; message?: string } | undefined
+
+    const runners: Record<string, () => Promise<string | void>> = {
+      run: async () => {
+        const r = await apiFetch<{
+          ok: boolean
+          verifyStatus: string
+          verifyDetail: Record<string, unknown>
+          message?: string
+        }>(`/app/onus/${onuDbId}/verify/run`, { method: 'POST' })
+        detail = r.verifyDetail ?? {}
+        status = r.verifyStatus
+        const healed = detail.healed
+        if (Array.isArray(healed) && healed.length) {
+          healedNote = healed.join('; ')
+        }
+        return healedNote
+          ? `Pruebas hechas · curado: ${healedNote}`
+          : 'Pruebas hechas'
+      },
+      arp: async () => {
+        await pause(350)
+        const c = checkOf('arp')
+        if (!c?.ok) throw new Error(c?.message || 'ARP falló')
+        return c.message || 'ARP OK'
+      },
+      connreq: async () => {
+        await pause(350)
+        const c = checkOf('connreq')
+        if (!c?.ok) throw new Error(c?.message || 'Credenciales fallaron')
+        return c.message || 'Credenciales OK'
+      },
+      wan: async () => {
+        await pause(350)
+        const c = checkOf('wan')
+        if (!c?.ok) throw new Error(c?.message || 'WAN falló')
+        return c.message || 'WAN OK'
+      },
+      traffic: async () => {
+        await pause(350)
+        const c = checkOf('traffic')
+        // Sin tráfico no tumba el chequeo si lo esencial pasó (cliente idle).
+        if (status === 'ok') {
+          return c?.ok
+            ? c.message || 'Tráfico OK'
+            : c?.message || 'Sin tráfico (cliente idle)'
+        }
+        if (!c?.ok) throw new Error(c?.message || 'Sin tráfico')
+        return c.message || 'Tráfico OK'
+      },
+      result: async () => {
+        await pause(200)
+        if (status !== 'ok') {
+          throw new Error(
+            verifyTooltip(detail) || 'La ONU no pasó el chequeo',
+          )
+        }
+        return 'Todo OK'
+      },
+    }
+
+    setCheckSteps(steps)
+    setCheckOpen(true)
+    void executeCheck(steps, runners)
+  }
+
   const imageSrc =
     o?.imageUrl ||
     (o?.onuType?.toLowerCase().includes('huawei')
@@ -775,6 +1068,10 @@ export function OnuDetailModal({
                             Esperando Inform
                           </span>
                         ) : null}
+                        <VerifyStatusPill
+                          status={o.verifyStatus}
+                          detail={o.verifyDetail}
+                        />
                       </p>
                       {tr069Error && (
                         <p className="text-xs text-[var(--danger)]">
@@ -1194,13 +1491,82 @@ export function OnuDetailModal({
                     </button>
                   </>
                 ) : null}
-                {pendingBtn('Resync config')}
-                {pendingBtn('Restore defaults')}
+                {canWrite &&
+                isUuid(onuDbId) &&
+                o?.verifyStatus === 'fail' ? (
+                  <button
+                    type="button"
+                    disabled={resyncRunning || checkRunning || actionBusy}
+                    onClick={() => startResync()}
+                    title={
+                      verifyTooltip(o.verifyDetail) ||
+                      'Reaprovisionar y reiniciar el chequeo'
+                    }
+                    className="rounded-lg border border-amber-500/50 bg-amber-500/10 px-3 py-1.5 text-sm font-medium text-amber-200 hover:bg-amber-500/20 disabled:opacity-50"
+                  >
+                    Resync config
+                  </button>
+                ) : (
+                  pendingBtn('Resync config')
+                )}
+                {canWrite && isUuid(onuDbId) ? (
+                  <button
+                    type="button"
+                    disabled={checkRunning || resyncRunning || actionBusy}
+                    onClick={() => startCheckOnu()}
+                    title="Correr ahora ARP, WAN, credenciales y tráfico"
+                    className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm font-medium hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:opacity-50"
+                  >
+                    {checkRunning ? 'Checking…' : 'Check ONU'}
+                  </button>
+                ) : (
+                  pendingBtn('Check ONU')
+                )}
               </div>
             </>
           )}
         </div>
       </div>
+
+      <OperationProgressModal
+        open={resyncOpen}
+        title="Resync config"
+        steps={resyncSteps}
+        running={resyncRunning}
+        failed={resyncFailed}
+        allDone={resyncDone}
+        onRetry={() => void executeResync(resyncSteps, resyncRunners)}
+        onClose={() => {
+          setResyncOpen(false)
+          void queryClient.invalidateQueries({
+            queryKey: ['app', 'onus', 'detail', oltId, onuIf],
+          })
+        }}
+      />
+
+      <OperationProgressModal
+        open={checkOpen}
+        title="Check ONU"
+        steps={checkSteps}
+        running={checkRunning}
+        failed={checkFailed}
+        allDone={checkDone}
+        doneLabel="Todo OK"
+        failedLabel="Hay fallos — puedes reintentar el chequeo"
+        onRetry={() => startCheckOnu()}
+        onClose={() => {
+          setCheckOpen(false)
+          void queryClient.invalidateQueries({
+            queryKey: ['app', 'onus', 'detail', oltId, onuIf],
+          })
+        }}
+      >
+        {checkDone ? (
+          <div className="mx-5 mb-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">
+            Todo OK — la ONU pasó ARP, credenciales, WAN y tráfico.
+          </div>
+        ) : null}
+      </OperationProgressModal>
 
       {cliModal && (
         <OnuCliReportModal

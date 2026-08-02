@@ -786,10 +786,24 @@ const TOPOLOGY_ALTER = (schema: string) => `
   );
   CREATE INDEX IF NOT EXISTS "idx_node_headers_node"
     ON "${schema}"."node_headers" ("node_id");
+
+  -- v46: chequeo silencioso post-aprovisionamiento WAN
+  ALTER TABLE "${schema}"."onus"
+    ADD COLUMN IF NOT EXISTS "verify_status" varchar(12) NOT NULL DEFAULT 'idle';
+  ALTER TABLE "${schema}"."onus"
+    ADD COLUMN IF NOT EXISTS "verify_started_at" TIMESTAMPTZ NULL;
+  ALTER TABLE "${schema}"."onus"
+    ADD COLUMN IF NOT EXISTS "verify_checked_at" TIMESTAMPTZ NULL;
+  ALTER TABLE "${schema}"."onus"
+    ADD COLUMN IF NOT EXISTS "verify_attempt" int NOT NULL DEFAULT 0;
+  ALTER TABLE "${schema}"."onus"
+    ADD COLUMN IF NOT EXISTS "verify_detail" jsonb NOT NULL DEFAULT '{}'::jsonb;
+  CREATE INDEX IF NOT EXISTS "idx_onus_verify_status"
+    ON "${schema}"."onus" ("verify_status");
 `;
 
 /** Bump when tenant DDL adds new tables/columns so existing processes re-apply. */
-const TENANT_SCHEMA_VERSION = 45;
+const TENANT_SCHEMA_VERSION = 46;
 
 @Injectable()
 export class TenantConnectionService implements OnModuleDestroy {

@@ -44,6 +44,7 @@ import {
   pickServiceWanConnection,
   type WanConnectionCandidate,
 } from './onu-wan-connection.util';
+import { inspectWanVlanLeaves } from './onu-wan-vlan-leaf.util';
 import { computeIpNetwork } from './ip-pool.util';
 import type { NetworkDevice } from './entities/network-device.entity';
 import type { Tr069Profile } from './entities/tr069-profile.entity';
@@ -732,7 +733,11 @@ export class OnuTr069ConfigService {
       }
       const id = deviceIdString(device._id);
       const parsed = this.parseDevice(device);
-      const ethernet = await this.mergeOmciEthVlans(schema, onu, parsed.ethernet);
+      const ethernet = await this.mergeOmciEthVlans(
+        schema,
+        onu,
+        parsed.ethernet,
+      );
       return {
         ...base,
         acsDeviceId: id || null,
@@ -892,10 +897,7 @@ export class OnuTr069ConfigService {
         throw new BadRequestException('ONU sin interfaz OLT (onuIf)');
       }
       for (const e of ethVlanPatches) {
-        const vlanSpecified = Object.prototype.hasOwnProperty.call(
-          e,
-          'vlanId',
-        );
+        const vlanSpecified = Object.prototype.hasOwnProperty.call(e, 'vlanId');
         const vlanId = vlanSpecified ? (e.vlanId ?? null) : null;
         if (!vlanSpecified) continue;
         const mode = e.vlanMode ?? 'untag';
@@ -1266,6 +1268,10 @@ export class OnuTr069ConfigService {
       }
     }
 
+    // Tras un apply con WAN en auto, arranca el chequeo silencioso de 15 min.
+    onu = (await onuRepo.findOne({ where: { id: onuId } }))!;
+    await this.markPostProvisionVerify(schema, onu.id);
+
     return {
       ok: true,
       message: notes.join(' · ') || 'Nada que aplicar a la ONU',
@@ -1273,6 +1279,74 @@ export class OnuTr069ConfigService {
       tr069ProfileId: onu.tr069ProfileId,
       tr069Enabled: !!onu.tr069ProfileId && !!onu.mgmtIp,
     };
+  }
+
+  /**
+   * Arranca el chequeo silencioso de 15 min tras un apply con WAN en modo auto.
+   * Se escribe directo en BD para no acoplar el poller al flujo de VLANs.
+   */
+  async markPostProvisionVerify(schema: string, onuId: string): Promise<void> {
+    const onuRepo = await this.tenantConnections.getOnuRepository(schema);
+    const onu = await onuRepo.findOne({ where: { id: onuId } });
+    if (!onu) return;
+    if (onu.provisionMode === 'manual') return;
+    if (!onu.wanIp?.trim()) return;
+    onu.verifyStatus = 'test';
+    onu.verifyStartedAt = new Date();
+    onu.verifyCheckedAt = null;
+    onu.verifyAttempt = 0;
+    onu.verifyDetail = {};
+    await onuRepo.save(onu);
+  }
+
+  /** Curación usada por el poller: reescribe credenciales ajenas y despierta el CPE. */
+  async healConnReqForVerify(
+    schema: string,
+    onuId: string,
+  ): Promise<string | null> {
+    const onuRepo = await this.tenantConnections.getOnuRepository(schema);
+    const onu = await onuRepo.findOne({ where: { id: onuId } });
+    if (!onu?.sn?.trim()) return null;
+    try {
+      const client = this.nbi();
+      const device = await client.findBySerial(onu.sn);
+      if (!device?._id) return 'curación connreq: sin Inform';
+      const deviceId = deviceIdString(device._id);
+      return await this.ensureConnReqCredentials(
+        client,
+        deviceId,
+        device,
+        onu.sn,
+      );
+    } catch (e) {
+      return `curación connreq: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  /** Curación usada por el poller: vuelve a empujar WAN/NAT/máscara/VLAN. */
+  async repushWanForVerify(
+    schema: string,
+    onuId: string,
+  ): Promise<string | null> {
+    const onuRepo = await this.tenantConnections.getOnuRepository(schema);
+    const onu = await onuRepo.findOne({ where: { id: onuId } });
+    if (!onu?.wanIp || !onu.wanPoolId) return null;
+    const poolRepo = await this.tenantConnections.getIpPoolRepository(schema);
+    const wanPool = await poolRepo.findOne({ where: { id: onu.wanPoolId } });
+    if (!wanPool?.dns1) return 'curación WAN: pool sin DNS';
+    try {
+      const note = await this.applyWanStaticTr069(schema, onu, {
+        wanIp: onu.wanIp,
+        wanVlan: wanPool.vlanId,
+        wanGateway: wanPool.gateway,
+        wanMask: prefixToMask(wanPool.prefix),
+        wanDns1: wanPool.dns1,
+        wanDns2: wanPool.dns2,
+      });
+      return `curación WAN: ${note}`;
+    } catch (e) {
+      return `curación WAN: ${e instanceof Error ? e.message : String(e)}`;
+    }
   }
 
   /**
@@ -1570,9 +1644,17 @@ export class OnuTr069ConfigService {
       // La VLAN va en una hoja propietaria distinta por fabricante y sólo se
       // manda si el árbol la expone: SetParameterValues es atómico, así que una
       // hoja inexistente tumbaría también el NAT si fuese en el mismo lote.
-      const vlanLeaf = this.findWanVlanLeaf(device, conn, connDevice);
+      const vlanInspection = inspectWanVlanLeaves(device, conn, connDevice);
+      const vlanLeaf = vlanInspection.selected;
       if (!vlanLeaf) {
-        notes.push('VLAN WAN sin hoja TR069 conocida (queda la de OMCI)');
+        const exposed = vlanInspection.exposed
+          .map((leaf) => leaf.path.split('.').pop())
+          .join(',');
+        notes.push(
+          exposed
+            ? `VLAN WAN: el modelo expone ${exposed}, pero ninguna hoja es segura para escritura`
+            : 'VLAN WAN sin hoja TR069 conocida (queda la de OMCI)',
+        );
       } else {
         try {
           const vlanParams: Array<[string, string | number | boolean, string]> =
@@ -1707,7 +1789,12 @@ export class OnuTr069ConfigService {
       const kickNote =
         r.status === 200
           ? null
-          : await this.kickWithFactoryCredentials(device, base, current, serial);
+          : await this.kickWithFactoryCredentials(
+              device,
+              base,
+              current,
+              serial,
+            );
 
       return [note, informNote, kickNote].filter(Boolean).join(' · ');
     } catch (e) {
@@ -1748,9 +1835,7 @@ export class OnuTr069ConfigService {
       try {
         const first = await fetch(url, { signal: AbortSignal.timeout(8_000) });
         if (first.status < 300) return 'CPE despertado sin autenticación';
-        challenge = parseDigestChallenge(
-          first.headers.get('www-authenticate'),
-        );
+        challenge = parseDigestChallenge(first.headers.get('www-authenticate'));
       } catch {
         return 'no hay ruta hacia el CPE para despertarlo';
       }
@@ -1806,31 +1891,6 @@ export class OnuTr069ConfigService {
     } catch (e) {
       return `inform: ${e instanceof Error ? e.message : String(e)}`;
     }
-  }
-
-  /**
-   * Hoja donde vive el VLAN ID de la WAN. FiberHome la cuelga del
-   * WANConnectionDevice (`X_FH_WANGponLinkConfig`), Huawei y ZTE de la propia
-   * conexión, y algunos modelos (HG6246R) sólo publican el `VLANID` estándar.
-   * Las propietarias van primero: cuando conviven, es la que manda. Se devuelve
-   * sólo si el CPE la publica.
-   */
-  private findWanVlanLeaf(
-    device: Record<string, unknown>,
-    conn: string,
-    connDevice: string,
-  ): string | null {
-    const candidates = [
-      `${connDevice}.X_FH_WANGponLinkConfig.VLANID`,
-      `${conn}.X_HW_VLAN`,
-      `${conn}.X_ZTE-COM_VLANID`,
-      `${conn}.X_CT-COM_VLAN`,
-      `${conn}.VLANID`,
-    ];
-    for (const path of candidates) {
-      if (genieNodeExists(device, path)) return path;
-    }
-    return null;
   }
 
   /**

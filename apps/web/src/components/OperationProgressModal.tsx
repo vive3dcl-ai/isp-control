@@ -69,6 +69,8 @@ export function OperationProgressModal({
   onRetry,
   onClose,
   children,
+  doneLabel = 'Todo listo',
+  failedLabel = 'Hay errores — puedes reintentar solo lo pendiente',
 }: {
   open: boolean
   title: string
@@ -79,6 +81,9 @@ export function OperationProgressModal({
   onRetry?: () => void
   onClose: () => void
   children?: ReactNode
+  /** Texto bajo el título cuando terminó bien. */
+  doneLabel?: string
+  failedLabel?: string
 }) {
   if (!open) return null
 
@@ -98,9 +103,9 @@ export function OperationProgressModal({
           </h3>
           <p className="mt-1 text-xs text-[var(--text-muted)]">
             {allDone
-              ? 'Todo listo'
+              ? doneLabel
               : failed
-                ? 'Hay errores — puedes reintentar solo lo pendiente'
+                ? failedLabel
                 : running
                   ? `Progreso ${doneCount}/${steps.length}`
                   : `Pasos ${doneCount}/${steps.length}`}

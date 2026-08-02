@@ -1,5 +1,6 @@
 import {
   Body,
+  BadRequestException,
   Controller,
   Delete,
   Get,
@@ -25,6 +26,7 @@ import { OnuConnectedService } from './onu-connected.service';
 import { IpPoolService } from './ip-pool.service';
 import { SetOnuTr069Dto, SetOnuNetworkVlansDto } from './dto/ip-pool.dto';
 import { OnuTr069ConfigService } from './onu-tr069-config.service';
+import { OnuPostProvisionVerifyService } from './onu-post-provision-verify.service';
 import { ApplyTr069OnuConfigDto } from './dto/onu-tr069-config.dto';
 import {
   IsArray,
@@ -151,6 +153,7 @@ export class OnuConnectedController {
     private readonly onus: OnuConnectedService,
     private readonly ipPools: IpPoolService,
     private readonly tr069Config: OnuTr069ConfigService,
+    private readonly verify: OnuPostProvisionVerifyService,
   ) {}
 
   @Get()
@@ -407,6 +410,55 @@ export class OnuConnectedController {
     @Param('id', ParseUUIDPipe) id: string,
   ) {
     return this.tr069Config.networkVlansVerify(user, id);
+  }
+
+  /**
+   * Arranca (o reinicia) el chequeo silencioso post-aprovisionamiento.
+   * Lo usa Resync tras reaplicar OLT/assign/apply.
+   */
+  @Post(':id/verify/start')
+  @TenantRoles(...FIELD_INSTALL_ROLES)
+  async startPostProvisionVerify(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    const schema = user.schemaName;
+    if (!schema) throw new BadRequestException('Sin esquema de empresa');
+    const onu = await this.verify.start(schema, id);
+    return {
+      ok: true,
+      verifyStatus: onu.verifyStatus,
+      verifyStartedAt: onu.verifyStartedAt?.toISOString() ?? null,
+      message: 'Chequeo silencioso arrancado',
+    };
+  }
+
+  /**
+   * Check ONU: corre ya las mismas pruebas que el verificador automático
+   * (ARP, connreq, WAN, tráfico) y actualiza el indicador.
+   */
+  @Post(':id/verify/run')
+  @TenantRoles(...FIELD_INSTALL_ROLES)
+  async runPostProvisionVerify(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    const schema = user.schemaName;
+    if (!schema) throw new BadRequestException('Sin esquema de empresa');
+    const onu = await this.verify.runManual(schema, id);
+    const detail = (onu.verifyDetail ?? {}) as Record<string, unknown>;
+    return {
+      ok: onu.verifyStatus === 'ok',
+      verifyStatus: onu.verifyStatus,
+      verifyCheckedAt: onu.verifyCheckedAt?.toISOString() ?? null,
+      verifyDetail: detail,
+      message:
+        onu.verifyStatus === 'ok'
+          ? 'ONU OK'
+          : onu.verifyStatus === 'fail'
+            ? 'Chequeo fallido'
+            : 'Chequeo en curso',
+    };
   }
 
   /** Switch ONU provisioning mode: auto (managed) ↔ manual (technician). */
