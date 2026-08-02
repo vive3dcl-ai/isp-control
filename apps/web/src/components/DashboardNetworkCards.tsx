@@ -9,7 +9,10 @@ import {
   type SwitchSubtype,
   type TopologyDevice,
 } from '../lib/topology'
-import { mikrotikBoardImageUrl } from '../lib/mikrotikBoardImage'
+import {
+  mikrotikBoardImageUrl,
+  mikrotikFallbackImageUrl,
+} from '../lib/mikrotikBoardImage'
 import { oltBoardImageUrl } from '../lib/oltBoardImage'
 
 function ramUsedLabel(device: TopologyDevice) {
@@ -38,7 +41,8 @@ export function RouterDeviceCard({
   onClick: () => void
 }) {
   const board = device.metricBoardName
-  const img = mikrotikBoardImageUrl(board) ?? '/mikrotik-generic.svg'
+  const img =
+    mikrotikBoardImageUrl(board) ?? mikrotikFallbackImageUrl('router')
   const status = (device.connectionStatus ??
     'unknown') as ConnectionStatus
 
@@ -54,7 +58,7 @@ export function RouterDeviceCard({
           alt={board ?? device.name}
           className="max-h-16 w-full object-contain transition duration-300 group-hover:scale-[1.03] sm:max-h-20"
           onError={(e) => {
-            e.currentTarget.src = '/mikrotik-generic.svg'
+            e.currentTarget.src = mikrotikFallbackImageUrl('router')
           }}
         />
         <span
@@ -116,7 +120,8 @@ export function SwitchDeviceCard({
   onClick: () => void
 }) {
   const board = device.metricBoardName
-  const img = mikrotikBoardImageUrl(board) ?? '/mikrotik-generic.svg'
+  const img =
+    mikrotikBoardImageUrl(board) ?? mikrotikFallbackImageUrl('switch')
   const status = (device.connectionStatus ?? 'unknown') as ConnectionStatus
   const family = device.subtype
     ? switchSubtypeLabel[device.subtype as SwitchSubtype] ?? device.subtype
@@ -136,7 +141,7 @@ export function SwitchDeviceCard({
           alt={board ?? device.name}
           className="max-h-16 w-full object-contain transition duration-300 group-hover:scale-[1.03] sm:max-h-20"
           onError={(e) => {
-            e.currentTarget.src = '/mikrotik-generic.svg'
+            e.currentTarget.src = mikrotikFallbackImageUrl('switch')
           }}
         />
         <span

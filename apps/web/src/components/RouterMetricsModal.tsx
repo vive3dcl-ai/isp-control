@@ -12,7 +12,10 @@ import {
 } from 'recharts'
 import { apiFetch } from '../lib/api'
 import { formatBytes, type TopologyDevice } from '../lib/topology'
-import { mikrotikBoardImageUrl } from '../lib/mikrotikBoardImage'
+import {
+  mikrotikBoardImageUrl,
+  mikrotikFallbackImageUrl,
+} from '../lib/mikrotikBoardImage'
 import { oltBoardImageUrl } from '../lib/oltBoardImage'
 import { ModalPortal } from './ModalPortal'
 
@@ -97,17 +100,19 @@ export function RouterMetricsModal({
   const board =
     historyQuery.data?.boardName ?? device.metricBoardName ?? null
   const isOlt = device.type === 'olt'
+  const isSwitch = device.type === 'switch'
   // OLTs are polled over SNMP only, so a missing RO community means no samples.
   const needsSnmp =
     isOlt && /SNMP sin community/i.test(device.metricSummary ?? '')
   const img = isOlt
     ? oltBoardImageUrl(device.subtype, board)
-    : mikrotikBoardImageUrl(board) ?? '/mikrotik-generic.svg'
+    : mikrotikBoardImageUrl(board) ??
+      mikrotikFallbackImageUrl(isSwitch ? 'switch' : 'router')
   const fallbackImg = isOlt
     ? device.subtype?.startsWith('huawei_')
       ? '/olt/huawei-olt.svg'
       : 'https://raio.smartolt.com/content/img/ZTE-C320.png'
-    : '/mikrotik-generic.svg'
+    : mikrotikFallbackImageUrl(isSwitch ? 'switch' : 'router')
   const cur = historyQuery.data?.current
 
   return (
@@ -130,7 +135,8 @@ export function RouterMetricsModal({
             <div className="min-w-0">
               <h2 className="truncate text-lg font-semibold">{device.name}</h2>
               <p className="text-sm text-[var(--text-muted)]">
-                {board ?? (isOlt ? 'OLT' : 'Modelo desconocido')}
+                {board ??
+                  (isOlt ? 'OLT' : isSwitch ? 'Switch' : 'Modelo desconocido')}
                 {cur?.uptime ? ` · up ${cur.uptime}` : ''}
               </p>
             </div>
