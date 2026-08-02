@@ -645,6 +645,9 @@ export function NewServiceWizardModal({
                                   {o.oltName} · {o.oltIf} ·{' '}
                                   {o.ponType.toUpperCase()}
                                   {o.state ? ` · ${o.state}` : ''}
+                                  {o.suggestedOnuId != null
+                                    ? ` · índice ${o.suggestedOnuId}`
+                                    : ''}
                                 </span>
                               </span>
                             </button>

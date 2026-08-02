@@ -503,6 +503,9 @@ export function ChangeServiceOnuModal({
                             </span>
                             <span className="block text-xs text-[var(--text-muted)]">
                               {o.oltName} · {o.oltIf}
+                              {o.suggestedOnuId != null
+                                ? ` · índice ${o.suggestedOnuId}`
+                                : ''}
                             </span>
                           </span>
                         </button>

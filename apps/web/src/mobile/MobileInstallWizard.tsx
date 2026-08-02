@@ -1097,6 +1097,9 @@ export function MobileInstallWizard() {
                       <p className="text-xs text-[var(--text-muted)]">
                         {o.oltName} · {o.oltIf}
                         {o.state ? ` · ${o.state}` : ''}
+                        {o.suggestedOnuId != null
+                          ? ` · índice ${o.suggestedOnuId}`
+                          : ''}
                       </p>
                     </button>
                   </li>

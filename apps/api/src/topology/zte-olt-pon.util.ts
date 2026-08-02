@@ -80,7 +80,11 @@ export function parseOnuStateCounts(text: string): {
   }
 
   for (const line of text.split(/\r?\n/)) {
-    if (!/gpon-onu_|epon-onu_|gpon_onu-|epon_onu-/i.test(line)) continue;
+    const prefixed = /gpon-onu_|epon-onu_|gpon_onu-|epon_onu-/i.test(line);
+    // Sin pie de tabla y con OnuIndex sin prefijo (`1/2/4:13  enable …`) hay
+    // que contar igual: dar total 0 haría creer que el puerto está vacío.
+    const bare = /^\s*\d+(?:\/\d+)+:\d+(?:\s|$)/.test(line);
+    if (!prefixed && !bare) continue;
     total += 1;
     if (/\bworking\b/i.test(line)) {
       online += 1;
@@ -146,6 +150,9 @@ export function parseOnuIdsFromState(text: string): string[] {
       line.match(/epon-onu_[\d/]+:(\d+)/i) ||
       line.match(/gpon_onu-[\d/]+:(\d+)/i) ||
       line.match(/epon_onu-[\d/]+:(\d+)/i) ||
+      // `show onu state` en varias versiones imprime el OnuIndex sin prefijo:
+      // `1/2/4:13   enable   enable   working   1(GPON)`.
+      line.match(/^\s*\d+(?:\/\d+)+:(\d+)(?:\s|$)/) ||
       line.match(/^\s*:?(\d+)\s+(?:enable|disable)\b/i);
     if (m) ids.push(m[1]);
   }
