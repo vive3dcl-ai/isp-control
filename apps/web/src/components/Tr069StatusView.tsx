@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import { apiFetch } from "../lib/api";
 import type { AcsServiceStatus, Tr069StatusResponse } from "../lib/tr069";
 import {
@@ -481,7 +482,17 @@ export function Tr069StatusView() {
                         {o.deviceId}
                       </td>
                       <td className="px-4 py-2 font-mono text-xs">
-                        {o.serial}
+                        {o.serial ? (
+                          <Link
+                            to={`/app/settings?tab=onus&q=${encodeURIComponent(o.serial)}`}
+                            className="text-[var(--accent)] hover:underline"
+                            title="Ver en ONUs"
+                          >
+                            {o.serial}
+                          </Link>
+                        ) : (
+                          "—"
+                        )}
                       </td>
                       <td className="px-4 py-2">{o.oltName ?? "—"}</td>
                       <td className="px-4 py-2">{o.model ?? "—"}</td>

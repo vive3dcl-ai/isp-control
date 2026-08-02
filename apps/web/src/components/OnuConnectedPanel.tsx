@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useSearchParams } from 'react-router-dom'
 import { apiFetch } from '../lib/api'
 import {
   formatSignal,
@@ -97,7 +98,9 @@ function SignalCell({ dbm }: { dbm: number | null }) {
 
 export function OnuConnectedPanel({ canWrite }: { canWrite: boolean }) {
   const queryClient = useQueryClient()
-  const [search, setSearch] = useState('')
+  const [searchParams] = useSearchParams()
+  const qFromUrl = searchParams.get('q')?.trim() ?? ''
+  const [search, setSearch] = useState(qFromUrl)
   const [oltId, setOltId] = useState('')
   const [board, setBoard] = useState('')
   const [port, setPort] = useState('')
@@ -116,6 +119,12 @@ export function OnuConnectedPanel({ canWrite }: { canWrite: boolean }) {
     onuIf: string
   } | null>(null)
   const [syncBanner, setSyncBanner] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!qFromUrl) return
+    setSearch(qFromUrl)
+    setPage(0)
+  }, [qFromUrl])
 
   const listQuery = useQuery({
     queryKey: ['app', 'onus', 'connected'],
@@ -197,7 +206,7 @@ export function OnuConnectedPanel({ canWrite }: { canWrite: boolean }) {
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
-    return onus.filter((o) => {
+    const rows = onus.filter((o) => {
       if (oltId && o.oltId !== oltId) return false
       if (board && o.board !== board) return false
       if (port && o.port !== port) return false
@@ -227,6 +236,13 @@ export function OnuConnectedPanel({ canWrite }: { canWrite: boolean }) {
         if (!hay.includes(q)) return false
       }
       return true
+    })
+    // Más recientes primero (auth_date); sin fecha al final.
+    return rows.sort((a, b) => {
+      const ta = a.authDate ? Date.parse(a.authDate) : 0
+      const tb = b.authDate ? Date.parse(b.authDate) : 0
+      if (tb !== ta) return tb - ta
+      return (a.onuIf || '').localeCompare(b.onuIf || '')
     })
   }, [
     onus,
