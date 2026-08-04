@@ -17,16 +17,16 @@ export function MobileShell() {
 
   return (
     <div className="mobile-app app-shell flex flex-col bg-[var(--bg)] text-[var(--text)]">
-      <header className="relative z-50 shrink-0 border-b border-[var(--border)] bg-[var(--bg-header)]/95 px-4 py-3 backdrop-blur">
+      <header className="relative z-50 flex h-14 shrink-0 items-center border-b border-[var(--border)] bg-[var(--bg-header)]/95 px-4 backdrop-blur">
         <div
-          className={`mx-auto flex items-center justify-between gap-3 ${wide ? 'max-w-3xl' : 'max-w-lg'}`}
+          className={`mx-auto flex h-full w-full items-center justify-between gap-3 ${wide ? 'max-w-3xl' : 'max-w-lg'}`}
         >
           <NavLink
             to="/movil"
             className="flex min-w-0 items-center gap-2.5"
             end
           >
-            <BrandLogo height={40} className="min-w-0 max-w-[9.5rem] shrink" />
+            <BrandLogo height={36} className="min-w-0 max-h-9 max-w-[10rem] shrink" />
             <span className="min-w-0 border-l border-[var(--border)] pl-2.5">
               <p className="truncate text-base font-semibold leading-tight">
                 Técnico

@@ -106,8 +106,8 @@ export function PanelShell({
           sidebarOpen ? 'translate-x-0' : '-translate-x-full',
         ].join(' ')}
       >
-        <div className="flex min-h-14 items-center justify-center border-b border-[var(--border)] px-3 py-2.5">
-          <BrandLogo height={52} className="w-full max-w-[14rem]" />
+        <div className="flex h-14 shrink-0 items-center justify-center border-b border-[var(--border)] px-3">
+          <BrandLogo height={40} className="max-h-10 max-w-full" />
         </div>
 
         <nav className="flex-1 space-y-1 overflow-y-auto p-3">

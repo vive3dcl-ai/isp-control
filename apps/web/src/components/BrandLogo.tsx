@@ -20,8 +20,8 @@ export function BrandLogo({
     <img
       src={src}
       alt={b.productName}
-      className={`mx-auto block object-contain object-center ${className}`}
-      style={{ height, width: 'auto', maxWidth: '100%' }}
+      className={`mx-auto block max-h-full w-auto max-w-full object-contain object-center ${className}`}
+      style={{ height, maxHeight: height }}
     />
   )
 }
