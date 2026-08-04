@@ -35,6 +35,13 @@ export type Tr069WebUser = {
   label?: string | null
 }
 
+export type Tr069IptvBridge = {
+  active: boolean
+  connectionPath: string | null
+  vlanId: number | null
+  boundPorts: number[]
+}
+
 export type Tr069OnuConfig = {
   onuId: string
   sn: string | null
@@ -49,6 +56,7 @@ export type Tr069OnuConfig = {
   wifi: Tr069WifiRadio[]
   ethernet: Tr069EthPort[]
   webUsers: Tr069WebUser[]
+  iptvBridge?: Tr069IptvBridge
   message: string | null
 }
 
@@ -77,6 +85,12 @@ export type ApplyTr069OnuConfigResponse = {
   ok: boolean
   taskStatus: number | null
   queued: boolean
+  message: string
+  config: Tr069OnuConfig
+}
+
+export type IptvBridgeResponse = {
+  ok: boolean
   message: string
   config: Tr069OnuConfig
 }

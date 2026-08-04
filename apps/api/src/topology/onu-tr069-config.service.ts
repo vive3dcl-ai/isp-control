@@ -28,6 +28,17 @@ import {
 import { stripHuaweiDialectTag } from './huawei-olt-firmware.util';
 import { oltIfFromOnuIf } from './zte-olt-onu.util';
 import {
+  addLanPort,
+  boundEthPortsFromWan,
+  iptvBridgeName,
+  isIptvBridgeWan,
+  isProtectedWan,
+  joinLanInterfaceList,
+  parseLanInterfaceList,
+  removeLanPort,
+  type FhWanConn,
+} from './onu-iptv-bridge.util';
+import {
   buildConnReqParameterValues,
   connReqPassword,
   CONN_REQ_INFORM_INTERVAL_S,
@@ -129,6 +140,14 @@ export type Tr069WebUser = {
   label: string | null;
 };
 
+export type Tr069IptvBridgeInfo = {
+  /** True when an IPTV bridge WAN exists (ports may be edited). */
+  active: boolean;
+  connectionPath: string | null;
+  vlanId: number | null;
+  boundPorts: number[];
+};
+
 export type Tr069OnuConfigView = {
   onuId: string;
   sn: string | null;
@@ -143,6 +162,7 @@ export type Tr069OnuConfigView = {
   wifi: Tr069WifiRadio[];
   ethernet: Tr069EthPort[];
   webUsers: Tr069WebUser[];
+  iptvBridge: Tr069IptvBridgeInfo;
   message: string | null;
 };
 
@@ -792,6 +812,444 @@ export class OnuTr069ConfigService {
     }
   }
 
+  private listFhWanConnections(device: Record<string, unknown>): FhWanConn[] {
+    const out: FhWanConn[] = [];
+    const base = 'InternetGatewayDevice.WANDevice.1.WANConnectionDevice';
+    for (const cd of genieChildIndices(device, base)) {
+      for (const kind of ['WANIPConnection', 'WANPPPConnection'] as const) {
+        for (const ip of genieChildIndices(device, `${base}.${cd}.${kind}`)) {
+          const path = `${base}.${cd}.${kind}.${ip}`;
+          out.push({
+            path,
+            cdIndex: cd,
+            ipIndex: ip,
+            name: strVal(genieGet(device, `${path}.Name`)) ?? '',
+            type: strVal(genieGet(device, `${path}.ConnectionType`)) ?? '',
+            vlanId: (() => {
+              const v = genieGet(device, `${path}.VLANID`)?.value;
+              const n = typeof v === 'number' ? v : Number(v);
+              return Number.isFinite(n) && n > 0 ? n : null;
+            })(),
+            serviceList:
+              strVal(genieGet(device, `${path}.X_FH_ServiceList`)) ??
+              strVal(genieGet(device, `${path}.X_CT-COM_ServiceList`)) ??
+              '',
+            lanInterface:
+              strVal(genieGet(device, `${path}.X_FH_LanInterface`)) ?? '',
+            addressingType:
+              strVal(genieGet(device, `${path}.AddressingType`)) ?? '',
+            externalIp:
+              strVal(genieGet(device, `${path}.ExternalIPAddress`)) ?? '',
+          });
+        }
+      }
+    }
+    return out;
+  }
+
+  private detectIptvBridge(device: Record<string, unknown>): Tr069IptvBridgeInfo {
+    const bridges = this.listFhWanConnections(device).filter(isIptvBridgeWan);
+    if (!bridges.length) {
+      return {
+        active: false,
+        connectionPath: null,
+        vlanId: null,
+        boundPorts: [],
+      };
+    }
+    const primary = bridges[0];
+    const bound = [
+      ...new Set(bridges.flatMap((b) => boundEthPortsFromWan(b))),
+    ].sort((a, b) => a - b);
+    return {
+      active: true,
+      connectionPath: primary.path,
+      vlanId: primary.vlanId,
+      boundPorts: bound,
+    };
+  }
+
+  private findInternetWan(wans: FhWanConn[]): FhWanConn | null {
+    return (
+      wans.find((w) => /INTERNET/i.test(w.serviceList)) ||
+      wans.find((w) => /INTERNET/i.test(w.name) && /Routed/i.test(w.type)) ||
+      null
+    );
+  }
+
+  private async reloadAcsDevice(
+    client: GenieAcsNbiClient,
+    sn: string,
+  ): Promise<Record<string, unknown>> {
+    const device = await client.findBySerial(sn);
+    if (!device) throw new BadRequestException('ONU no encontrada en ACS');
+    return device;
+  }
+
+  private async ensureIptvBridgeWan(
+    client: GenieAcsNbiClient,
+    deviceId: string,
+    sn: string,
+    vlanId: number | null,
+  ): Promise<{ device: Record<string, unknown>; bridge: FhWanConn }> {
+    let device = await this.reloadAcsDevice(client, sn);
+    let wans = this.listFhWanConnections(device);
+    const wantedName = iptvBridgeName(vlanId);
+    let bridge =
+      wans.find(
+        (w) =>
+          isIptvBridgeWan(w) &&
+          (vlanId == null || w.vlanId === vlanId || w.name === wantedName),
+      ) || wans.find(isIptvBridgeWan);
+
+    if (!bridge) {
+      const beforeCds = new Set(wans.map((w) => w.cdIndex));
+      const add = await client.addObject(
+        deviceId,
+        'InternetGatewayDevice.WANDevice.1.WANConnectionDevice',
+      );
+      this.logger.log(
+        `IPTV bridge AddObject status=${add.status} for ${deviceId}`,
+      );
+      // Poll until a new CD appears (Genie often returns 202).
+      for (let i = 0; i < 12; i++) {
+        await this.sleep(2500);
+        try {
+          await client.refreshObject(
+            deviceId,
+            'InternetGatewayDevice.WANDevice.',
+          );
+        } catch {
+          /* ignore */
+        }
+        await this.sleep(2000);
+        device = await this.reloadAcsDevice(client, sn);
+        wans = this.listFhWanConnections(device);
+        const fresh = wans.find((w) => !beforeCds.has(w.cdIndex));
+        if (fresh) {
+          bridge = fresh;
+          break;
+        }
+        // Empty/new IP connection on existing CD
+        const empty = wans.find(
+          (w) =>
+            !isProtectedWan(w) &&
+            !w.type &&
+            !w.serviceList &&
+            !beforeCds.has(w.cdIndex),
+        );
+        if (empty) {
+          bridge = empty;
+          break;
+        }
+      }
+      if (!bridge) {
+        // Last resort: highest CD that is not protected
+        const candidates = wans
+          .filter((w) => !isProtectedWan(w))
+          .sort((a, b) => b.cdIndex - a.cdIndex);
+        bridge = candidates[0];
+      }
+      if (!bridge) {
+        throw new BadRequestException(
+          'No se pudo crear el WAN bridge IPTV en la ONU (AddObject sin instancia nueva). Reintenta tras el próximo Inform.',
+        );
+      }
+      if (isProtectedWan(bridge)) {
+        throw new BadRequestException(
+          'Refusing to overwrite INTERNET/TR069 WAN while creating IPTV bridge',
+        );
+      }
+    }
+
+    if (isProtectedWan(bridge)) {
+      throw new BadRequestException(
+        'El WAN seleccionado es INTERNET/TR069; abortado para no pisarlo',
+      );
+    }
+
+    const params: Array<[string, string | number | boolean, string]> = [
+      [bridge.path + '.Enable', true, 'xsd:boolean'],
+      [bridge.path + '.ConnectionType', 'IP_Bridged', 'xsd:string'],
+      [bridge.path + '.VLANEnable', true, 'xsd:boolean'],
+      [bridge.path + '.Name', wantedName, 'xsd:string'],
+      [bridge.path + '.X_FH_ServiceList', 'OTHER', 'xsd:string'],
+    ];
+    if (vlanId != null) {
+      params.push([bridge.path + '.VLANID', vlanId, 'xsd:unsignedInt']);
+    }
+    // Never clear LanInterface here if already bound — caller manages ports.
+    if (!bridge.lanInterface) {
+      params.push([bridge.path + '.X_FH_LanInterface', '', 'xsd:string']);
+    }
+    await client.setParameterValues(deviceId, params, { timeoutMs: 120_000 });
+    await this.sleep(3000);
+    device = await this.reloadAcsDevice(client, sn);
+    wans = this.listFhWanConnections(device);
+    const updated =
+      wans.find((w) => w.path === bridge!.path) ||
+      wans.find(isIptvBridgeWan) ||
+      bridge;
+    return { device, bridge: updated };
+  }
+
+  /**
+   * Create IPTV bridge WAN (FiberHome) without touching INTERNET/TR069.
+   */
+  async enableIptvBridge(
+    user: AuthUser,
+    onuId: string,
+  ): Promise<{ ok: boolean; message: string; config: Tr069OnuConfigView }> {
+    const schema = this.requireSchema(user);
+    const onuRepo = await this.tenantConnections.getOnuRepository(schema);
+    const onu = await onuRepo.findOne({ where: { id: onuId } });
+    if (!onu) throw new NotFoundException('ONU not found');
+    if (!onu.sn?.trim()) throw new BadRequestException('ONU sin SN');
+
+    const client = this.nbi();
+    const device = await client.findBySerial(onu.sn);
+    if (!device) throw new BadRequestException('ONU no está en el ACS');
+    const deviceId = deviceIdString(device._id);
+    if (!deviceId) throw new BadRequestException('ACS device id inválido');
+
+    const existing = this.detectIptvBridge(device);
+    if (existing.active) {
+      return {
+        ok: true,
+        message: 'El bridge IPTV ya estaba activo',
+        config: await this.getConfig(user, onuId),
+      };
+    }
+
+    await this.ensureIptvBridgeWan(client, deviceId, onu.sn, null);
+    const config = await this.getConfig(user, onuId);
+    if (!config.iptvBridge.active) {
+      throw new BadRequestException(
+        'Se envió la creación del bridge pero aún no aparece en el ACS. Espera el Inform y reintenta.',
+      );
+    }
+    return {
+      ok: true,
+      message: 'Bridge IPTV creado. Ya puedes asignar VLAN TV a los puertos.',
+      config,
+    };
+  }
+
+  /**
+   * Remove IPTV bridge WANs and return eth ports to INTERNET LanInterface.
+   * Never deletes/modifies INTERNET or TR069 ConnectionType/VLAN/IP.
+   */
+  async disableIptvBridge(
+    user: AuthUser,
+    onuId: string,
+  ): Promise<{ ok: boolean; message: string; config: Tr069OnuConfigView }> {
+    const schema = this.requireSchema(user);
+    const onuRepo = await this.tenantConnections.getOnuRepository(schema);
+    const onu = await onuRepo.findOne({ where: { id: onuId } });
+    if (!onu) throw new NotFoundException('ONU not found');
+    if (!onu.sn?.trim()) throw new BadRequestException('ONU sin SN');
+
+    const client = this.nbi();
+    let device = await client.findBySerial(onu.sn);
+    if (!device) throw new BadRequestException('ONU no está en el ACS');
+    const deviceId = deviceIdString(device._id);
+    if (!deviceId) throw new BadRequestException('ACS device id inválido');
+
+    let wans = this.listFhWanConnections(device);
+    const bridges = wans.filter(isIptvBridgeWan);
+    const internet = this.findInternetWan(wans);
+    if (!internet) {
+      throw new BadRequestException(
+        'No se encontró la WAN INTERNET para devolver los puertos',
+      );
+    }
+
+    const ports = [
+      ...new Set(bridges.flatMap((b) => boundEthPortsFromWan(b))),
+    ];
+    const notes: string[] = [];
+
+    // 1) Restore INTERNET LanInterface (only LanInterface field).
+    let inetLan = parseLanInterfaceList(internet.lanInterface);
+    for (const p of ports) inetLan = addLanPort(inetLan, p);
+    const params: Array<[string, string | number | boolean, string]> = [
+      [
+        internet.path + '.X_FH_LanInterface',
+        joinLanInterfaceList(inetLan),
+        'xsd:string',
+      ],
+    ];
+    for (const b of bridges) {
+      params.push([b.path + '.X_FH_LanInterface', '', 'xsd:string']);
+      params.push([b.path + '.Enable', false, 'xsd:boolean']);
+    }
+    if (params.length) {
+      await client.setParameterValues(deviceId, params, { timeoutMs: 120_000 });
+      notes.push('Puertos devueltos a INTERNET');
+    }
+
+    // 2) OMCI: clear eth vlan bindings
+    if (onu.onuIf && ports.length) {
+      const deviceRepo =
+        await this.tenantConnections.getNetworkDeviceRepository(schema);
+      const olt = await deviceRepo.findOne({ where: { id: onu.oltId } });
+      if (
+        olt &&
+        isManagedOltDevice(olt.type, olt.subtype) &&
+        !isHuaweiOltDevice(olt.type, olt.subtype) &&
+        olt.mgmtHost &&
+        olt.mgmtUsername &&
+        olt.mgmtPassword
+      ) {
+        for (const portIndex of ports) {
+          const omci = await this.zteOlt.applyOnuEthPortVlan({
+            ...this.zteConn(olt),
+            onuIf: onu.onuIf,
+            portIndex,
+            vlanId: null,
+            mode: 'untag',
+            subtypeHint: olt.subtype,
+            firmwareHint: oltFirmwareHint(olt),
+          });
+          if (omci.message) notes.push(omci.message);
+        }
+      }
+    }
+
+    // 3) Delete bridge WANConnectionDevice objects (CD), never internet/tr069 CDs
+    device = await this.reloadAcsDevice(client, onu.sn);
+    wans = this.listFhWanConnections(device);
+    for (const b of wans.filter(isIptvBridgeWan)) {
+      if (isProtectedWan(b)) continue;
+      const cdPath = `InternetGatewayDevice.WANDevice.1.WANConnectionDevice.${b.cdIndex}`;
+      try {
+        await client.deleteObject(deviceId, cdPath);
+        notes.push(`Bridge CD ${b.cdIndex} eliminado`);
+      } catch (e) {
+        this.logger.warn(
+          `delete IPTV bridge CD ${b.cdIndex}: ${
+            e instanceof Error ? e.message : e
+          }`,
+        );
+        notes.push(`No se pudo borrar CD ${b.cdIndex} (quedó deshabilitado)`);
+      }
+    }
+
+    await this.sleep(2000);
+    const config = await this.getConfig(user, onuId);
+    return {
+      ok: true,
+      message: notes.join(' · ') || 'Bridge IPTV eliminado',
+      config,
+    };
+  }
+
+  /**
+   * Move one eth port onto IPTV bridge WAN for vlanId (FiberHome LanInterface).
+   * Only mutates X_FH_LanInterface on INTERNET and the IPTV bridge — never
+   * ConnectionType/VLAN/IP of INTERNET or TR069.
+   */
+  private async bindFhPortToIptvBridge(params: {
+    client: GenieAcsNbiClient;
+    deviceId: string;
+    sn: string;
+    portIndex: number;
+    vlanId: number | null;
+  }): Promise<string> {
+    const { client, deviceId, sn, portIndex, vlanId } = params;
+    let device = await this.reloadAcsDevice(client, sn);
+    let wans = this.listFhWanConnections(device);
+    const internet = this.findInternetWan(wans);
+    if (!internet) {
+      throw new BadRequestException('WAN INTERNET no encontrada en la ONU');
+    }
+
+    if (vlanId == null) {
+      // Unbind: remove from all bridges, add back to internet
+      const bridges = wans.filter(isIptvBridgeWan);
+      let inetLan = parseLanInterfaceList(internet.lanInterface);
+      inetLan = addLanPort(inetLan, portIndex);
+      const spv: Array<[string, string | number | boolean, string]> = [
+        [
+          internet.path + '.X_FH_LanInterface',
+          joinLanInterfaceList(inetLan),
+          'xsd:string',
+        ],
+      ];
+      for (const b of bridges) {
+        if (isProtectedWan(b)) continue;
+        const next = removeLanPort(
+          parseLanInterfaceList(b.lanInterface),
+          portIndex,
+        );
+        spv.push([
+          b.path + '.X_FH_LanInterface',
+          joinLanInterfaceList(next),
+          'xsd:string',
+        ]);
+      }
+      await client.setParameterValues(deviceId, spv, { timeoutMs: 120_000 });
+      return `eth_0/${portIndex} devuelto a INTERNET`;
+    }
+
+    const { bridge } = await this.ensureIptvBridgeWan(
+      client,
+      deviceId,
+      sn,
+      vlanId,
+    );
+    if (isProtectedWan(bridge)) {
+      throw new BadRequestException('Abortado: bridge apunta a WAN protegida');
+    }
+
+    device = await this.reloadAcsDevice(client, sn);
+    wans = this.listFhWanConnections(device);
+    const inet = this.findInternetWan(wans) || internet;
+    const br =
+      wans.find((w) => w.path === bridge.path) ||
+      wans.find((w) => isIptvBridgeWan(w) && w.vlanId === vlanId) ||
+      bridge;
+
+    let inetLan = removeLanPort(
+      parseLanInterfaceList(inet.lanInterface),
+      portIndex,
+    );
+    // Also remove port from other IPTV bridges
+    const spv: Array<[string, string | number | boolean, string]> = [
+      [
+        inet.path + '.X_FH_LanInterface',
+        joinLanInterfaceList(inetLan),
+        'xsd:string',
+      ],
+      [br.path + '.VLANID', vlanId, 'xsd:unsignedInt'],
+      [br.path + '.VLANEnable', true, 'xsd:boolean'],
+      [br.path + '.ConnectionType', 'IP_Bridged', 'xsd:string'],
+      [br.path + '.Name', iptvBridgeName(vlanId), 'xsd:string'],
+      [br.path + '.X_FH_ServiceList', 'OTHER', 'xsd:string'],
+      [br.path + '.Enable', true, 'xsd:boolean'],
+      [
+        br.path + '.X_FH_LanInterface',
+        joinLanInterfaceList(
+          addLanPort(parseLanInterfaceList(br.lanInterface), portIndex),
+        ),
+        'xsd:string',
+      ],
+    ];
+    for (const other of wans.filter(
+      (w) => isIptvBridgeWan(w) && w.path !== br.path,
+    )) {
+      spv.push([
+        other.path + '.X_FH_LanInterface',
+        joinLanInterfaceList(
+          removeLanPort(parseLanInterfaceList(other.lanInterface), portIndex),
+        ),
+        'xsd:string',
+      ]);
+    }
+    await client.setParameterValues(deviceId, spv, { timeoutMs: 120_000 });
+    return `eth_0/${portIndex} → bridge VLAN ${vlanId}`;
+  }
+
   async getConfig(user: AuthUser, onuId: string): Promise<Tr069OnuConfigView> {
     const schema = this.requireSchema(user);
     const onuRepo = await this.tenantConnections.getOnuRepository(schema);
@@ -812,6 +1270,12 @@ export class OnuTr069ConfigService {
       wifi: [],
       ethernet: [],
       webUsers: [],
+      iptvBridge: {
+        active: false,
+        connectionPath: null,
+        vlanId: null,
+        boundPorts: [],
+      },
       message: null,
     };
 
@@ -841,6 +1305,7 @@ export class OnuTr069ConfigService {
         onu,
         parsed.ethernet,
       );
+      const iptvBridge = this.detectIptvBridge(device);
       return {
         ...base,
         acsDeviceId: id || null,
@@ -853,6 +1318,7 @@ export class OnuTr069ConfigService {
         wifi: parsed.wifi,
         ethernet,
         webUsers: parsed.webUsers,
+        iptvBridge,
         message:
           parsed.webUsers.length === 0
             ? 'Sin usuarios web en el árbol. Pulsa «Refrescar desde ONU» para pedir DeviceInfo/UserInterface al ACS.'
@@ -1097,6 +1563,55 @@ export class OnuTr069ConfigService {
           );
         }
         if (omci.message) omciNotes.push(omci.message);
+
+        // FiberHome HGU: también mover X_FH_LanInterface al WAN bridge IPTV
+        // (OMCI solo no saca el puerto de la LAN/INTERNET).
+        try {
+          const mfr = (
+            parsed.manufacturer ||
+            strVal(genieGet(device, 'InternetGatewayDevice.DeviceInfo.Manufacturer')) ||
+            ''
+          ).toLowerCase();
+          const isFh =
+            mfr.includes('fiberhome') ||
+            mfr.includes('fiber home') ||
+            /fhtt|hg62|hg61/i.test(onu.sn || '') ||
+            genieNodeExists(
+              device,
+              'InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.X_FH_LanInterface',
+            );
+          if (isFh) {
+            const bridgeState = this.detectIptvBridge(device);
+            if (!bridgeState.active && vlanId != null) {
+              throw new BadRequestException(
+                'Activa el bridge IPTV antes de asignar VLAN TV a un puerto',
+              );
+            }
+            const note = await this.bindFhPortToIptvBridge({
+              client,
+              deviceId,
+              sn: onu.sn!,
+              portIndex: e.index,
+              vlanId,
+            });
+            omciNotes.push(note);
+            // Refresh device snapshot for subsequent ports
+            const refreshed = await client.findBySerial(onu.sn!);
+            if (refreshed) Object.assign(device, refreshed);
+          }
+        } catch (err) {
+          if (err instanceof BadRequestException) throw err;
+          this.logger.warn(
+            `FH lanbind eth_0/${e.index}: ${
+              err instanceof Error ? err.message : err
+            }`,
+          );
+          omciNotes.push(
+            `TR069 lanbind aviso: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+        }
       }
     }
 

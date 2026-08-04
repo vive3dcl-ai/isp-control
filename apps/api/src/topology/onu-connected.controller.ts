@@ -546,6 +546,25 @@ export class OnuConnectedController {
     return this.tr069Config.applyConfig(user, id, dto);
   }
 
+  @Post(':id/tr069-config/iptv-bridge')
+  @TenantRoles(...CRM_WRITE_ROLES)
+  iptvBridge(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: { action?: string },
+  ) {
+    const action = String(body?.action || '').toLowerCase();
+    if (action === 'enable' || action === 'create' || action === 'activate') {
+      return this.tr069Config.enableIptvBridge(user, id);
+    }
+    if (action === 'disable' || action === 'delete' || action === 'remove') {
+      return this.tr069Config.disableIptvBridge(user, id);
+    }
+    throw new BadRequestException(
+      'action debe ser enable o disable',
+    );
+  }
+
   @Post('reboot')
   @TenantRoles(...CRM_WRITE_ROLES)
   reboot(@CurrentUser() user: AuthUser, @Body() dto: OnuRebootDto) {

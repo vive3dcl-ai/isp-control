@@ -125,6 +125,7 @@ export class GenieAcsNbiClient {
   async setParameterValues(
     deviceId: string,
     parameterValues: Array<[string, string | number | boolean, string?]>,
+    opts?: { timeoutMs?: number },
   ) {
     return this.enqueueTask(
       deviceId,
@@ -134,7 +135,24 @@ export class GenieAcsNbiClient {
           type != null ? [path, value, type] : [path, value],
         ),
       },
-      { connectionRequest: true, timeoutMs: 30_000 },
+      { connectionRequest: true, timeoutMs: opts?.timeoutMs ?? 120_000 },
+    );
+  }
+
+  async addObject(deviceId: string, objectName: string) {
+    const name = objectName.endsWith('.') ? objectName : `${objectName}.`;
+    return this.enqueueTask(
+      deviceId,
+      { name: 'addObject', objectName: name },
+      { connectionRequest: true, timeoutMs: 120_000 },
+    );
+  }
+
+  async deleteObject(deviceId: string, objectName: string) {
+    return this.enqueueTask(
+      deviceId,
+      { name: 'deleteObject', objectName },
+      { connectionRequest: true, timeoutMs: 120_000 },
     );
   }
 
