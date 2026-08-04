@@ -7,6 +7,7 @@ import {
   buildZteC6xxVportIf,
   parseZteOltIfParts,
   parseZteOnuIfParts,
+  zteIptvServicePortStrategy,
 } from './zte-olt-firmware.util';
 import { detectOltSubtypeFromProduct } from './olt.constants';
 import { normalizePonOltIfName, parsePonOltIfName } from './zte-olt-pon.util';
@@ -59,6 +60,16 @@ describe('zte-olt-firmware.util / C6xx dialect', () => {
       expect(buildZteC6xxVportIf('gpon-onu_1/2/3:4', 1)).toBe(
         'vport-1/2/3.1:4',
       );
+      // IPTV = vport 3 (WAN=1, mgmt=2)
+      expect(buildZteC6xxVportIf('gpon-onu_1/2/4:12', 3)).toBe(
+        'vport-1/2/4.3:12',
+      );
+    });
+
+    it('IPTV service-port strategy: Titan vport, C3xx classic', () => {
+      expect(zteIptvServicePortStrategy('c6xx')).toBe('c6xx-vport');
+      expect(zteIptvServicePortStrategy('c3xx')).toBe('c3xx-classic');
+      expect(zteIptvServicePortStrategy('unknown')).toBe('c3xx-classic');
     });
 
     it('normalizePonOltIfName accepts both', () => {

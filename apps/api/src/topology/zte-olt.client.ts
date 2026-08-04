@@ -1776,13 +1776,19 @@ export class ZteOltClient {
   /**
    * Ligar un puerto LAN de la ONU a una VLAN (OMCI), igual que SmartOLT/IPTV.
    *
+   * Dialectos OLT (no mezclar):
+   * - C3xx: service-port bajo `interface gpon-onu_…` + `vport N`
+   * - C6xx Titan: tcont/gemport en ONU + service-port bajo `interface vport-…`
+   *   (mismo patrón que WAN/mgmt); si falla → reintento clásico
+   * - Huawei: `HuaweiOltClient` (`native-vlan` + service-port gem 3)
+   *
    * Semántica del panel → CLI ZTE:
    * - `untag` (acceso TV/IPTV, LAN sin tag) → `vlan port eth_0/N mode tag vlan VID`
    *   (en ZTE "tag" = ONU etiqueta hacia PON y entrega untagged al CPE)
    * - `tag` (passthrough tagged) → `mode transparent`
    * - `hybrid` → `mode hybrid def-vlan VID`
    *
-   * Secuencia: service-port + `service N gemport N vlan VID` + vlan port.
+   * Secuencia: service-port + flow/gemport + vlan port.
    * `mode untag` NO es válido en ZTE C3xx (Error 20202 Invalid parameter).
    */
   async applyOnuEthPortVlan(params: {
@@ -1822,12 +1828,13 @@ export class ZteOltClient {
           /%\s*Error|Invalid input|Unknown command|Incomplete|Failed|640\d+/i.test(
             out,
           );
-        const notes: string[] = [];
+        const notes: string[] = [`dialect=${family}`];
 
         await step('configure terminal', 12_000);
 
         // —— OLT side: service-port so the VLAN reaches the ONU ——
-        {
+        // C3xx: bajo interface ONU. C6xx Titan: bajo interface vport-… (como WAN/mgmt).
+        const upsertClassicIptvSp = async () => {
           let out = await step(`interface ${onuIf}`, 10_000);
           if (/%Error|Invalid|Unknown/i.test(out)) {
             throw new Error(
@@ -1865,14 +1872,81 @@ export class ZteOltClient {
                   .slice(0, 100)}`,
               );
             } else {
-              notes.push(
-                `service-port ${iptvSp} VLAN ${params.vlanId}`,
-              );
+              notes.push(`service-port ${iptvSp} VLAN ${params.vlanId}`);
             }
           } else {
             notes.push(`service-port ${iptvSp} eliminado`);
           }
           await step('exit', 5_000);
+        };
+
+        const upsertC6xxIptvSp = async () => {
+          const vportIf = buildZteC6xxVportIf(
+            toZteCanonicalOnuIf(params.onuIf),
+            iptvVport,
+          );
+          if (!vportIf) {
+            throw new Error(`vport ifName inválido para ${params.onuIf}`);
+          }
+          let out = await step(`interface ${onuIf}`, 10_000);
+          if (!/%Error|Invalid|Unknown/i.test(out)) {
+            if (params.vlanId != null) {
+              await step(
+                `tcont ${iptvSp} profile SMARTOLT-1000MB-UP`,
+                8_000,
+              ).catch(() => '');
+              await step(`gemport ${iptvSp} tcont ${iptvSp}`, 8_000).catch(
+                () => '',
+              );
+            }
+            await step('exit', 5_000);
+          }
+
+          out = await step(`interface ${vportIf}`, 10_000);
+          if (/%Error|Invalid|Unknown/i.test(out)) {
+            throw new Error(
+              `No se pudo entrar a ${vportIf}: ${this.cleanCliNoise(out).slice(0, 120)}`,
+            );
+          }
+          await step(`no service-port ${iptvSp}`, 8_000);
+          if (params.vlanId == null) {
+            notes.push(`vport ${vportIf} limpiado`);
+            await step('exit', 5_000);
+            return;
+          }
+          out = await step(
+            `service-port ${iptvSp} user-vlan ${params.vlanId} vlan ${params.vlanId}`,
+            10_000,
+          );
+          if (failed(out)) {
+            out = await step(
+              `service-port ${iptvSp} user-vlan ${params.vlanId} vlan ${params.vlanId} svlan ${params.vlanId}`,
+              10_000,
+            );
+          }
+          await step('exit', 5_000);
+          if (failed(out)) {
+            throw new Error(
+              `vport IPTV VLAN ${params.vlanId}: ${this.cleanCliNoise(out)
+                .replace(/\s+/g, ' ')
+                .slice(0, 160)}`,
+            );
+          }
+          notes.push(`VLAN ${params.vlanId} en ${vportIf}`);
+        };
+
+        if (family === 'c6xx') {
+          try {
+            await upsertC6xxIptvSp();
+          } catch (err) {
+            notes.push(
+              `vport IPTV falló (${err instanceof Error ? err.message : String(err)}), reintento clásico`,
+            );
+            await upsertClassicIptvSp();
+          }
+        } else {
+          // c3xx / unknown: path clásico intacto (el que ya funciona en C320).
+          await upsertClassicIptvSp();
         }
 
         // —— ONU OMCI: flow/gemport + vlan port ——

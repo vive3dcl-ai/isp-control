@@ -169,3 +169,13 @@ export function buildZteC6xxVportIf(
   if (!p) return null;
   return `vport-${p.shelf}/${p.slot}/${p.port}.${vport}:${p.onuId}`;
 }
+
+/**
+ * Cómo se crea el service-port IPTV (índice 3) según dialecto.
+ * C3xx nunca usa vport-…; C6xx Titan sí (con fallback clásico en el cliente).
+ */
+export function zteIptvServicePortStrategy(
+  family: ZteFwFamily,
+): 'c6xx-vport' | 'c3xx-classic' {
+  return family === 'c6xx' ? 'c6xx-vport' : 'c3xx-classic';
+}
