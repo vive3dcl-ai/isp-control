@@ -5,13 +5,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       name="description"
-      content="ISP Control — plataforma multi-tenant para operar CRM, red, mapa, facturación y campo en un solo panel."
+      content="ISP Control — opera CRM, topología OLT/ONU, mapa de red, facturación y campo en un solo panel multi-tenant."
     />
+    <meta name="theme-color" content="#070d18" />
     <title>ISP Control</title>
+    <link rel="icon" href="/branding/isp-control-logo.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Sora:wght@400;500;600&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Sora:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
     <link rel="stylesheet" href="/styles.css" />
@@ -23,9 +25,9 @@
       <svg class="mesh" viewBox="0 0 1440 900" preserveAspectRatio="xMidYMid slice">
         <defs>
           <linearGradient id="fiber" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stop-color="#2f9cff" stop-opacity="0.55" />
-            <stop offset="55%" stop-color="#38bdf8" stop-opacity="0.22" />
-            <stop offset="100%" stop-color="#0ea5e9" stop-opacity="0.08" />
+            <stop offset="0%" stop-color="#2f9cff" stop-opacity="0.5" />
+            <stop offset="55%" stop-color="#38bdf8" stop-opacity="0.2" />
+            <stop offset="100%" stop-color="#0ea5e9" stop-opacity="0.06" />
           </linearGradient>
         </defs>
         <path
@@ -50,32 +52,152 @@
     </div>
 
     <header class="top">
-      <a class="brand" href="#top">ISP Control</a>
+      <a class="brand" href="#top" aria-label="ISP Control">
+        <img
+          src="/branding/isp-control-logo.png"
+          alt="ISP Control"
+          class="brand-logo"
+          height="36"
+        />
+      </a>
       <nav class="nav">
         <a href="#producto">Producto</a>
-        <a href="#operacion">Operación</a>
-        <a class="nav-cta" id="nav-panel" href="#">Panel</a>
+        <a href="#mapa">Mapa</a>
+        <a href="#planes">Planes</a>
+        <a class="nav-ghost" id="nav-login" href="#">Entrar</a>
+        <a class="nav-cta" id="nav-register" href="#planes">Registrarse</a>
       </nav>
     </header>
 
     <main id="top">
       <section class="hero">
-        <p class="brand-hero">ISP Control</p>
-        <h1>Opera tu ISP<br />en un solo panel</h1>
-        <p class="lede">
-          CRM, topología, mapa de red, facturación y trabajo en campo —
-          multi-tenant, listo para producción.
-        </p>
-        <div class="cta-row">
-          <a class="btn primary" id="cta-panel" href="#">Entrar al panel</a>
-          <a class="btn ghost" href="#producto">Ver capacidades</a>
+        <div class="hero-copy">
+          <img
+            class="hero-logo"
+            src="/branding/isp-control-logo.png"
+            alt="ISP Control"
+            width="320"
+            height="81"
+          />
+          <h1>Opera tu ISP<br />de punta a punta</h1>
+          <p class="lede">
+            CRM, OLT/ONU, mapa de red, facturación y técnicos en campo —
+            un solo panel multi-tenant.
+          </p>
+          <div class="cta-row">
+            <a class="btn primary" id="cta-register" href="#planes"
+              >Ver planes</a
+            >
+            <a class="btn ghost" id="cta-login" href="#">Iniciar sesión</a>
+          </div>
         </div>
+        <figure class="hero-visual" aria-hidden="true">
+          <svg
+            class="map-art"
+            viewBox="0 0 640 420"
+            role="img"
+            aria-label="Ilustración del mapa de red"
+          >
+            <defs>
+              <linearGradient id="mapGlow" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0%" stop-color="#2f9cff" stop-opacity="0.35" />
+                <stop offset="100%" stop-color="#0ea5e9" stop-opacity="0.05" />
+              </linearGradient>
+              <filter id="soft">
+                <feGaussianBlur stdDeviation="8" />
+              </filter>
+            </defs>
+            <rect
+              x="24"
+              y="24"
+              width="592"
+              height="372"
+              rx="28"
+              fill="#0a1424"
+              stroke="#243047"
+            />
+            <ellipse
+              cx="320"
+              cy="210"
+              rx="210"
+              ry="120"
+              fill="url(#mapGlow)"
+              filter="url(#soft)"
+              opacity="0.55"
+            />
+            <!-- cables -->
+            <path
+              class="cable c1"
+              d="M110 300 C 180 220, 240 250, 300 180 S 420 90, 520 140"
+              fill="none"
+              stroke="#2f9cff"
+              stroke-width="2.2"
+              stroke-linecap="round"
+            />
+            <path
+              class="cable c2"
+              d="M140 120 C 220 160, 260 240, 340 260 S 460 300, 540 250"
+              fill="none"
+              stroke="#67e8f9"
+              stroke-width="1.6"
+              stroke-linecap="round"
+              opacity="0.7"
+            />
+            <path
+              class="cable c3"
+              d="M90 200 C 170 190, 210 140, 280 150 S 390 210, 470 190"
+              fill="none"
+              stroke="#38bdf8"
+              stroke-width="1.4"
+              stroke-linecap="round"
+              opacity="0.55"
+            />
+            <!-- OLT -->
+            <g class="pin p-olt" transform="translate(300 170)">
+              <rect x="-22" y="-14" width="44" height="28" rx="6" fill="#123152" stroke="#2f9cff" />
+              <text x="0" y="5" text-anchor="middle" fill="#e8eef6" font-size="10" font-family="Sora,sans-serif">OLT</text>
+            </g>
+            <!-- NAP -->
+            <g class="pin p-nap" transform="translate(520 140)">
+              <circle r="16" fill="#0f2744" stroke="#67e8f9" />
+              <text y="4" text-anchor="middle" fill="#e8eef6" font-size="9" font-family="Sora,sans-serif">NAP</text>
+            </g>
+            <g class="pin p-nap2" transform="translate(140 120)">
+              <circle r="14" fill="#0f2744" stroke="#38bdf8" />
+              <text y="4" text-anchor="middle" fill="#e8eef6" font-size="8" font-family="Sora,sans-serif">NAP</text>
+            </g>
+            <!-- poste / mufa -->
+            <g class="pin p-post" transform="translate(110 300)">
+              <rect x="-5" y="-18" width="10" height="36" rx="2" fill="#1e3a5f" />
+              <circle cy="-22" r="7" fill="#2f9cff" />
+            </g>
+            <g class="pin p-mufa" transform="translate(540 250)">
+              <rect x="-18" y="-10" width="36" height="20" rx="4" fill="#123152" stroke="#94a3b8" />
+              <text y="4" text-anchor="middle" fill="#cbd5e1" font-size="8" font-family="Sora,sans-serif">MUFA</text>
+            </g>
+            <g class="pin p-onu" transform="translate(340 260)">
+              <circle r="11" fill="#082032" stroke="#22d3ee" />
+              <text y="3.5" text-anchor="middle" fill="#e0f2fe" font-size="7" font-family="Sora,sans-serif">ONU</text>
+            </g>
+            <text
+              x="48"
+              y="56"
+              fill="#8b9cb3"
+              font-size="11"
+              font-family="Sora,sans-serif"
+              letter-spacing="0.12em"
+            >
+              MAPA DE RED
+            </text>
+          </svg>
+        </figure>
       </section>
 
       <section class="band" id="producto">
         <h2>Todo el ciclo del servicio</h2>
         <p class="section-lede">
-          Desde el lead hasta la ONU autorizada y la factura cobrada.
+          Desde el lead hasta la ONU autorizada, el IPTV bridged y la factura
+          cobrada.
         </p>
         <ul class="capabilities">
           <li>
@@ -84,53 +206,104 @@
           </li>
           <li>
             <strong>Red y OLT</strong>
-            <span>Topología, ONUs ZTE, VLANs, perfiles y monitoreo.</span>
+            <span
+              >Topología ZTE, Titan y Huawei · ONUs, VLANs, TR-069 e IPTV.</span
+            >
           </li>
           <li>
             <strong>Mapa de red</strong>
-            <span>NAP, mufas, postes, cables y capas en campo.</span>
+            <span>NAP, mufas, postes, cables y capas para oficina y campo.</span>
           </li>
           <li>
             <strong>Facturación</strong>
             <span>Facturas, portal de clientes y cobros en línea.</span>
           </li>
+          <li>
+            <strong>Calendario y soporte</strong>
+            <span>Agendas, tickets y notificaciones al equipo.</span>
+          </li>
+          <li>
+            <strong>Móvil en campo</strong>
+            <span>Instalar, NAP cercanas y postes con GPS.</span>
+          </li>
         </ul>
       </section>
 
-      <section class="ops" id="operacion">
-        <h2>Hecho para operación real</h2>
+      <section class="ops" id="mapa">
+        <h2>Mapa pensado para fibra</h2>
         <p class="section-lede">
-          Panel web para la oficina. Vista móvil para el técnico. Un mismo
-          sistema, dos formas de trabajar.
+          Visualiza la planta externa y la topología en el mismo sistema que
+          autoriza la ONU.
         </p>
         <div class="ops-split">
           <div>
             <p class="ops-kicker">Escritorio</p>
             <p>
-              Calendario, mapa, topología, soporte y ajustes de empresa con
+              Capas de red, NAP/mufas, cableado y topología OLT ↔ ONU con
               control total.
             </p>
           </div>
           <div>
-            <p class="ops-kicker">Móvil</p>
+            <p class="ops-kicker">Campo</p>
             <p>
-              Instalar, agendas del día, NAP/mufas cercanas y postes con GPS.
+              El técnico ve lo cercano, completa la instalación y deja el mapa
+              al día.
             </p>
           </div>
         </div>
       </section>
 
-      <section class="close">
-        <h2>Empieza a operar</h2>
+      <section class="pricing" id="planes">
+        <h2>Planes por cupo de ONUs</h2>
         <p class="section-lede">
-          Accede al panel de tu empresa o de la plataforma.
+          Facturación mensual. El precio se actualiza desde el panel. Si creces,
+          sumas bloques extra sin cambiar de plan base.
         </p>
-        <a class="btn primary" id="cta-bottom" href="#">Abrir panel</a>
+
+        <div class="block-callout" id="block-explain">
+          <p class="ops-kicker">Bloques extra</p>
+          <p id="block-copy">
+            Cada bloque suma más ONUs al cupo. El valor del bloque se define en
+            el panel.
+          </p>
+        </div>
+
+        <div id="plans-status" class="plans-status" hidden></div>
+        <ul class="plans" id="plans-list" aria-live="polite">
+          <li class="plan skeleton"><span></span><span></span></li>
+          <li class="plan skeleton"><span></span><span></span></li>
+          <li class="plan skeleton"><span></span><span></span></li>
+        </ul>
+
+        <div class="cta-row pricing-cta">
+          <a class="btn primary" id="cta-start" href="#">Crear cuenta / Entrar</a>
+          <a class="btn ghost" id="cta-contact" href="mailto:hola@ispcontrol.ai"
+            >Hablar con nosotros</a
+          >
+        </div>
+      </section>
+
+      <section class="close">
+        <h2>Listo para operar</h2>
+        <p class="section-lede">
+          El panel vive en
+          <span id="panel-host">panel.ispcontrol.ai</span>. Esta página es tu
+          puerta de entrada.
+        </p>
+        <div class="cta-row">
+          <a class="btn primary" id="cta-bottom-login" href="#">Iniciar sesión</a>
+          <a class="btn ghost" href="#planes">Elegir plan</a>
+        </div>
       </section>
     </main>
 
     <footer class="foot">
-      <span>ISP Control</span>
+      <img
+        src="/branding/isp-control-logo.png"
+        alt=""
+        class="foot-logo"
+        height="22"
+      />
       <span id="year"></span>
     </footer>
   </body>

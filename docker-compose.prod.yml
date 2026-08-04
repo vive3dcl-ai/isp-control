@@ -166,11 +166,17 @@ services:
       - "127.0.0.1:${LANDING_PORT}:80"
     environment:
       PANEL_URL: ${PANEL_URL}
+      API_PUBLIC_URL: ${API_PUBLIC_URL:-/api}
+      CONTACT_EMAIL: ${CONTACT_EMAIL:-hola@ispcontrol.ai}
+      REGISTER_URL: ${REGISTER_URL:-}
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null"]
       interval: 15s
       timeout: 5s
       retries: 5
+    depends_on:
+      api:
+        condition: service_healthy
 
   whatsapp-baileys:
     image: vive3d/isp-control-whatsapp-baileys:latest

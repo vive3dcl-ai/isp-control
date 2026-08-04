@@ -87,8 +87,13 @@ services:
       - "${LANDING_PORT:-3040}:80"
     environment:
       PANEL_URL: ${PANEL_URL:-http://localhost:5173}
+      API_PUBLIC_URL: ${API_PUBLIC_URL:-/api}
+      CONTACT_EMAIL: ${CONTACT_EMAIL:-hola@ispcontrol.ai}
+      REGISTER_URL: ${REGISTER_URL:-}
     volumes:
       - ./apps/landing/public:/usr/share/nginx/html
+    depends_on:
+      - api
 
   seed:
     build:

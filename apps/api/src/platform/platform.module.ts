@@ -20,6 +20,7 @@ import { ModuleExpiryScheduler } from './module-expiry.scheduler';
 import { PlatformSettingsAdminController } from './platform-settings.admin.controller';
 import { PlatformSubscriptionAppController } from './platform-subscription.app.controller';
 import { PlatformBrandingPublicController } from './platform-branding.public.controller';
+import { PlatformPlansPublicController } from './platform-plans.public.controller';
 import { BackupAdminController } from './backup.admin.controller';
 import { BackupService } from './backup.service';
 import { DatabaseModule } from '../database/database.module';
@@ -44,6 +45,7 @@ import { DatabaseModule } from '../database/database.module';
     PlatformSettingsAdminController,
     PlatformSubscriptionAppController,
     PlatformBrandingPublicController,
+    PlatformPlansPublicController,
     BackupAdminController,
   ],
   providers: [

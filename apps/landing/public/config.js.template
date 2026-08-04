@@ -1,3 +1,6 @@
 window.ISP_LANDING = {
   panelUrl: "${PANEL_URL}",
+  apiUrl: "${API_PUBLIC_URL}",
+  contactEmail: "${CONTACT_EMAIL}",
+  registerUrl: "${REGISTER_URL}",
 };
