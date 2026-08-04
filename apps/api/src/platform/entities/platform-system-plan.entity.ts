@@ -6,26 +6,37 @@ import {
   UpdateDateColumn,
   Unique,
 } from 'typeorm';
-import type { BillingCycleId } from '../billing-cycles';
 
-/** Precio del valor del sistema por ciclo de facturación. */
+/**
+ * Plan de plataforma por cupo de ONUs («usuarios»).
+ * `cycle` guarda el código del plan (users_15, users_50, …) por compatibilidad
+ * con la columna existente (antes: monthly/quarterly/…).
+ */
 @Entity({ name: 'platform_system_plans', schema: 'public' })
 @Unique(['cycle'])
 export class PlatformSystemPlan {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  /** monthly | quarterly | semiannual | annual */
+  /** Código del plan: users_15 | users_50 | users_100 | users_200 | users_500 */
   @Column({ type: 'varchar', length: 20 })
-  cycle: BillingCycleId;
+  cycle: string;
 
-  @Column({ type: 'int' })
+  /** Siempre 1 (facturación mensual). */
+  @Column({ type: 'int', default: 1 })
   months: number;
 
   @Column({ type: 'varchar', length: 40 })
   label: string;
 
-  /** Precio USD por ciclo completo (prepago). */
+  /** Cupo base de ONUs / usuarios incluidos. */
+  @Column({ name: 'user_limit', type: 'int', default: 0 })
+  userLimit: number;
+
+  @Column({ name: 'sort_order', type: 'int', default: 0 })
+  sortOrder: number;
+
+  /** Precio USD mensual. */
   @Column({ name: 'price_usd', type: 'numeric', precision: 12, scale: 2 })
   priceUsd: string;
 

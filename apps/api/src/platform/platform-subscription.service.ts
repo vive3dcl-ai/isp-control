@@ -16,15 +16,22 @@ import {
 import { PlatformModuleContract } from './entities/platform-module-contract.entity';
 import { PlatformCharge } from './entities/platform-charge.entity';
 import { PlatformPlansService } from './platform-plans.service';
+import { TenantConnectionService } from '../database/tenant-connection.service';
 import {
+  EXTRA_USER_BLOCK_SIZE,
   addMonthsUtc,
   daysBetweenUtc,
-  getBillingCycle,
-  isBillingCycleId,
+  endOfUtcMonth,
+  isUserPlanCode,
+  monthlyRecurringUsd,
+  onuCapacity,
   prorateToPeriodEnd,
+  prorateUntilMonthEnd,
   roundMoney,
+  startOfNextUtcMonth,
   unusedPeriodCredit,
   type ModuleContractMode,
+  type UserPlanCode,
 } from './billing-cycles';
 
 @Injectable()
@@ -39,11 +46,29 @@ export class PlatformSubscriptionService {
     @InjectRepository(PlatformModulePricing)
     private readonly modulePricing: Repository<PlatformModulePricing>,
     private readonly plans: PlatformPlansService,
+    private readonly tenantConnections: TenantConnectionService,
   ) {}
+
+  async countTenantOnus(tenant: Tenant): Promise<number> {
+    try {
+      const onuRepo = await this.tenantConnections.getOnuRepository(
+        tenant.schemaName,
+      );
+      return onuRepo.count();
+    } catch {
+      return 0;
+    }
+  }
 
   async getSubscriptionForTenant(tenantId: string) {
     const tenant = await this.requireTenant(tenantId);
     const plans = await this.plans.list();
+    const blockPrice = await this.plans.getExtraBlockPriceUsd();
+    const extraBlocks = Math.max(0, tenant.extraUserBlocks ?? 0);
+    const currentPlan = tenant.billingCycle
+      ? plans.find((p) => p.code === tenant.billingCycle)
+      : null;
+
     const recurring = await this.contracts.find({
       where: { tenantId, status: 'active', mode: 'recurring' },
     });
@@ -51,16 +76,20 @@ export class PlatformSubscriptionService {
       (sum, c) => sum + Number(c.monthlyPriceUsd),
       0,
     );
-    const currentPlan = tenant.billingCycle
-      ? plans.find((p) => p.cycle === tenant.billingCycle)
+
+    const planMonthly = currentPlan ? Number(currentPlan.priceUsd) : 0;
+    const blocksMonthly = extraBlocks * blockPrice;
+    const baseMonthly = currentPlan
+      ? monthlyRecurringUsd(planMonthly, extraBlocks, blockPrice)
+      : 0;
+    const nextMonthEstimate = currentPlan
+      ? roundMoney(baseMonthly + modulesMonthly)
       : null;
-    const cycleMonths = currentPlan?.months ?? 1;
-    const usageEstimate =
-      currentPlan != null
-        ? roundMoney(
-            Number(currentPlan.priceUsd) + modulesMonthly * cycleMonths,
-          )
-        : null;
+
+    const onuUsed = await this.countTenantOnus(tenant);
+    const onuLimit = currentPlan
+      ? onuCapacity(currentPlan.userLimit, extraBlocks)
+      : null;
 
     const charges = await this.listCharges(tenantId);
     const pendingRenewal = charges.find(
@@ -77,7 +106,8 @@ export class PlatformSubscriptionService {
     }
 
     return {
-      billingCycle: tenant.billingCycle,
+      planCode: tenant.billingCycle,
+      billingCycle: tenant.billingCycle, // alias
       status: tenant.subscriptionStatus,
       periodStart: tenant.subscriptionPeriodStart,
       periodEnd: tenant.subscriptionPeriodEnd,
@@ -86,13 +116,21 @@ export class PlatformSubscriptionService {
         : null,
       daysUntilEnd,
       plans: plans.filter((p) => p.enabled),
+      extraBlocks,
+      extraBlockSize: EXTRA_USER_BLOCK_SIZE,
+      extraBlockPriceUsd: blockPrice,
+      onuUsed,
+      onuLimit,
+      planMonthlyUsd: planMonthly || null,
+      blocksMonthlyUsd: roundMoney(blocksMonthly),
+      baseMonthlyUsd: baseMonthly || null,
       recurringModules: recurring.map((c) => ({
         moduleId: c.moduleId,
         monthlyPriceUsd: Number(c.monthlyPriceUsd),
         name: getModuleDefinition(c.moduleId)?.name ?? c.moduleId,
       })),
       modulesMonthlyUsd: roundMoney(modulesMonthly),
-      nextCycleEstimateUsd: usageEstimate,
+      nextCycleEstimateUsd: nextMonthEstimate,
       pendingChargeId: pendingRenewal?.id ?? null,
       charges,
     };
@@ -124,22 +162,40 @@ export class PlatformSubscriptionService {
     };
   }
 
-  async quotePlanChange(tenantId: string, cycle: string) {
-    if (!isBillingCycleId(cycle)) {
-      throw new BadRequestException('Ciclo de facturación inválido');
+  async quotePlanChange(tenantId: string, code: string) {
+    if (!isUserPlanCode(code)) {
+      throw new BadRequestException('Plan inválido');
     }
     const tenant = await this.requireTenant(tenantId);
-    const plan = await this.plans.getByCycle(cycle);
+    const plan = await this.plans.getByCode(code);
     if (!plan || !plan.enabled) {
       throw new BadRequestException('Plan no disponible');
     }
-    const newPrice = Number(plan.priceUsd);
+    const blockPrice = await this.plans.getExtraBlockPriceUsd();
+    const extraBlocks = Math.max(0, tenant.extraUserBlocks ?? 0);
+    const onuUsed = await this.countTenantOnus(tenant);
+    const newCapacity = onuCapacity(plan.userLimit, extraBlocks);
+    if (onuUsed > newCapacity) {
+      throw new BadRequestException(
+        `No puedes pasar a ${plan.label}: tienes ${onuUsed} ONUs y el cupo sería ${newCapacity}`,
+      );
+    }
+
     const now = new Date();
+    const periodEnd = endOfUtcMonth(now);
+    const newMonthly = monthlyRecurringUsd(
+      Number(plan.priceUsd),
+      extraBlocks,
+      blockPrice,
+    );
+
     let credit = 0;
     if (
       tenant.subscriptionPeriodStart &&
       tenant.subscriptionPeriodEnd &&
-      tenant.subscriptionPeriodPriceUsd
+      tenant.subscriptionPeriodPriceUsd &&
+      (tenant.subscriptionStatus === 'active' ||
+        tenant.subscriptionStatus === 'past_due')
     ) {
       credit = unusedPeriodCredit(
         Number(tenant.subscriptionPeriodPriceUsd),
@@ -148,23 +204,28 @@ export class PlatformSubscriptionService {
         now,
       );
     }
-    const chargeUsd = roundMoney(Math.max(0, newPrice - credit));
-    const periodStart = now;
-    const periodEnd = addMonthsUtc(now, plan.months);
+
+    const proratedNew = prorateUntilMonthEnd(newMonthly, now);
+    const chargeUsd = roundMoney(Math.max(0, proratedNew - credit));
+
     return {
-      cycle,
+      code: code as UserPlanCode,
       label: plan.label,
-      months: plan.months,
-      newPriceUsd: newPrice,
+      userLimit: plan.userLimit,
+      extraBlocks,
+      onuUsed,
+      onuLimit: newCapacity,
+      newMonthlyUsd: newMonthly,
       creditUsd: credit,
       chargeUsd,
-      periodStart,
+      periodStart: now,
       periodEnd,
+      note: 'El primer cobro (o cambio) se prorratea hasta fin de mes calendario. El próximo mes se cobra el valor completo.',
     };
   }
 
-  async changePlan(tenantId: string, cycle: string) {
-    const quote = await this.quotePlanChange(tenantId, cycle);
+  async changePlan(tenantId: string, code: string) {
+    const quote = await this.quotePlanChange(tenantId, code);
     const tenant = await this.requireTenant(tenantId);
     const now = new Date();
     if (quote.chargeUsd > 0) {
@@ -181,19 +242,148 @@ export class PlatformSubscriptionService {
           coversTo: quote.periodEnd,
           paidAt: now,
           meta: {
-            cycle: quote.cycle,
+            code: quote.code,
             creditUsd: quote.creditUsd,
-            newPriceUsd: quote.newPriceUsd,
+            newMonthlyUsd: quote.newMonthlyUsd,
+            extraBlocks: quote.extraBlocks,
           },
         }),
       );
     }
-    tenant.billingCycle = quote.cycle;
+    tenant.billingCycle = quote.code;
     tenant.subscriptionStatus = 'active';
     tenant.subscriptionPeriodStart = quote.periodStart;
     tenant.subscriptionPeriodEnd = quote.periodEnd;
-    tenant.subscriptionPeriodPriceUsd = quote.newPriceUsd.toFixed(2);
+    tenant.subscriptionPeriodPriceUsd = quote.newMonthlyUsd.toFixed(2);
     await this.tenants.save(tenant);
+    return {
+      ...quote,
+      subscription: await this.getSubscriptionForTenant(tenantId),
+    };
+  }
+
+  async quoteExtraBlocks(tenantId: string, blocks: number) {
+    if (!Number.isInteger(blocks) || blocks < 0) {
+      throw new BadRequestException('Cantidad de bloques inválida');
+    }
+    const tenant = await this.requireTenant(tenantId);
+    if (
+      !tenant.billingCycle ||
+      !isUserPlanCode(tenant.billingCycle) ||
+      (tenant.subscriptionStatus !== 'active' &&
+        tenant.subscriptionStatus !== 'past_due')
+    ) {
+      throw new BadRequestException(
+        'Necesitas un plan activo para ajustar usuarios extra',
+      );
+    }
+    const plan = await this.plans.getByCode(tenant.billingCycle);
+    if (!plan) throw new BadRequestException('Plan no encontrado');
+
+    const blockPrice = await this.plans.getExtraBlockPriceUsd();
+    const currentBlocks = Math.max(0, tenant.extraUserBlocks ?? 0);
+    const onuUsed = await this.countTenantOnus(tenant);
+    const newCapacity = onuCapacity(plan.userLimit, blocks);
+    if (onuUsed > newCapacity) {
+      throw new BadRequestException(
+        `No puedes bajar a ${blocks} bloque(s): tienes ${onuUsed} ONUs y el cupo sería ${newCapacity}`,
+      );
+    }
+
+    const delta = blocks - currentBlocks;
+    const now = new Date();
+    const periodEnd =
+      tenant.subscriptionPeriodEnd && tenant.subscriptionPeriodEnd > now
+        ? tenant.subscriptionPeriodEnd
+        : endOfUtcMonth(now);
+
+    let chargeUsd = 0;
+    let creditUsd = 0;
+    if (delta > 0) {
+      chargeUsd = prorateUntilMonthEnd(delta * blockPrice, now);
+    } else if (delta < 0) {
+      const removeMonthly = Math.abs(delta) * blockPrice;
+      creditUsd = unusedPeriodCredit(
+        removeMonthly,
+        tenant.subscriptionPeriodStart ?? now,
+        periodEnd,
+        now,
+      );
+    }
+
+    const newMonthly = monthlyRecurringUsd(
+      Number(plan.priceUsd),
+      blocks,
+      blockPrice,
+    );
+
+    return {
+      currentBlocks,
+      blocks,
+      delta,
+      extraBlockSize: EXTRA_USER_BLOCK_SIZE,
+      extraBlockPriceUsd: blockPrice,
+      onuUsed,
+      onuLimit: newCapacity,
+      chargeUsd,
+      creditUsd,
+      newMonthlyUsd: newMonthly,
+      periodEnd,
+      note:
+        delta > 0
+          ? `Se cobra el prorrateo de ${delta} bloque(s) hasta fin de mes.`
+          : delta < 0
+            ? `Se acredita el valor no usado de ${Math.abs(delta)} bloque(s).`
+            : 'Sin cambios.',
+    };
+  }
+
+  async adjustExtraBlocks(tenantId: string, blocks: number) {
+    const quote = await this.quoteExtraBlocks(tenantId, blocks);
+    if (quote.delta === 0) {
+      return {
+        ...quote,
+        subscription: await this.getSubscriptionForTenant(tenantId),
+      };
+    }
+    const tenant = await this.requireTenant(tenantId);
+    const now = new Date();
+    const net = roundMoney(quote.chargeUsd - quote.creditUsd);
+
+    if (net !== 0 || quote.delta !== 0) {
+      await this.charges.save(
+        this.charges.create({
+          tenantId,
+          kind: quote.delta > 0 ? 'extra_blocks_add' : 'extra_blocks_remove',
+          description:
+            quote.delta > 0
+              ? `+${quote.delta} bloque(s) de ${EXTRA_USER_BLOCK_SIZE} usuarios`
+              : `−${Math.abs(quote.delta)} bloque(s) de ${EXTRA_USER_BLOCK_SIZE} usuarios`,
+          amountUsd: Math.max(0, net).toFixed(2),
+          status: 'paid',
+          coversFrom: now,
+          coversTo: quote.periodEnd,
+          paidAt: now,
+          meta: {
+            fromBlocks: quote.currentBlocks,
+            toBlocks: quote.blocks,
+            delta: quote.delta,
+            creditUsd: quote.creditUsd,
+            chargeUsd: quote.chargeUsd,
+          },
+        }),
+      );
+    }
+
+    tenant.extraUserBlocks = quote.blocks;
+    // Actualizar precio del período corriente (base mensual completa para crédito futuro)
+    tenant.subscriptionPeriodPriceUsd = quote.newMonthlyUsd.toFixed(2);
+    if (!tenant.subscriptionPeriodEnd || tenant.subscriptionPeriodEnd < now) {
+      tenant.subscriptionPeriodStart = now;
+      tenant.subscriptionPeriodEnd = endOfUtcMonth(now);
+    }
+    await this.tenants.save(tenant);
+
     return {
       ...quote,
       subscription: await this.getSubscriptionForTenant(tenantId),
@@ -263,12 +453,9 @@ export class PlatformSubscriptionService {
         'Debes tener un plan de suscripción activo para agregar el módulo al plan. Ve a Empresa → Suscripción.',
       );
     }
-    const cycleMeta = getBillingCycle(tenant.billingCycle);
-    const months = cycleMeta?.months ?? 1;
-    const fullCycleUsd = roundMoney(monthly * months);
     const now = new Date();
     const chargeUsd = prorateToPeriodEnd(
-      fullCycleUsd,
+      monthly,
       tenant.subscriptionPeriodStart,
       tenant.subscriptionPeriodEnd,
       now,
@@ -280,10 +467,10 @@ export class PlatformSubscriptionService {
       name: def.name,
       monthlyPriceUsd: monthly,
       chargeUsd,
-      chargeLabel: `Prorrateo hasta fin de tu ciclo (${cycleMeta?.label ?? tenant.billingCycle})`,
+      chargeLabel: 'Prorrateo hasta fin de mes calendario',
       startsAt: now,
       expiresAt: tenant.subscriptionPeriodEnd,
-      note: `Se cobra ahora lo que falta hasta el ${tenant.subscriptionPeriodEnd.toISOString().slice(0, 10)} (${daysLeft} día${daysLeft === 1 ? '' : 's'}). En el próximo ciclo se suma al cobro de renovación.`,
+      note: `Se cobra ahora lo que falta hasta el ${tenant.subscriptionPeriodEnd.toISOString().slice(0, 10)} (${daysLeft} día${daysLeft === 1 ? '' : 's'}). En el próximo mes se suma al cobro de renovación.`,
     };
   }
 
@@ -313,7 +500,7 @@ export class PlatformSubscriptionService {
           moduleId,
           mode,
           monthlyPriceUsd: quote.monthlyPriceUsd,
-          billingCycle: tenant.billingCycle,
+          planCode: tenant.billingCycle,
         },
       }),
     );
@@ -424,7 +611,6 @@ export class PlatformSubscriptionService {
     };
   }
 
-  /** Módulos del catálogo con estado de contrato (para Integraciones). */
   async catalogForTenantApp(tenantId: string) {
     const tenant = await this.requireTenant(tenantId);
     const enabled = new Set(normalizeEnabledModules(tenant.enabledModules));
@@ -437,11 +623,6 @@ export class PlatformSubscriptionService {
       const available =
         !m.availableCountries || m.availableCountries.includes(country);
       const contracted = m.alwaysEnabled || enabled.has(m.id);
-      /**
-       * Admin habilita sin contrato → incluido (no facturable).
-       * Tenant contrata → comprado (hay fila en platform_module_contracts).
-       * alwaysEnabled (SMTP) → incluido.
-       */
       const purchased = contracted && !!contract;
       const included = contracted && (m.alwaysEnabled || !contract);
       return {
@@ -467,9 +648,7 @@ export class PlatformSubscriptionService {
     return tenant;
   }
 
-  /**
-   * Genera cobros de renovación (pending) 15 días antes del vencimiento.
-   */
+  /** Renovaciones mensuales (pending) 15 días antes del fin de mes. */
   async generateUpcomingRenewals() {
     const now = new Date();
     const horizon = new Date(now.getTime() + 15 * 86_400_000);
@@ -477,17 +656,18 @@ export class PlatformSubscriptionService {
       where: { status: 'active', subscriptionStatus: 'active' },
     });
     let created = 0;
+    const blockPrice = await this.plans.getExtraBlockPriceUsd();
+
     for (const tenant of tenants) {
       if (!tenant.billingCycle || !tenant.subscriptionPeriodEnd) continue;
       if (tenant.subscriptionPeriodEnd < now) {
-        // Vencido sin pago → past_due
         if (tenant.subscriptionStatus !== 'past_due') {
           tenant.subscriptionStatus = 'past_due';
           await this.tenants.save(tenant);
         }
       }
       if (tenant.subscriptionPeriodEnd > horizon) continue;
-      // Solo si estamos dentro de la ventana ≤15 días (incluye vencidos)
+
       const existing = await this.charges.findOne({
         where: {
           tenantId: tenant.id,
@@ -497,7 +677,6 @@ export class PlatformSubscriptionService {
       });
       if (existing) continue;
 
-      // Evitar duplicar renovación ya pagada para el mismo dueAt
       const dueKey = tenant.subscriptionPeriodEnd.toISOString();
       const alreadyPaid = await this.charges
         .createQueryBuilder('c')
@@ -507,11 +686,11 @@ export class PlatformSubscriptionService {
         .getOne();
       if (alreadyPaid) continue;
 
-      const plan = isBillingCycleId(tenant.billingCycle)
-        ? await this.plans.getByCycle(tenant.billingCycle)
-        : null;
+      if (!isUserPlanCode(tenant.billingCycle)) continue;
+      const plan = await this.plans.getByCode(tenant.billingCycle);
       if (!plan) continue;
 
+      const extraBlocks = Math.max(0, tenant.extraUserBlocks ?? 0);
       const recurring = await this.contracts.find({
         where: { tenantId: tenant.id, status: 'active', mode: 'recurring' },
       });
@@ -519,25 +698,30 @@ export class PlatformSubscriptionService {
         (sum, c) => sum + Number(c.monthlyPriceUsd),
         0,
       );
-      const amount = roundMoney(
-        Number(plan.priceUsd) + modulesMonthly * plan.months,
+      const baseMonthly = monthlyRecurringUsd(
+        Number(plan.priceUsd),
+        extraBlocks,
+        blockPrice,
       );
-      const coversFrom = tenant.subscriptionPeriodEnd;
-      const coversTo = addMonthsUtc(coversFrom, plan.months);
+      const amount = roundMoney(baseMonthly + modulesMonthly);
+      const coversFrom = startOfNextUtcMonth(tenant.subscriptionPeriodEnd);
+      const coversTo = endOfUtcMonth(coversFrom);
 
       await this.charges.save(
         this.charges.create({
           tenantId: tenant.id,
           kind: 'renewal',
-          description: `Renovación ${plan.label} (+ módulos)`,
+          description: `Renovación ${plan.label} (+ extras/módulos)`,
           amountUsd: amount.toFixed(2),
           status: 'pending',
           coversFrom,
           coversTo,
           dueAt: tenant.subscriptionPeriodEnd,
           meta: {
-            cycle: plan.cycle,
+            code: plan.cycle,
             planPriceUsd: Number(plan.priceUsd),
+            extraBlocks,
+            blockPriceUsd: blockPrice,
             modulesMonthlyUsd: modulesMonthly,
             sourcePeriodEnd: dueKey,
           },
@@ -548,7 +732,6 @@ export class PlatformSubscriptionService {
     return created;
   }
 
-  /** Avisos al admin del tenant cuando el cobro pending está a ≤5 / ≤2 días. */
   async findPendingRenewalsNeedingNotice(daysBefore: 5 | 2) {
     const now = new Date();
     const until = new Date(now.getTime() + daysBefore * 86_400_000);
@@ -590,19 +773,28 @@ export class PlatformSubscriptionService {
     await this.charges.save(charge);
 
     if (charge.kind === 'renewal') {
-      const cycle =
-        (charge.meta?.cycle as string) || tenant.billingCycle || 'monthly';
-      const plan = isBillingCycleId(cycle)
-        ? await this.plans.getByCycle(cycle)
-        : null;
-      const months = plan?.months ?? 1;
-      const start = charge.coversFrom ?? tenant.subscriptionPeriodEnd ?? now;
-      const end = charge.coversTo ?? addMonthsUtc(start, months);
-      tenant.billingCycle = cycle;
+      const code =
+        (charge.meta?.code as string) || tenant.billingCycle || 'users_15';
+      const start = charge.coversFrom ?? startOfNextUtcMonth(now);
+      const end = charge.coversTo ?? endOfUtcMonth(start);
+      tenant.billingCycle = code;
       tenant.subscriptionStatus = 'active';
       tenant.subscriptionPeriodStart = start;
       tenant.subscriptionPeriodEnd = end;
-      tenant.subscriptionPeriodPriceUsd = charge.amountUsd;
+      // Precio base del mes (sin módulos one-shot): preferir meta
+      const planPrice = Number(charge.meta?.planPriceUsd ?? 0);
+      const extraBlocks = Number(
+        charge.meta?.extraBlocks ?? tenant.extraUserBlocks ?? 0,
+      );
+      const blockPrice = Number(
+        charge.meta?.blockPriceUsd ??
+          (await this.plans.getExtraBlockPriceUsd()),
+      );
+      tenant.subscriptionPeriodPriceUsd = monthlyRecurringUsd(
+        planPrice || Number(charge.amountUsd),
+        planPrice ? extraBlocks : 0,
+        blockPrice,
+      ).toFixed(2);
       await this.tenants.save(tenant);
     }
 

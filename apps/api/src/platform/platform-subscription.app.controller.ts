@@ -19,6 +19,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { AuthUser } from '../auth/auth.types';
 import { PlatformSubscriptionService } from './platform-subscription.service';
 import {
+  AdjustExtraBlocksDto,
   ChangeSubscriptionPlanDto,
   ContractModuleDto,
 } from './dto/platform-subscription.dto';
@@ -35,8 +36,15 @@ export class PlatformSubscriptionAppController {
   }
 
   @Get('subscription/quote')
-  quotePlan(@CurrentUser() user: AuthUser, @Query('cycle') cycle: string) {
-    return this.subscriptions.quotePlanChange(user.tenantId!, cycle);
+  quotePlan(
+    @CurrentUser() user: AuthUser,
+    @Query('code') code: string,
+    @Query('cycle') cycleLegacy?: string,
+  ) {
+    return this.subscriptions.quotePlanChange(
+      user.tenantId!,
+      code || cycleLegacy || '',
+    );
   }
 
   @Post('subscription/change-plan')
@@ -45,7 +53,25 @@ export class PlatformSubscriptionAppController {
     @CurrentUser() user: AuthUser,
     @Body() dto: ChangeSubscriptionPlanDto,
   ) {
-    return this.subscriptions.changePlan(user.tenantId!, dto.cycle);
+    return this.subscriptions.changePlan(user.tenantId!, dto.code);
+  }
+
+  @Get('subscription/extra-blocks/quote')
+  quoteBlocks(
+    @CurrentUser() user: AuthUser,
+    @Query('blocks') blocksRaw: string,
+  ) {
+    const blocks = Number(blocksRaw);
+    return this.subscriptions.quoteExtraBlocks(user.tenantId!, blocks);
+  }
+
+  @Post('subscription/extra-blocks')
+  @TenantRoles(...CRM_WRITE_ROLES)
+  adjustBlocks(
+    @CurrentUser() user: AuthUser,
+    @Body() dto: AdjustExtraBlocksDto,
+  ) {
+    return this.subscriptions.adjustExtraBlocks(user.tenantId!, dto.blocks);
   }
 
   @Post('subscription/charges/:chargeId/pay')

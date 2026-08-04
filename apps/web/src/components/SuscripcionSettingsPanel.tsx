@@ -6,16 +6,19 @@ import {
   chargeStatusLabel,
   formatDate,
   formatUsd,
-  type BillingCycleId,
+  type ExtraBlocksQuote,
   type PlanChangeQuote,
   type PlatformChargeRow,
   type TenantSubscription,
+  type UserPlanCode,
 } from '../lib/platform'
 
 export function SuscripcionSettingsPanel({ canWrite }: { canWrite: boolean }) {
   const queryClient = useQueryClient()
-  const [selected, setSelected] = useState<BillingCycleId | ''>('')
+  const [selected, setSelected] = useState<UserPlanCode | ''>('')
   const [quote, setQuote] = useState<PlanChangeQuote | null>(null)
+  const [blocksInput, setBlocksInput] = useState(0)
+  const [blocksQuote, setBlocksQuote] = useState<ExtraBlocksQuote | null>(null)
   const [msg, setMsg] = useState<string | null>(null)
 
   const query = useQuery({
@@ -27,24 +30,28 @@ export function SuscripcionSettingsPanel({ canWrite }: { canWrite: boolean }) {
   const sub = query.data
   const charges = sub?.charges ?? []
   const pending = charges.find((c) => c.canPay)
+  const currentCode = (sub?.planCode ?? sub?.billingCycle ?? null) as
+    | UserPlanCode
+    | null
 
   useEffect(() => {
     if (!sub) return
-    setSelected(sub.billingCycle ?? '')
-  }, [sub])
+    setSelected(currentCode ?? '')
+    setBlocksInput(sub.extraBlocks ?? 0)
+  }, [sub, currentCode])
 
   useEffect(() => {
     if (!selected || !canWrite) {
       setQuote(null)
       return
     }
-    if (sub?.billingCycle === selected && sub.status === 'active') {
+    if (currentCode === selected && sub?.status === 'active') {
       setQuote(null)
       return
     }
     let cancelled = false
     void apiFetch<PlanChangeQuote>(
-      `/app/settings/subscription/quote?cycle=${selected}`,
+      `/app/settings/subscription/quote?code=${selected}`,
     )
       .then((q) => {
         if (!cancelled) setQuote(q)
@@ -58,17 +65,60 @@ export function SuscripcionSettingsPanel({ canWrite }: { canWrite: boolean }) {
     return () => {
       cancelled = true
     }
-  }, [selected, canWrite, sub?.billingCycle, sub?.status])
+  }, [selected, canWrite, currentCode, sub?.status])
 
-  const mutation = useMutation({
+  useEffect(() => {
+    if (!canWrite || !currentCode || sub?.status === 'none') {
+      setBlocksQuote(null)
+      return
+    }
+    if (blocksInput === (sub?.extraBlocks ?? 0)) {
+      setBlocksQuote(null)
+      return
+    }
+    let cancelled = false
+    void apiFetch<ExtraBlocksQuote>(
+      `/app/settings/subscription/extra-blocks/quote?blocks=${blocksInput}`,
+    )
+      .then((q) => {
+        if (!cancelled) setBlocksQuote(q)
+      })
+      .catch((err: Error) => {
+        if (!cancelled) {
+          setBlocksQuote(null)
+          setMsg(err.message)
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [blocksInput, canWrite, currentCode, sub?.extraBlocks, sub?.status])
+
+  const planMutation = useMutation({
     mutationFn: () =>
       apiFetch('/app/settings/subscription/change-plan', {
         method: 'POST',
-        body: JSON.stringify({ cycle: selected }),
+        body: JSON.stringify({ code: selected }),
       }),
     onSuccess: () => {
       setMsg('Plan actualizado')
       setQuote(null)
+      void queryClient.invalidateQueries({
+        queryKey: ['app', 'settings', 'subscription'],
+      })
+    },
+    onError: (err: Error) => setMsg(err.message),
+  })
+
+  const blocksMutation = useMutation({
+    mutationFn: () =>
+      apiFetch('/app/settings/subscription/extra-blocks', {
+        method: 'POST',
+        body: JSON.stringify({ blocks: blocksInput }),
+      }),
+    onSuccess: () => {
+      setMsg('Usuarios extra actualizados')
+      setBlocksQuote(null)
       void queryClient.invalidateQueries({
         queryKey: ['app', 'settings', 'subscription'],
       })
@@ -97,12 +147,14 @@ export function SuscripcionSettingsPanel({ canWrite }: { canWrite: boolean }) {
         ? 'En mora'
         : 'Sin plan'
 
+  const blockSize = sub?.extraBlockSize ?? 50
+
   return (
     <div>
       <p className="mb-5 text-sm text-[var(--text-muted)]">
-        Plan prepago de la plataforma. 15 días antes del vencimiento se genera
-        el cobro de renovación; desde 5 días antes se avisa por correo al admin
-        de la empresa.
+        Suscripción mensual por cupo de ONUs (usuarios). El primer mes y los
+        cambios se prorratean hasta fin de mes calendario. Puedes sumar
+        usuarios extra en bloques de {blockSize}.
       </p>
 
       {query.isLoading && (
@@ -139,7 +191,9 @@ export function SuscripcionSettingsPanel({ canWrite }: { canWrite: boolean }) {
       {msg && (
         <p
           className={`mb-4 text-sm ${
-            msg.includes('actualizado') || msg.includes('renovada')
+            msg.includes('actualizado') ||
+            msg.includes('renovada') ||
+            msg.includes('extra')
               ? 'text-emerald-400'
               : 'text-[var(--danger)]'
           }`}
@@ -149,7 +203,6 @@ export function SuscripcionSettingsPanel({ canWrite }: { canWrite: boolean }) {
       )}
 
       <div className="grid gap-4 lg:grid-cols-2">
-        {/* Estado actual */}
         <section className="flex flex-col rounded-xl border border-[var(--border)] bg-[var(--bg)] p-5">
           <div className="mb-4 flex items-center justify-between">
             <h3 className="text-sm font-semibold">Estado actual</h3>
@@ -167,22 +220,35 @@ export function SuscripcionSettingsPanel({ canWrite }: { canWrite: boolean }) {
             </span>
           </div>
 
-          {sub?.billingCycle ? (
+          {currentCode ? (
             <dl className="space-y-2.5 text-sm">
               <div className="flex justify-between gap-4">
                 <dt className="text-[var(--text-muted)]">Plan</dt>
-                <dd className="text-right font-medium capitalize">
-                  {sub.plans.find((p) => p.cycle === sub.billingCycle)?.label ??
-                    sub.billingCycle}
+                <dd className="text-right font-medium">
+                  {sub?.plans.find((p) => p.code === currentCode)?.label ??
+                    currentCode}
+                </dd>
+              </div>
+              <div className="flex justify-between gap-4">
+                <dt className="text-[var(--text-muted)]">ONUs / cupo</dt>
+                <dd className="text-right font-medium">
+                  {sub?.onuUsed ?? 0} / {sub?.onuLimit ?? '—'}
+                </dd>
+              </div>
+              <div className="flex justify-between gap-4">
+                <dt className="text-[var(--text-muted)]">Bloques extra</dt>
+                <dd className="text-right">
+                  {sub?.extraBlocks ?? 0} × {blockSize} ={' '}
+                  {(sub?.extraBlocks ?? 0) * blockSize} usuarios
                 </dd>
               </div>
               <div className="flex justify-between gap-4">
                 <dt className="text-[var(--text-muted)]">Período</dt>
                 <dd className="text-right">
-                  {formatDate(sub.periodStart)} → {formatDate(sub.periodEnd)}
+                  {formatDate(sub?.periodStart)} → {formatDate(sub?.periodEnd)}
                 </dd>
               </div>
-              {sub.daysUntilEnd != null && sub.status === 'active' && (
+              {sub?.daysUntilEnd != null && sub.status === 'active' && (
                 <div className="flex justify-between gap-4">
                   <dt className="text-[var(--text-muted)]">Vigencia</dt>
                   <dd className="text-right">
@@ -193,23 +259,23 @@ export function SuscripcionSettingsPanel({ canWrite }: { canWrite: boolean }) {
                 </div>
               )}
               <div className="flex justify-between gap-4">
-                <dt className="text-[var(--text-muted)]">Pagado este ciclo</dt>
+                <dt className="text-[var(--text-muted)]">Mensual base</dt>
                 <dd className="text-right font-medium">
-                  {formatUsd(sub.periodPriceUsd)}
+                  {formatUsd(sub?.baseMonthlyUsd)}
                 </dd>
               </div>
-              {sub.recurringModules.length > 0 && (
+              {sub && sub.recurringModules.length > 0 && (
                 <div className="flex justify-between gap-4">
-                  <dt className="text-[var(--text-muted)]">Módulos en plan</dt>
+                  <dt className="text-[var(--text-muted)]">Módulos</dt>
                   <dd className="text-right">
                     {formatUsd(sub.modulesMonthlyUsd)}/mes
                   </dd>
                 </div>
               )}
-              {sub.nextCycleEstimateUsd != null && (
+              {sub?.nextCycleEstimateUsd != null && (
                 <div className="flex justify-between gap-4 border-t border-[var(--border)] pt-2.5">
                   <dt className="text-[var(--text-muted)]">
-                    Estimado próximo ciclo
+                    Estimado próximo mes
                   </dt>
                   <dd className="text-right font-semibold">
                     {formatUsd(sub.nextCycleEstimateUsd)}
@@ -219,34 +285,33 @@ export function SuscripcionSettingsPanel({ canWrite }: { canWrite: boolean }) {
             </dl>
           ) : (
             <p className="text-sm text-[var(--text-muted)]">
-              Aún no tienes un plan contratado. Elige uno en la tarjeta de al
-              lado.
+              Aún no tienes un plan contratado. Elige uno a la derecha.
             </p>
           )}
         </section>
 
-        {/* Cambiar / contratar plan */}
         <section className="flex flex-col rounded-xl border border-[var(--border)] bg-[var(--bg)] p-5">
           <h3 className="mb-4 text-sm font-semibold">
-            {sub?.billingCycle ? 'Cambiar plan' : 'Contratar plan'}
+            {currentCode ? 'Cambiar plan' : 'Contratar plan'}
           </h3>
 
           <label className="mb-3 block text-sm">
-            <span className="mb-1 block text-[var(--text-muted)]">Plan</span>
+            <span className="mb-1 block text-[var(--text-muted)]">
+              Plan (usuarios / ONUs)
+            </span>
             <select
-              disabled={!canWrite || mutation.isPending}
+              disabled={!canWrite || planMutation.isPending}
               className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] px-3 py-2.5 text-sm outline-none ring-[var(--accent)] focus:ring-2"
               value={selected}
               onChange={(e) => {
                 setMsg(null)
-                setSelected(e.target.value as BillingCycleId | '')
+                setSelected(e.target.value as UserPlanCode | '')
               }}
             >
               <option value="">Selecciona un plan…</option>
               {(sub?.plans ?? []).map((p) => (
-                <option key={p.cycle} value={p.cycle}>
-                  {p.label} · {formatUsd(p.priceUsd)} / {p.months}{' '}
-                  {p.months === 1 ? 'mes' : 'meses'}
+                <option key={p.code} value={p.code}>
+                  {p.label} · {formatUsd(p.priceUsd)}/mes
                 </option>
               ))}
             </select>
@@ -256,26 +321,26 @@ export function SuscripcionSettingsPanel({ canWrite }: { canWrite: boolean }) {
             <div className="mb-4 rounded-lg border border-sky-500/30 bg-sky-500/10 px-3 py-3 text-sm text-sky-100">
               <div className="flex justify-between gap-4">
                 <span>
-                  Nuevo ciclo <strong>{quote.label}</strong>
+                  Plan <strong>{quote.label}</strong>
                 </span>
-                <span>{formatUsd(quote.newPriceUsd)}</span>
+                <span>{formatUsd(quote.newMonthlyUsd)}/mes</span>
               </div>
               <div className="mt-1 flex justify-between gap-4">
                 <span>Crédito período actual</span>
                 <span>{formatUsd(quote.creditUsd)}</span>
               </div>
               <div className="mt-1 flex justify-between gap-4 border-t border-sky-500/20 pt-1 font-semibold">
-                <span>A cobrar ahora</span>
+                <span>A cobrar ahora (prorrateo)</span>
                 <span>{formatUsd(quote.chargeUsd)}</span>
               </div>
               <p className="mt-2 text-xs opacity-80">
-                Vigencia: {formatDate(quote.periodStart)} →{' '}
-                {formatDate(quote.periodEnd)}
+                Hasta {formatDate(quote.periodEnd)} · cupo {quote.onuLimit}{' '}
+                (usas {quote.onuUsed})
               </p>
             </div>
           ) : (
             <p className="mb-4 flex-1 text-xs text-[var(--text-muted)]">
-              Selecciona un plan para ver el detalle del cobro.
+              Elige un plan distinto al actual para ver el cobro prorrateado.
             </p>
           )}
 
@@ -284,14 +349,14 @@ export function SuscripcionSettingsPanel({ canWrite }: { canWrite: boolean }) {
               type="button"
               disabled={
                 !selected ||
-                mutation.isPending ||
-                (sub?.billingCycle === selected &&
-                  (sub.status === 'active' || sub.status === 'past_due'))
+                planMutation.isPending ||
+                (currentCode === selected &&
+                  (sub?.status === 'active' || sub?.status === 'past_due'))
               }
-              onClick={() => mutation.mutate()}
+              onClick={() => planMutation.mutate()}
               className="mt-auto rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white hover:bg-[var(--accent-hover)] disabled:opacity-60"
             >
-              {mutation.isPending
+              {planMutation.isPending
                 ? 'Procesando…'
                 : sub?.status === 'active' || sub?.status === 'past_due'
                   ? 'Cambiar plan'
@@ -300,6 +365,82 @@ export function SuscripcionSettingsPanel({ canWrite }: { canWrite: boolean }) {
           )}
         </section>
       </div>
+
+      {currentCode &&
+        (sub?.status === 'active' || sub?.status === 'past_due') && (
+          <section className="mt-4 rounded-xl border border-[var(--border)] bg-[var(--bg)] p-5">
+            <h3 className="mb-1 text-sm font-semibold">Usuarios extra</h3>
+            <p className="mb-4 text-xs text-[var(--text-muted)]">
+              Bloques de {blockSize} ONUs a {formatUsd(sub?.extraBlockPriceUsd)}
+              /mes cada uno. Puedes subir o bajar solo si tu cantidad de ONUs
+              cabe en el nuevo cupo.
+            </p>
+            <div className="flex flex-wrap items-end gap-3">
+              <label className="block text-sm">
+                <span className="mb-1 block text-[var(--text-muted)]">
+                  Bloques extra
+                </span>
+                <input
+                  type="number"
+                  min={0}
+                  step={1}
+                  disabled={!canWrite || blocksMutation.isPending}
+                  className="w-28 rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] px-3 py-2.5 text-sm outline-none ring-[var(--accent)] focus:ring-2"
+                  value={blocksInput}
+                  onChange={(e) => {
+                    setMsg(null)
+                    setBlocksInput(Math.max(0, Math.floor(Number(e.target.value) || 0)))
+                  }}
+                />
+              </label>
+              <p className="pb-2.5 text-sm text-[var(--text-muted)]">
+                = {blocksInput * blockSize} usuarios extra · cupo total{' '}
+                {(sub?.plans.find((p) => p.code === currentCode)?.userLimit ??
+                  0) +
+                  blocksInput * blockSize}
+              </p>
+              {canWrite && (
+                <button
+                  type="button"
+                  disabled={
+                    blocksMutation.isPending ||
+                    blocksInput === (sub?.extraBlocks ?? 0) ||
+                    !blocksQuote
+                  }
+                  onClick={() => blocksMutation.mutate()}
+                  className="rounded-lg border border-[var(--border)] px-4 py-2.5 text-sm font-medium hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:opacity-60"
+                >
+                  {blocksMutation.isPending
+                    ? 'Aplicando…'
+                    : blocksInput > (sub?.extraBlocks ?? 0)
+                      ? 'Agregar usuarios'
+                      : 'Bajar usuarios'}
+                </button>
+              )}
+            </div>
+            {blocksQuote && (
+              <div className="mt-4 rounded-lg border border-sky-500/30 bg-sky-500/10 px-3 py-3 text-sm text-sky-100">
+                <div className="flex justify-between gap-4">
+                  <span>Nuevo mensual base</span>
+                  <span>{formatUsd(blocksQuote.newMonthlyUsd)}</span>
+                </div>
+                {blocksQuote.chargeUsd > 0 && (
+                  <div className="mt-1 flex justify-between gap-4 font-semibold">
+                    <span>A cobrar ahora</span>
+                    <span>{formatUsd(blocksQuote.chargeUsd)}</span>
+                  </div>
+                )}
+                {blocksQuote.creditUsd > 0 && (
+                  <div className="mt-1 flex justify-between gap-4">
+                    <span>Crédito</span>
+                    <span>{formatUsd(blocksQuote.creditUsd)}</span>
+                  </div>
+                )}
+                <p className="mt-2 text-xs opacity-80">{blocksQuote.note}</p>
+              </div>
+            )}
+          </section>
+        )}
 
       <ChargesHistory
         charges={charges}
@@ -326,8 +467,7 @@ function ChargesHistory({
     <div className="mt-8">
       <h3 className="mb-1 text-sm font-semibold">Historial de cobros</h3>
       <p className="mb-4 text-xs text-[var(--text-muted)]">
-        Renovaciones, altas, cambios de plan y módulos. Los pendientes muestran
-        el botón Pagar.
+        Renovaciones, altas, cambios de plan, bloques extra y módulos.
       </p>
 
       {charges.length === 0 ? (

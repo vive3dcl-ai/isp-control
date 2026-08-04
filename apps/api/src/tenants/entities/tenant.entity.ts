@@ -159,8 +159,8 @@ export class Tenant {
   enabledModules: string[];
 
   /**
-   * Ciclo de facturación prepago de la plataforma.
-   * monthly | quarterly | semiannual | annual | null si aún no eligió.
+   * Código del plan de plataforma (users_15, users_50, …).
+   * Columna histórica `billing_cycle`; antes guardaba monthly/quarterly/….
    */
   @Column({
     name: 'billing_cycle',
@@ -169,6 +169,16 @@ export class Tenant {
     nullable: true,
   })
   billingCycle: string | null;
+
+  /**
+   * Bloques extra de 50 ONUs contratados además del cupo del plan.
+   */
+  @Column({
+    name: 'extra_user_blocks',
+    type: 'int',
+    default: 0,
+  })
+  extraUserBlocks: number;
 
   @Column({
     name: 'subscription_status',

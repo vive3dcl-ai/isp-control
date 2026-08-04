@@ -25,6 +25,7 @@ import { PlatformFxRate } from './modules/entities/platform-fx-rate.entity';
 import { PlatformSmtpSettings } from './platform/entities/platform-smtp-settings.entity';
 import { PlatformPublicUrls } from './platform/entities/platform-public-urls.entity';
 import { PlatformSystemPlan } from './platform/entities/platform-system-plan.entity';
+import { PlatformBillingSettings } from './platform/entities/platform-billing-settings.entity';
 import { PlatformModuleContract } from './platform/entities/platform-module-contract.entity';
 import { PlatformCharge } from './platform/entities/platform-charge.entity';
 import { PlatformBranding } from './platform/entities/platform-branding.entity';
@@ -88,6 +89,7 @@ import { TenantMapDraft } from './crm/entities/tenant-map-draft.entity';
             PlatformSmtpSettings,
             PlatformPublicUrls,
             PlatformSystemPlan,
+            PlatformBillingSettings,
             PlatformModuleContract,
             PlatformCharge,
             PlatformBranding,

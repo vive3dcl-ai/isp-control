@@ -1,16 +1,27 @@
-export type BillingCycleId =
-  | 'monthly'
-  | 'quarterly'
-  | 'semiannual'
-  | 'annual'
+export type UserPlanCode =
+  | 'users_15'
+  | 'users_50'
+  | 'users_100'
+  | 'users_200'
+  | 'users_500'
 
 export type SystemPlan = {
   id: string
-  cycle: BillingCycleId
+  code: UserPlanCode
+  /** Alias histórico */
+  cycle?: UserPlanCode
+  userLimit: number
   months: number
   label: string
   priceUsd: number
   enabled: boolean
+  sortOrder?: number
+}
+
+export type SystemPlansAdmin = {
+  plans: SystemPlan[]
+  extraBlockSize: number
+  extraBlockPriceUsd: number
 }
 
 export type PlatformChargeRow = {
@@ -28,13 +39,22 @@ export type PlatformChargeRow = {
 }
 
 export type TenantSubscription = {
-  billingCycle: BillingCycleId | null
+  planCode: UserPlanCode | null
+  billingCycle: UserPlanCode | null
   status: string
   periodStart: string | null
   periodEnd: string | null
   periodPriceUsd: number | null
   daysUntilEnd?: number | null
   plans: SystemPlan[]
+  extraBlocks: number
+  extraBlockSize: number
+  extraBlockPriceUsd: number
+  onuUsed: number
+  onuLimit: number | null
+  planMonthlyUsd: number | null
+  blocksMonthlyUsd: number
+  baseMonthlyUsd: number | null
   recurringModules: Array<{
     moduleId: string
     monthlyPriceUsd: number
@@ -47,14 +67,33 @@ export type TenantSubscription = {
 }
 
 export type PlanChangeQuote = {
-  cycle: BillingCycleId
+  code: UserPlanCode
   label: string
-  months: number
-  newPriceUsd: number
+  userLimit: number
+  extraBlocks: number
+  onuUsed: number
+  onuLimit: number
+  newMonthlyUsd: number
   creditUsd: number
   chargeUsd: number
   periodStart: string
   periodEnd: string
+  note?: string
+}
+
+export type ExtraBlocksQuote = {
+  currentBlocks: number
+  blocks: number
+  delta: number
+  extraBlockSize: number
+  extraBlockPriceUsd: number
+  onuUsed: number
+  onuLimit: number
+  chargeUsd: number
+  creditUsd: number
+  newMonthlyUsd: number
+  periodEnd: string
+  note?: string
 }
 
 export type ModuleContractQuote = {
@@ -110,6 +149,10 @@ export function chargeKindLabel(kind: string): string {
       return 'Alta'
     case 'plan_change':
       return 'Cambio de plan'
+    case 'extra_blocks_add':
+      return 'Usuarios extra (+)'
+    case 'extra_blocks_remove':
+      return 'Usuarios extra (−)'
     case 'module_one_time':
       return 'Módulo (pago único)'
     case 'module_prorate':

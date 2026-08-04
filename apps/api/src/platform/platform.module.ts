@@ -6,6 +6,7 @@ import { PlatformModulePricing } from '../modules/entities/platform-module-prici
 import { PlatformSmtpSettings } from './entities/platform-smtp-settings.entity';
 import { PlatformPublicUrls } from './entities/platform-public-urls.entity';
 import { PlatformSystemPlan } from './entities/platform-system-plan.entity';
+import { PlatformBillingSettings } from './entities/platform-billing-settings.entity';
 import { PlatformModuleContract } from './entities/platform-module-contract.entity';
 import { PlatformCharge } from './entities/platform-charge.entity';
 import { PlatformBranding } from './entities/platform-branding.entity';
@@ -21,9 +22,11 @@ import { PlatformSubscriptionAppController } from './platform-subscription.app.c
 import { PlatformBrandingPublicController } from './platform-branding.public.controller';
 import { BackupAdminController } from './backup.admin.controller';
 import { BackupService } from './backup.service';
+import { DatabaseModule } from '../database/database.module';
 
 @Module({
   imports: [
+    DatabaseModule,
     TypeOrmModule.forFeature([
       Tenant,
       PlatformAdmin,
@@ -31,6 +34,7 @@ import { BackupService } from './backup.service';
       PlatformSmtpSettings,
       PlatformPublicUrls,
       PlatformSystemPlan,
+      PlatformBillingSettings,
       PlatformModuleContract,
       PlatformCharge,
       PlatformBranding,

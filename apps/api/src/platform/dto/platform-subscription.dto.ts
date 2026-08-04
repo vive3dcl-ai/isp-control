@@ -4,15 +4,17 @@ import {
   IsArray,
   IsBoolean,
   IsIn,
+  IsInt,
   IsNumber,
+  IsOptional,
   Min,
   ValidateNested,
 } from 'class-validator';
-import { BILLING_CYCLE_IDS } from '../billing-cycles';
+import { USER_PLAN_CODES } from '../billing-cycles';
 
 export class SystemPlanPriceItemDto {
-  @IsIn([...BILLING_CYCLE_IDS])
-  cycle!: string;
+  @IsIn([...USER_PLAN_CODES])
+  code!: string;
 
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
@@ -29,11 +31,25 @@ export class UpdateSystemPlansDto {
   @ValidateNested({ each: true })
   @Type(() => SystemPlanPriceItemDto)
   plans!: SystemPlanPriceItemDto[];
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  extraBlockPriceUsd?: number;
 }
 
 export class ChangeSubscriptionPlanDto {
-  @IsIn([...BILLING_CYCLE_IDS])
-  cycle!: string;
+  @IsIn([...USER_PLAN_CODES])
+  code!: string;
+}
+
+export class AdjustExtraBlocksDto {
+  /** Nuevo total de bloques extra (cada uno = 50 usuarios). */
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  blocks!: number;
 }
 
 export class ContractModuleDto {

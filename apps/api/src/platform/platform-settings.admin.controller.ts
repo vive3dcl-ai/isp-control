@@ -59,7 +59,7 @@ export class PlatformSettingsAdminController {
 
   @Get('system-plans')
   listPlans() {
-    return this.plans.list();
+    return this.plans.listAdmin();
   }
 
   @Patch('system-plans')

@@ -9,7 +9,7 @@ import { useAuth } from '../auth/AuthContext'
 import { PanelShell } from '../components/PanelShell'
 import { SettingsSubTabs } from '../components/SettingsSubTabs'
 import { SmtpConfigModal } from '../components/SmtpConfigModal'
-import type { SystemPlan } from '../lib/platform'
+import type { SystemPlan, SystemPlansAdmin } from '../lib/platform'
 import type { PlatformBranding } from '../lib/branding'
 import { DEFAULT_PLATFORM_BRANDING } from '../lib/branding'
 
@@ -418,31 +418,40 @@ function WireguardConcentratorPanel() {
 function SystemValuePanel() {
   const queryClient = useQueryClient()
   const [draft, setDraft] = useState<SystemPlan[]>([])
+  const [blockPrice, setBlockPrice] = useState(40)
+  const [blockSize, setBlockSize] = useState(50)
   const [msg, setMsg] = useState<string | null>(null)
 
   const query = useQuery({
     queryKey: ['admin', 'settings', 'system-plans'],
-    queryFn: () => apiFetch<SystemPlan[]>('/admin/settings/system-plans'),
+    queryFn: () =>
+      apiFetch<SystemPlansAdmin>('/admin/settings/system-plans'),
   })
 
   useEffect(() => {
-    if (query.data) setDraft(query.data)
+    if (!query.data) return
+    setDraft(query.data.plans)
+    setBlockPrice(query.data.extraBlockPriceUsd)
+    setBlockSize(query.data.extraBlockSize)
   }, [query.data])
 
   const mutation = useMutation({
     mutationFn: () =>
-      apiFetch<SystemPlan[]>('/admin/settings/system-plans', {
+      apiFetch<SystemPlansAdmin>('/admin/settings/system-plans', {
         method: 'PATCH',
         body: JSON.stringify({
           plans: draft.map((p) => ({
-            cycle: p.cycle,
+            code: p.code,
             priceUsd: Number(p.priceUsd),
             enabled: p.enabled,
           })),
+          extraBlockPriceUsd: Number(blockPrice),
         }),
       }),
     onSuccess: (data) => {
-      setDraft(data)
+      setDraft(data.plans)
+      setBlockPrice(data.extraBlockPriceUsd)
+      setBlockSize(data.extraBlockSize)
       setMsg('Planes guardados')
       void queryClient.invalidateQueries({
         queryKey: ['admin', 'settings', 'system-plans'],
@@ -454,9 +463,9 @@ function SystemValuePanel() {
   return (
     <div className="mt-5 max-w-2xl">
       <p className="mb-4 text-sm text-[var(--text-muted)]">
-        Precio prepago del uso de la plataforma por ciclo. Las empresas eligen
-        el plan en Empresa → Suscripción. Al cambiar de plan se cobra la
-        diferencia (crédito del período restante).
+        Planes mensuales por cupo de ONUs (usuarios). El primer mes y los
+        cambios se prorratean a mes calendario. Las empresas pueden contratar
+        bloques extra de {blockSize} usuarios.
       </p>
 
       {query.isLoading && (
@@ -469,17 +478,17 @@ function SystemValuePanel() {
       <ul className="space-y-3">
         {draft.map((p) => (
           <li
-            key={p.cycle}
+            key={p.code}
             className="flex flex-wrap items-center gap-3 rounded-xl border border-[var(--border)] bg-[var(--bg)] px-4 py-3"
           >
             <div className="min-w-[8rem]">
               <p className="text-sm font-medium">{p.label}</p>
               <p className="text-xs text-[var(--text-muted)]">
-                {p.months} {p.months === 1 ? 'mes' : 'meses'}
+                Cupo {p.userLimit} ONUs · mensual
               </p>
             </div>
             <label className="flex items-center gap-2 text-xs">
-              <span className="text-[var(--text-muted)]">USD</span>
+              <span className="text-[var(--text-muted)]">USD/mes</span>
               <input
                 type="number"
                 min={0}
@@ -492,7 +501,7 @@ function SystemValuePanel() {
                   const v = Number(e.target.value)
                   setDraft((prev) =>
                     prev.map((x) =>
-                      x.cycle === p.cycle
+                      x.code === p.code
                         ? { ...x, priceUsd: Number.isFinite(v) ? v : 0 }
                         : x,
                     ),
@@ -509,7 +518,7 @@ function SystemValuePanel() {
                   setMsg(null)
                   setDraft((prev) =>
                     prev.map((x) =>
-                      x.cycle === p.cycle
+                      x.code === p.code
                         ? { ...x, enabled: e.target.checked }
                         : x,
                     ),
@@ -521,6 +530,31 @@ function SystemValuePanel() {
           </li>
         ))}
       </ul>
+
+      <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-[var(--border)] bg-[var(--bg)] px-4 py-3">
+        <div className="min-w-[10rem]">
+          <p className="text-sm font-medium">Bloque extra</p>
+          <p className="text-xs text-[var(--text-muted)]">
+            +{blockSize} usuarios
+          </p>
+        </div>
+        <label className="flex items-center gap-2 text-xs">
+          <span className="text-[var(--text-muted)]">USD/mes</span>
+          <input
+            type="number"
+            min={0}
+            step="0.01"
+            className={`${inputClass} w-28`}
+            disabled={mutation.isPending}
+            value={blockPrice}
+            onChange={(e) => {
+              setMsg(null)
+              const v = Number(e.target.value)
+              setBlockPrice(Number.isFinite(v) ? v : 0)
+            }}
+          />
+        </label>
+      </div>
 
       {msg && (
         <p
