@@ -107,14 +107,7 @@ export function PanelShell({
         ].join(' ')}
       >
         <div className="flex min-h-14 items-center justify-center border-b border-[var(--border)] px-3 py-2.5">
-          <div className="flex w-full min-w-0 flex-col items-center justify-center">
-            <BrandLogo height={42} />
-            {isImpersonating && variant === 'tenant' ? (
-              <p className="mt-1 text-center text-[10px] text-[var(--text-muted)]">
-                Impersonando
-              </p>
-            ) : null}
-          </div>
+          <BrandLogo height={52} className="w-full max-w-[14rem]" />
         </div>
 
         <nav className="flex-1 space-y-1 overflow-y-auto p-3">
