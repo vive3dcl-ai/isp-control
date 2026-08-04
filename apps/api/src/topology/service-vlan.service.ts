@@ -15,7 +15,9 @@ import { portMoveError, resolveSwitchBridge } from './switch-bridge.util';
 import { withVlanInCache } from './olt-vlan-cache.util';
 import {
   planUplinkVlanChanges,
+  suggestUplinksToCarryVlan,
   uplinksCarryingVlan,
+  vlanUplinkPresence,
   withUplinkVlansInCache,
   type UplinkVlanPlan,
 } from './olt-uplink-vlan.util';
@@ -762,6 +764,123 @@ export class ServiceVlanService {
         : null,
       switch: switchNames.length ? switchNames.join(', ') : null,
     };
+  }
+
+  /**
+   * Curación del verificador: si la VLAN WAN no está en ningún uplink de la
+   * OLT, la etiqueta en los trunks activos. Sin eso el CPE puede quedar
+   * Connected en TR-069 y aun así no responder ARP (como pasó con VLAN 702).
+   */
+  async ensureVlanTaggedOnUplinks(
+    schema: string,
+    oltId: string,
+    vlanId: number,
+    description?: string | null,
+  ): Promise<{
+    ok: boolean;
+    alreadyTagged: boolean;
+    status: 'present' | 'missing' | 'unknown';
+    carrying: string[];
+    tagged: string[];
+    message: string;
+  }> {
+    const deviceRepo =
+      await this.tenantConnections.getNetworkDeviceRepository(schema);
+    const olt = await deviceRepo.findOne({ where: { id: oltId } });
+    if (!olt || !isManagedOltDevice(olt.type, olt.subtype)) {
+      return {
+        ok: false,
+        alreadyTagged: false,
+        status: 'unknown',
+        carrying: [],
+        tagged: [],
+        message: 'OLT no gestionada',
+      };
+    }
+
+    const uplinks = olt.oltInventoryCache?.uplinks ?? [];
+    const presence = vlanUplinkPresence(uplinks, vlanId);
+    if (presence.status === 'present') {
+      return {
+        ok: true,
+        alreadyTagged: true,
+        status: 'present',
+        carrying: presence.carrying,
+        tagged: [],
+        message: `VLAN ${vlanId} ya en uplink (${presence.carrying.join(', ')})`,
+      };
+    }
+    if (presence.status === 'unknown') {
+      return {
+        ok: false,
+        alreadyTagged: false,
+        status: 'unknown',
+        carrying: [],
+        tagged: [],
+        message: `VLAN ${vlanId}: sin inventario de uplinks — sincroniza la OLT`,
+      };
+    }
+
+    const selected = suggestUplinksToCarryVlan(uplinks);
+    if (!selected.length) {
+      return {
+        ok: false,
+        alreadyTagged: false,
+        status: 'missing',
+        carrying: [],
+        tagged: [],
+        message: `VLAN ${vlanId}: no hay uplinks habilitados en la OLT`,
+      };
+    }
+
+    try {
+      const note = await this.ensureOnOlt(
+        schema,
+        olt,
+        vlanId,
+        description ?? null,
+        selected,
+      );
+      const refreshed = await deviceRepo.findOne({ where: { id: oltId } });
+      const after = vlanUplinkPresence(
+        refreshed?.oltInventoryCache?.uplinks ?? uplinks,
+        vlanId,
+      );
+      return {
+        ok: after.status === 'present',
+        alreadyTagged: false,
+        status: after.status,
+        carrying: after.carrying,
+        tagged: selected,
+        message:
+          after.status === 'present'
+            ? `VLAN ${vlanId} agregada al uplink (${after.carrying.join(', ')}) · ${note}`
+            : `VLAN ${vlanId} empujada a ${selected.join(', ')} · ${note}`,
+      };
+    } catch (e) {
+      return {
+        ok: false,
+        alreadyTagged: false,
+        status: 'missing',
+        carrying: [],
+        tagged: [],
+        message: `VLAN ${vlanId} en uplink: ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      };
+    }
+  }
+
+  /** Presence-only probe for the silent verifier (no writes). */
+  probeVlanOnUplinks(
+    olt: NetworkDevice,
+    vlanId: number,
+  ): {
+    status: 'present' | 'missing' | 'unknown';
+    carrying: string[];
+    assignable: string[];
+  } {
+    return vlanUplinkPresence(olt.oltInventoryCache?.uplinks ?? [], vlanId);
   }
 
   private async ensureOnOlt(

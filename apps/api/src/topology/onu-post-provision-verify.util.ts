@@ -2,7 +2,7 @@
  * Criterio y ventanas del chequeo silencioso post-aprovisionamiento.
  *
  * Tras apply/migrate: cada 3 minutos durante 15 minutos. Si todo cuadra, ok y
- * se para. Si al cerrar la ventana fallan ARP/WAN/DNS/credenciales → fail.
+ * se para. Si al cerrar la ventana fallan ARP/WAN/DNS/uplink/credenciales → fail.
  */
 
 export const VERIFY_INTERVAL_MS = 3 * 60_000;
@@ -35,6 +35,8 @@ export type OnuVerifyDetail = {
   connreq?: OnuVerifyCheckResult;
   wan?: OnuVerifyCheckResult;
   dns?: OnuVerifyCheckResult;
+  /** VLAN WAN etiquetada en al menos un uplink de la OLT. */
+  uplinkVlan?: OnuVerifyCheckResult;
   traffic?: OnuVerifyCheckResult;
   /** Notas de curación aplicadas en este tick. */
   healed?: string[];
@@ -108,8 +110,13 @@ export function decideVerifyOutcome(params: {
   // Los detalles antiguos no tenían una entrada DNS separada. Se consideran
   // compatibles; todas las comprobaciones nuevas sí la incluyen.
   const dnsOk = params.detail.dns ? params.detail.dns.ok : true;
+  // Igual con uplink: si el tick no lo midió (inventario vacío / ONU vieja)
+  // no tumba el veredicto.
+  const uplinkOk = params.detail.uplinkVlan
+    ? params.detail.uplinkVlan.ok
+    : true;
   const trafficOk = !!params.detail.traffic?.ok;
-  const essentials = arpOk && wanOk && credOk && dnsOk;
+  const essentials = arpOk && wanOk && credOk && dnsOk && uplinkOk;
 
   if (essentials && trafficOk) return 'ok';
   if (essentials && params.windowExpired) return 'ok';
@@ -123,7 +130,14 @@ export function summarizeVerifyDetail(
 ): string {
   if (!detail) return '';
   const parts: string[] = [];
-  for (const key of ['arp', 'connreq', 'wan', 'dns', 'traffic'] as const) {
+  for (const key of [
+    'arp',
+    'connreq',
+    'wan',
+    'dns',
+    'uplinkVlan',
+    'traffic',
+  ] as const) {
     const c = detail[key];
     if (!c) continue;
     parts.push(`${key}: ${c.ok ? 'ok' : 'fail'} (${c.message})`);

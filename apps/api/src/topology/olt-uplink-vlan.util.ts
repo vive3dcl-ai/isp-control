@@ -39,6 +39,47 @@ export function uplinksCarryingVlan(
 }
 
 /**
+ * ¿La VLAN falta en todos los uplinks administrativamente habilitados?
+ *
+ * Si el inventario está vacío no se puede afirmar: el poller aún no leyó la
+ * OLT. En ese caso devolvemos `unknown`.
+ */
+export function vlanUplinkPresence(
+  uplinks: UplinkVlanState[],
+  vlanId: number,
+): {
+  status: 'present' | 'missing' | 'unknown';
+  carrying: string[];
+  assignable: string[];
+} {
+  if (!uplinks.length) {
+    return { status: 'unknown', carrying: [], assignable: [] };
+  }
+  const assignable = uplinks.filter(isUplinkAssignable);
+  const carrying = uplinksCarryingVlan(assignable, vlanId);
+  return {
+    status: carrying.length > 0 ? 'present' : 'missing',
+    carrying,
+    assignable: assignable.map((u) => u.ifName),
+  };
+}
+
+/**
+ * Uplinks sobre los que etiquetar una VLAN nueva en curación automática.
+ *
+ * Preferimos trunks que ya llevan otras VLANs (el camino de servicio real).
+ * Si ninguno tiene VLANs, caemos a todos los habilitados.
+ */
+export function suggestUplinksToCarryVlan(
+  uplinks: UplinkVlanState[],
+): string[] {
+  const assignable = uplinks.filter(isUplinkAssignable);
+  if (!assignable.length) return [];
+  const withVlans = assignable.filter((u) => (u.taggedVlans ?? []).length > 0);
+  return (withVlans.length ? withVlans : assignable).map((u) => u.ifName);
+}
+
+/**
  * Diff the requested uplink set against what the OLT reports today.
  *
  * Only uplinks positively known to carry the VLAN are ever untagged, so a stale

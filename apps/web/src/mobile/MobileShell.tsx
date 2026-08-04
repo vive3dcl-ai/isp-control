@@ -2,13 +2,11 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { NotificationBell } from '../components/NotificationBell'
 import { UserAccountMenu } from '../components/UserAccountMenu'
-import { BrandMark } from '../components/BrandMark'
-import { useBranding } from '../branding/BrandingContext'
+import { BrandLogo } from '../components/BrandLogo'
 import { isTechPwaSession } from '../lib/pwa'
 
 export function MobileShell() {
   const { user, logout } = useAuth()
-  const branding = useBranding()
   const navigate = useNavigate()
   const location = useLocation()
   const asApp = isTechPwaSession()
@@ -28,11 +26,8 @@ export function MobileShell() {
             className="flex min-w-0 items-center gap-2.5"
             end
           >
-            <BrandMark size={36} className="shrink-0 rounded-lg" />
-            <span className="min-w-0">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--accent)]">
-                {branding.productName}
-              </p>
+            <BrandLogo height={40} className="min-w-0 shrink rounded-md" />
+            <span className="min-w-0 border-l border-[var(--border)] pl-2.5">
               <p className="truncate text-base font-semibold leading-tight">
                 Técnico
               </p>

@@ -4,8 +4,7 @@ import { useAuth } from '../auth/AuthContext'
 import {
   getRememberedEmail,
 } from '../lib/api'
-import { useBranding } from '../branding/BrandingContext'
-import { BrandMark } from '../components/BrandMark'
+import { BrandLogo } from '../components/BrandLogo'
 import { isTechPwaSession } from '../lib/pwa'
 
 type PasswordCred = {
@@ -53,7 +52,6 @@ async function loadStoredCredentials(): Promise<PasswordCred | null> {
 
 export function MobileLoginPage() {
   const { user, loading, login, logout } = useAuth()
-  const branding = useBranding()
   const navigate = useNavigate()
   const [email, setEmail] = useState(() => getRememberedEmail())
   const [password, setPassword] = useState('')
@@ -123,11 +121,8 @@ export function MobileLoginPage() {
       <div className="relative mx-auto flex w-full max-w-md flex-1 flex-col justify-start px-4 pb-6 pt-8 sm:justify-center sm:py-10">
         <div className="mb-5 text-center">
           <div className="mb-3 flex justify-center">
-            <BrandMark size={44} className="rounded-xl" />
+            <BrandLogo height={64} className="mx-auto rounded-lg" />
           </div>
-          <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[var(--accent)]">
-            {branding.productName}
-          </p>
           <h1 className="mt-1.5 text-2xl font-semibold tracking-tight">
             Acceso técnico
           </h1>

@@ -850,10 +850,41 @@ const TOPOLOGY_ALTER = (schema: string) => `
     ADD COLUMN IF NOT EXISTS "additional_deco_fee_pending" boolean NOT NULL DEFAULT false;
   ALTER TABLE "${schema}"."client_services"
     ADD COLUMN IF NOT EXISTS "additional_deco_unit_price" numeric(12,2) NOT NULL DEFAULT 0;
+
+  -- v50: flags de migración en cliente/servicio + sync one-shot de nombre ONU
+  ALTER TABLE "${schema}"."clients"
+    ADD COLUMN IF NOT EXISTS "migrated_at" TIMESTAMPTZ NULL;
+  ALTER TABLE "${schema}"."client_services"
+    ADD COLUMN IF NOT EXISTS "migrated_at" TIMESTAMPTZ NULL;
+  ALTER TABLE "${schema}"."client_services"
+    ADD COLUMN IF NOT EXISTS "onu_name_synced_at" TIMESTAMPTZ NULL;
+  CREATE INDEX IF NOT EXISTS "idx_clients_migrated_at"
+    ON "${schema}"."clients" ("migrated_at")
+    WHERE "migrated_at" IS NOT NULL;
+  CREATE INDEX IF NOT EXISTS "idx_client_services_migrated_at"
+    ON "${schema}"."client_services" ("migrated_at")
+    WHERE "migrated_at" IS NOT NULL;
+  -- Backfill: ONUs ya migradas → marcar servicio y cliente
+  UPDATE "${schema}"."client_services" AS cs
+  SET "migrated_at" = o."migrated_at"
+  FROM "${schema}"."onus" AS o
+  WHERE cs."onu_id" = o."id"
+    AND o."migrated_at" IS NOT NULL
+    AND cs."migrated_at" IS NULL;
+  UPDATE "${schema}"."clients" AS c
+  SET "migrated_at" = sub."m"
+  FROM (
+    SELECT cs."client_id" AS "client_id", MIN(cs."migrated_at") AS "m"
+    FROM "${schema}"."client_services" AS cs
+    WHERE cs."migrated_at" IS NOT NULL
+    GROUP BY cs."client_id"
+  ) AS sub
+  WHERE c."id" = sub."client_id"
+    AND c."migrated_at" IS NULL;
 `;
 
 /** Bump when tenant DDL adds new tables/columns so existing processes re-apply. */
-const TENANT_SCHEMA_VERSION = 49;
+const TENANT_SCHEMA_VERSION = 50;
 
 @Injectable()
 export class TenantConnectionService implements OnModuleDestroy {

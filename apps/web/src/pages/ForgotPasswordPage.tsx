@@ -1,7 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
-import { useBranding } from '../branding/BrandingContext'
-import { BrandMark } from '../components/BrandMark'
+import { BrandLogo } from '../components/BrandLogo'
 import { forgotPasswordRequest } from '../lib/api'
 
 export function ForgotPasswordPage({
@@ -11,7 +10,6 @@ export function ForgotPasswordPage({
   channel?: 'web' | 'mobile'
   loginPath?: string
 }) {
-  const branding = useBranding()
   const [email, setEmail] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [done, setDone] = useState(false)
@@ -54,11 +52,8 @@ export function ForgotPasswordPage({
       >
         <div className="mb-5 text-center sm:mb-8">
           <div className="mb-3 flex justify-center">
-            <BrandMark size={mobile ? 44 : 48} className="rounded-xl" />
+            <BrandLogo height={mobile ? 64 : 72} className="mx-auto rounded-lg" />
           </div>
-          <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[var(--accent)] sm:text-sm sm:tracking-[0.2em]">
-            {branding.productName}
-          </p>
           <h1 className="mt-1.5 text-2xl font-semibold tracking-tight">
             Recuperar contraseña
           </h1>

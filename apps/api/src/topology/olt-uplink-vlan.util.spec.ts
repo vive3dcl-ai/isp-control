@@ -1,7 +1,9 @@
 import {
   isUplinkAssignable,
   planUplinkVlanChanges,
+  suggestUplinksToCarryVlan,
   uplinksCarryingVlan,
+  vlanUplinkPresence,
   withUplinkVlansInCache,
   type UplinkVlanState,
 } from './olt-uplink-vlan.util';
@@ -126,6 +128,55 @@ describe('uplinksCarryingVlan', () => {
         401,
       ),
     ).toEqual(['gei_1/1/1']);
+  });
+});
+
+describe('vlanUplinkPresence', () => {
+  it('reports present when any assignable uplink carries the VLAN', () => {
+    expect(
+      vlanUplinkPresence(
+        [uplink('gei_1/1/1', [702]), uplink('gei_1/1/2', [701])],
+        702,
+      ),
+    ).toEqual({
+      status: 'present',
+      carrying: ['gei_1/1/1'],
+      assignable: ['gei_1/1/1', 'gei_1/1/2'],
+    });
+  });
+
+  it('reports missing when no assignable uplink carries it', () => {
+    expect(
+      vlanUplinkPresence(
+        [uplink('gei_1/1/1', [701]), uplink('gei_1/1/2', [401])],
+        702,
+      ).status,
+    ).toBe('missing');
+  });
+
+  it('reports unknown when the inventory was never probed', () => {
+    expect(vlanUplinkPresence([], 702).status).toBe('unknown');
+  });
+});
+
+describe('suggestUplinksToCarryVlan', () => {
+  it('prefers trunks that already carry other VLANs', () => {
+    expect(
+      suggestUplinksToCarryVlan([
+        uplink('gei_1/1/1', [701, 401]),
+        uplink('gei_1/1/2', []),
+        uplink('gei_1/1/3', [], { adminEnabled: false }),
+      ]),
+    ).toEqual(['gei_1/1/1']);
+  });
+
+  it('falls back to all assignable uplinks when none carry VLANs yet', () => {
+    expect(
+      suggestUplinksToCarryVlan([
+        uplink('gei_1/1/1', []),
+        uplink('gei_1/1/2', []),
+      ]),
+    ).toEqual(['gei_1/1/1', 'gei_1/1/2']);
   });
 });
 

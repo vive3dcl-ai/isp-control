@@ -187,6 +187,11 @@ export function Tr069StatusView() {
         status: "pending",
       },
       {
+        id: "uplinkVlan",
+        label: "VLAN WAN en uplink de la OLT",
+        status: "pending",
+      },
+      {
         id: "traffic",
         label: "Tráfico / conexiones activas",
         status: "pending",
@@ -238,6 +243,16 @@ export function Tr069StatusView() {
         const c = checkOf("dns");
         if (!c?.ok) throw new Error(c?.message || "DNS no aplicado");
         return c.message || "DNS OK";
+      },
+      uplinkVlan: async () => {
+        await pause(350);
+        const c = checkOf("uplinkVlan");
+        if (!c?.ok) {
+          throw new Error(
+            c?.message || "VLAN no actualizada en uplink — actualizar",
+          );
+        }
+        return c.message || "VLAN en uplink";
       },
       traffic: async () => {
         await pause(350);

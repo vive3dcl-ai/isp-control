@@ -1,7 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { useBranding } from '../branding/BrandingContext'
-import { BrandMark } from '../components/BrandMark'
+import { BrandLogo } from '../components/BrandLogo'
 import { resetPasswordRequest } from '../lib/api'
 
 export function ResetPasswordPage({
@@ -11,7 +10,6 @@ export function ResetPasswordPage({
   channel?: 'web' | 'mobile'
   loginPath?: string
 }) {
-  const branding = useBranding()
   const [params] = useSearchParams()
   const token = params.get('token')?.trim() || ''
   const [password, setPassword] = useState('')
@@ -70,11 +68,8 @@ export function ResetPasswordPage({
       >
         <div className="mb-5 text-center sm:mb-8">
           <div className="mb-3 flex justify-center">
-            <BrandMark size={mobile ? 44 : 48} className="rounded-xl" />
+            <BrandLogo height={mobile ? 64 : 72} className="mx-auto rounded-lg" />
           </div>
-          <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[var(--accent)] sm:text-sm">
-            {branding.productName}
-          </p>
           <h1 className="mt-1.5 text-2xl font-semibold tracking-tight">
             Nueva contraseña
           </h1>

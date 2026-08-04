@@ -7,7 +7,7 @@ import {
   useNotificationSummary,
 } from './NotificationBell'
 import { UserAccountMenu } from './UserAccountMenu'
-import { BrandMark } from './BrandMark'
+import { BrandLogo } from './BrandLogo'
 import { useBranding } from '../branding/BrandingContext'
 import { isAdminPwaInstalled, isAdminPwaSession } from '../lib/pwa'
 
@@ -107,13 +107,10 @@ export function PanelShell({
           sidebarOpen ? 'translate-x-0' : '-translate-x-full',
         ].join(' ')}
       >
-        <div className="flex h-14 items-center gap-2 border-b border-[var(--border)] px-4">
-          <BrandMark size={32} className="shrink-0 rounded-md" />
-          <div className="min-w-0">
-            <p className="truncate text-sm font-semibold tracking-wide">
-              {branding.productName}
-            </p>
-            <p className="truncate text-xs text-[var(--text-muted)]">
+        <div className="flex min-h-14 items-center gap-2 border-b border-[var(--border)] px-3 py-2">
+          <div className="min-w-0 flex-1">
+            <BrandLogo height={44} className="rounded-sm" />
+            <p className="mt-0.5 truncate pl-0.5 text-[10px] text-[var(--text-muted)]">
               {panelLabel}
               {isImpersonating && variant === 'tenant' ? ' · impersonando' : ''}
             </p>

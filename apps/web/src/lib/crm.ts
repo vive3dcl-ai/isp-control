@@ -24,6 +24,8 @@ export interface Client {
   note: string
   isActive: boolean
   zoneId: string | null
+  /** Interno: cliente de migración (sin badge en UI). */
+  migratedAt: string | null
   createdAt: string
   updatedAt: string
 }
@@ -81,16 +83,25 @@ export interface ClientService {
   onuId: string | null
   latitude: number | null
   longitude: number | null
+  /** Interno: servicio de migración (sin badge en UI). */
+  migratedAt: string | null
+  /** One-shot sync de nombre ONU ya hecho. */
+  onuNameSyncedAt: string | null
   createdAt: string
   updatedAt: string
 }
 
 export type ClientDetail = Client & { services: ClientService[] }
 
-export function clientDisplayName(c: Pick<Client, 'firstName' | 'lastName' | 'companyName'>) {
+export function clientDisplayName(
+  c: Pick<Client, 'firstName' | 'lastName' | 'companyName' | 'isCompany'>,
+) {
+  if (c.isCompany && c.companyName?.trim()) return c.companyName.trim()
   const person = [c.firstName, c.lastName].filter(Boolean).join(' ').trim()
-  if (person && c.companyName) return `${person} (${c.companyName})`
-  return person || c.companyName || 'Sin nombre'
+  if (person && c.companyName?.trim()) {
+    return `${person} (${c.companyName.trim()})`
+  }
+  return person || c.companyName?.trim() || 'Sin nombre'
 }
 
 export const CRM_WRITE_ROLES = ['owner', 'admin', 'administrativo'] as const

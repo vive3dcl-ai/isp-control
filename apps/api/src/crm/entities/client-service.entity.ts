@@ -126,6 +126,20 @@ export class ClientService {
   })
   additionalDecoUnitPrice: string;
 
+  /**
+   * Servicio creado vía asistente de migración.
+   * Flag interno (sin badge en UI); junto con client.migratedAt habilita sync de nombre ONU.
+   */
+  @Column({ name: 'migrated_at', type: 'timestamptz', nullable: true })
+  migratedAt: Date | null;
+
+  /**
+   * Cuándo se empujó el nombre compuesto «Cliente Servicio» a la OLT (one-shot).
+   * Si está set, el botón Sincronizar ya no aparece.
+   */
+  @Column({ name: 'onu_name_synced_at', type: 'timestamptz', nullable: true })
+  onuNameSyncedAt: Date | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

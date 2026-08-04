@@ -71,6 +71,13 @@ export class Client {
   @Column({ name: 'zone_id', type: 'uuid', nullable: true })
   zoneId: string | null;
 
+  /**
+   * Cliente creado/vinculado vía asistente de migración.
+   * Flag interno (sin badge en UI); habilita sync one-shot de nombre ONU.
+   */
+  @Column({ name: 'migrated_at', type: 'timestamptz', nullable: true })
+  migratedAt: Date | null;
+
   @OneToMany(() => ClientService, (s) => s.client)
   services: ClientService[];
 

@@ -109,6 +109,20 @@ export function ClientDetailPage() {
     },
   })
 
+  const syncOnuNameMutation = useMutation({
+    mutationFn: (serviceId: string) =>
+      apiFetch<{ ok: boolean; name?: string; message?: string }>(
+        `/app/client-services/${serviceId}/sync-onu-name`,
+        { method: 'POST' },
+      ),
+    onSuccess: (res) => {
+      void queryClient.invalidateQueries({ queryKey: ['app', 'clients', id] })
+      void queryClient.invalidateQueries({ queryKey: ['app', 'onus'] })
+      void alert(res.message || 'Nombre ONU sincronizado')
+    },
+    onError: (err: Error) => void alert(err.message),
+  })
+
   const archiveMutation = useMutation({
     mutationFn: (isActive: boolean) =>
       apiFetch<Client>(`/app/clients/${id}`, {
@@ -349,6 +363,11 @@ export function ClientDetailPage() {
                 )}
                 {client.services.map((s) => {
                   const linkedOnu = s.onuId ? onuById.get(s.onuId) : undefined
+                  const canSyncOnuName =
+                    !!client.migratedAt &&
+                    !!s.migratedAt &&
+                    !s.onuNameSyncedAt &&
+                    !!s.onuId
                   return (
                     <tr key={s.id} className="border-t border-[var(--border)]">
                       <td className="px-4 py-3">
@@ -390,6 +409,22 @@ export function ClientDetailPage() {
                             >
                               Editar
                             </button>
+                            {canSyncOnuName && (
+                              <button
+                                type="button"
+                                disabled={syncOnuNameMutation.isPending}
+                                title="Actualiza el name de la ONU en la OLT con Cliente + Servicio"
+                                onClick={() =>
+                                  syncOnuNameMutation.mutate(s.id)
+                                }
+                                className="rounded-md border border-[var(--border)] px-2.5 py-1 text-xs hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:opacity-60"
+                              >
+                                {syncOnuNameMutation.isPending &&
+                                syncOnuNameMutation.variables === s.id
+                                  ? 'Sincronizando…'
+                                  : 'Sincronizar'}
+                              </button>
+                            )}
                             {s.onuId && (
                               <button
                                 type="button"

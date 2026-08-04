@@ -40,6 +40,7 @@ import {
   sanitizeSpeedProfileName,
   toSystemOltProfileName,
 } from '../topology/zte-olt-speed.util';
+import { oltOnuName } from '../topology/olt-onu-name.util';
 import { BillingService } from '../billing/billing.service';
 import { InventoryService } from '../inventory/inventory.service';
 import { ClientPortalService } from '../client-portal/client-portal.service';
@@ -65,9 +66,11 @@ export class CrmService {
 
   private clientDisplayName(c: Client) {
     if (c.isCompany && c.companyName?.trim()) return c.companyName.trim();
-    return (
-      [c.firstName, c.lastName].filter(Boolean).join(' ').trim() || 'Cliente'
-    );
+    const person = [c.firstName, c.lastName].filter(Boolean).join(' ').trim();
+    if (person && c.companyName?.trim()) {
+      return `${person} (${c.companyName.trim()})`;
+    }
+    return person || c.companyName?.trim() || 'Cliente';
   }
 
   /** El portal es un efecto lateral: nunca debe tumbar el guardado del CRM. */
@@ -333,6 +336,12 @@ export class CrmService {
       if (client.zoneId) {
         await this.assertZoneExists(this.requireSchema(user), client.zoneId);
       }
+    }
+
+    if (!client.firstName && !client.lastName && !client.companyName) {
+      throw new BadRequestException(
+        'Provide at least firstName, lastName or companyName',
+      );
     }
 
     const saved = await repo.save(client);
@@ -1105,6 +1114,56 @@ export class CrmService {
       patch.activeTo = null;
     }
     return this.updateClientService(user, id, patch);
+  }
+
+  /**
+   * One-shot: empuja «Cliente Servicio» como name en la OLT para servicios migrados.
+   * Solo si cliente y servicio tienen migratedAt y aún no se sincronizó.
+   */
+  async syncMigratedOnuName(user: AuthUser, serviceId: string) {
+    const schema = this.requireSchema(user);
+    const serviceRepo =
+      await this.tenantConnections.getClientServiceRepository(schema);
+    const clientRepo = await this.tenantConnections.getClientRepository(schema);
+
+    const service = await serviceRepo.findOne({ where: { id: serviceId } });
+    if (!service) throw new NotFoundException('Client service not found');
+
+    const client = await clientRepo.findOne({
+      where: { id: service.clientId },
+    });
+    if (!client) throw new NotFoundException('Client not found');
+
+    if (!client.migratedAt || !service.migratedAt) {
+      throw new BadRequestException(
+        'Solo disponible para cliente y servicio migrados',
+      );
+    }
+    if (service.onuNameSyncedAt) {
+      throw new BadRequestException('El nombre ONU ya fue sincronizado');
+    }
+    if (!service.onuId) {
+      throw new BadRequestException('El servicio no tiene ONU enlazada');
+    }
+
+    const composed = oltOnuName(
+      this.clientDisplayName(client),
+      service.name || '',
+    );
+    if (!composed) {
+      throw new BadRequestException('Nombre compuesto vacío');
+    }
+
+    const result = await this.onus.updateName(user, service.onuId, composed);
+    service.onuNameSyncedAt = new Date();
+    await serviceRepo.save(service);
+
+    return {
+      ok: true,
+      name: result.name,
+      onuNameSyncedAt: service.onuNameSyncedAt.toISOString(),
+      message: result.message || 'Nombre ONU sincronizado',
+    };
   }
 
   /**

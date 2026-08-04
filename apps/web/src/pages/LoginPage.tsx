@@ -1,8 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
-import { useBranding } from '../branding/BrandingContext'
-import { BrandMark } from '../components/BrandMark'
+import { BrandLogo } from '../components/BrandLogo'
 import {
   getRememberPreference,
   getRememberedEmail,
@@ -10,7 +9,6 @@ import {
 
 export function LoginPage() {
   const { login } = useAuth()
-  const branding = useBranding()
   const navigate = useNavigate()
   const [email, setEmail] = useState(() => getRememberedEmail())
   const [password, setPassword] = useState('')
@@ -42,11 +40,8 @@ export function LoginPage() {
       <div className="w-full max-w-md">
         <div className="mb-5 text-center sm:mb-8">
           <div className="mb-3 flex justify-center sm:mb-4">
-            <BrandMark size={48} className="rounded-xl" />
+            <BrandLogo height={72} className="mx-auto rounded-lg" />
           </div>
-          <p className="text-sm font-semibold tracking-[0.2em] text-[var(--accent)] uppercase">
-            {branding.productName}
-          </p>
           <h1 className="mt-1.5 text-2xl font-semibold tracking-tight text-[var(--text)] sm:mt-2 sm:text-3xl">
             Iniciar sesión
           </h1>

@@ -56,7 +56,7 @@ function isUuid(id: string | undefined): id is string {
 function verifyTooltip(detail: Record<string, unknown> | undefined): string {
   if (!detail || typeof detail !== 'object') return ''
   const parts: string[] = []
-  for (const key of ['arp', 'connreq', 'wan', 'traffic'] as const) {
+  for (const key of ['arp', 'connreq', 'wan', 'dns', 'uplinkVlan', 'traffic'] as const) {
     const c = detail[key] as { ok?: boolean; message?: string } | undefined
     if (!c?.message) continue
     parts.push(`${key}: ${c.ok ? 'ok' : 'fail'} (${c.message})`)
@@ -728,6 +728,11 @@ export function OnuDetailModal({
         status: 'pending',
       },
       {
+        id: 'uplinkVlan',
+        label: 'VLAN WAN en uplink de la OLT',
+        status: 'pending',
+      },
+      {
         id: 'traffic',
         label: 'Tráfico / conexiones activas',
         status: 'pending',
@@ -787,6 +792,16 @@ export function OnuDetailModal({
         const c = checkOf('dns')
         if (!c?.ok) throw new Error(c?.message || 'DNS no aplicado')
         return c.message || 'DNS OK'
+      },
+      uplinkVlan: async () => {
+        await pause(350)
+        const c = checkOf('uplinkVlan')
+        if (!c?.ok) {
+          throw new Error(
+            c?.message || 'VLAN no actualizada en uplink — actualizar',
+          )
+        }
+        return c.message || 'VLAN en uplink'
       },
       traffic: async () => {
         await pause(350)
@@ -1111,6 +1126,20 @@ export function OnuDetailModal({
                           detail={o.verifyDetail}
                         />
                       </p>
+                      {(() => {
+                        const uv = o.verifyDetail?.uplinkVlan as
+                          | { ok?: boolean; message?: string }
+                          | undefined
+                        if (!uv || uv.ok !== false || !uv.message) return null
+                        return (
+                          <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5 text-xs text-amber-200">
+                            {uv.message}
+                            {canWrite
+                              ? ' · Resync config la agrega al uplink automáticamente'
+                              : ''}
+                          </p>
+                        )
+                      })()}
                       {tr069Error && (
                         <p className="text-xs text-[var(--danger)]">
                           {tr069Error}

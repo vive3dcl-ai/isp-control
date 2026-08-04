@@ -33,6 +33,7 @@ import {
 } from './onu-wan-connection.util';
 import { inspectWanVlanLeaves } from './onu-wan-vlan-leaf.util';
 import { OnuTr069ConfigService } from './onu-tr069-config.service';
+import { ServiceVlanService } from './service-vlan.service';
 
 function prefixToMask(prefix: number): string {
   const mask = prefix === 0 ? 0 : (~0 << (32 - prefix)) >>> 0;
@@ -52,7 +53,8 @@ function reRows(
 
 /**
  * Chequeo silencioso post-aprovisionamiento: ARP en el router del pool,
- * credenciales de conexión, WAN TR-069 y evidencia de tráfico.
+ * credenciales de conexión, WAN TR-069, VLAN en uplink de la OLT y evidencia
+ * de tráfico.
  */
 @Injectable()
 export class OnuPostProvisionVerifyService {
@@ -61,6 +63,7 @@ export class OnuPostProvisionVerifyService {
   constructor(
     private readonly tenantConnections: TenantConnectionService,
     private readonly tr069: OnuTr069ConfigService,
+    private readonly serviceVlans: ServiceVlanService,
   ) {}
 
   /** Arranca (o reinicia) el ciclo de 15 minutos. */
@@ -187,6 +190,7 @@ export class OnuPostProvisionVerifyService {
       detail.arp = { ok: false, message: 'sin IP WAN asignada' };
       detail.wan = { ok: false, message: 'sin IP WAN asignada' };
       detail.dns = { ok: false, message: 'sin IP WAN' };
+      detail.uplinkVlan = { ok: false, message: 'sin IP WAN' };
       detail.connreq = { ok: false, message: 'sin IP WAN' };
       detail.traffic = { ok: false, message: 'sin IP WAN' };
       irrecoverable = true;
@@ -242,6 +246,10 @@ export class OnuPostProvisionVerifyService {
         credentialsOurs = detail.connreq.ok;
       }
 
+      // VLAN en el uplink de la OLT: sin eso el CPE puede verse Connected en
+      // TR-069 y aun así no responder ARP (el tráfico no sale del chasis).
+      detail.uplinkVlan = await this.probeUplinkVlan(schema, onu, wanPool);
+
       // Si el router no vio conexiones, aún puede haber bytes en el CPE.
       if (detail.traffic && !detail.traffic.ok && acs.bytesOk) {
         detail.traffic = {
@@ -262,6 +270,34 @@ export class OnuPostProvisionVerifyService {
           message: 'bytes WAN crecieron',
           meta: acs.wan.meta,
         };
+      }
+
+      if (
+        canHeal &&
+        detail.uplinkVlan &&
+        !detail.uplinkVlan.ok &&
+        wanPool?.vlanId &&
+        onu.oltId
+      ) {
+        const fix = await this.serviceVlans.ensureVlanTaggedOnUplinks(
+          schema,
+          onu.oltId,
+          wanPool.vlanId,
+          wanPool.name ?? null,
+        );
+        healed.push(fix.message);
+        if (fix.ok) {
+          detail.uplinkVlan = {
+            ok: true,
+            message: `VLAN ${wanPool.vlanId} en uplink (${fix.carrying.join(', ') || 'agregada'})`,
+            meta: {
+              vlanId: wanPool.vlanId,
+              carrying: fix.carrying,
+              tagged: fix.tagged,
+              healed: true,
+            },
+          };
+        }
       }
 
       // ARP ausente / WAN / DNS: sólo se reempuja si ya tenemos el camino de
@@ -627,6 +663,70 @@ export class OnuPostProvisionVerifyService {
         wan: { ok: false, message: `ACS: ${msg}` },
         dns: { ok: false, message: `ACS: ${msg}` },
         bytesOk: null,
+      };
+    }
+  }
+
+  private async probeUplinkVlan(
+    schema: string,
+    onu: Onu,
+    wanPool: { vlanId: number; name: string | null } | null,
+  ): Promise<OnuVerifyCheckResult> {
+    if (!wanPool?.vlanId) {
+      return { ok: true, message: 'sin VLAN WAN' };
+    }
+    if (!onu.oltId) {
+      return { ok: false, message: `VLAN ${wanPool.vlanId}: ONU sin OLT` };
+    }
+    try {
+      const deviceRepo =
+        await this.tenantConnections.getNetworkDeviceRepository(schema);
+      const olt = await deviceRepo.findOne({ where: { id: onu.oltId } });
+      if (!olt) {
+        return {
+          ok: false,
+          message: `VLAN ${wanPool.vlanId}: OLT no encontrada`,
+        };
+      }
+      const presence = this.serviceVlans.probeVlanOnUplinks(
+        olt,
+        wanPool.vlanId,
+      );
+      if (presence.status === 'present') {
+        return {
+          ok: true,
+          message: `VLAN ${wanPool.vlanId} en uplink (${presence.carrying.join(', ')})`,
+          meta: {
+            vlanId: wanPool.vlanId,
+            carrying: presence.carrying,
+            oltId: olt.id,
+            oltName: olt.name,
+          },
+        };
+      }
+      if (presence.status === 'unknown') {
+        // Sin inventario no tumbamos el veredicto: el poller aún no leyó.
+        return {
+          ok: true,
+          message: `VLAN ${wanPool.vlanId}: inventario de uplinks pendiente`,
+          meta: { vlanId: wanPool.vlanId, pendingInventory: true },
+        };
+      }
+      return {
+        ok: false,
+        message: `VLAN ${wanPool.vlanId} no actualizada en uplink — actualizar`,
+        meta: {
+          vlanId: wanPool.vlanId,
+          oltId: olt.id,
+          oltName: olt.name,
+          assignable: presence.assignable,
+          action: 'update_uplink',
+        },
+      };
+    } catch (e) {
+      return {
+        ok: false,
+        message: `VLAN uplink: ${e instanceof Error ? e.message : String(e)}`,
       };
     }
   }

@@ -89,6 +89,7 @@ describe('criterio de pase/fallo', () => {
     connreq: { ok: true, message: 'acs' },
     wan: { ok: true, message: 'coincide' },
     dns: { ok: true, message: '8.8.8.8,8.8.4.4' },
+    uplinkVlan: { ok: true, message: 'VLAN 701 en uplink' },
     traffic: { ok: true, message: '3 conexiones' },
   };
 
@@ -144,6 +145,36 @@ describe('criterio de pase/fallo', () => {
         windowExpired: true,
       }),
     ).toBe('fail');
+  });
+
+  it('considera la VLAN en uplink una comprobación esencial', () => {
+    expect(
+      decideVerifyOutcome({
+        detail: {
+          ...good,
+          uplinkVlan: {
+            ok: false,
+            message: 'VLAN 702 no actualizada en uplink — actualizar',
+          },
+        },
+        windowExpired: true,
+      }),
+    ).toBe('fail');
+  });
+
+  it('tolera detalles antiguos sin uplinkVlan', () => {
+    expect(
+      decideVerifyOutcome({
+        detail: {
+          arp: { ok: true, message: 'resuelta' },
+          connreq: { ok: true, message: 'acs' },
+          wan: { ok: true, message: 'coincide' },
+          dns: { ok: true, message: '8.8.8.8' },
+          traffic: { ok: true, message: 'ok' },
+        },
+        windowExpired: false,
+      }),
+    ).toBe('ok');
   });
 
   it('falla de inmediato ante error irrecuperable', () => {

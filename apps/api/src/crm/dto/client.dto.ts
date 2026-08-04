@@ -57,7 +57,12 @@ export class CreateClientDto {
   @IsBoolean()
   isLead?: boolean;
 
+  /** Empty string is allowed (clears email); only validate format when non-empty. */
   @IsOptional()
+  @Transform(({ value }: { value: unknown }) =>
+    value == null ? value : String(value).trim(),
+  )
+  @ValidateIf((_, v) => v != null && v !== '')
   @IsEmail()
   email?: string;
 

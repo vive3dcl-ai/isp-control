@@ -336,4 +336,14 @@ export class CrmController {
   ) {
     return this.crm.setServiceStatus(user, id, 'active');
   }
+
+  /** One-shot: sincroniza nombre compuesto ONU en OLT (solo migrados, una vez). */
+  @Post('client-services/:id/sync-onu-name')
+  @TenantRoles(...CRM_WRITE_ROLES)
+  syncMigratedOnuName(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.crm.syncMigratedOnuName(user, id);
+  }
 }

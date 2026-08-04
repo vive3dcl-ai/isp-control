@@ -1632,6 +1632,53 @@ export class OnuConnectedService {
   }
 
   /**
+   * Write OLT interface `name` (display) and persist locally.
+   */
+  async updateName(user: AuthUser, id: string, name: string) {
+    const schema = this.requireSchema(user);
+    const onuRepo = await this.tenantConnections.getOnuRepository(schema);
+    const row = await onuRepo.findOne({ where: { id } });
+    if (!row) throw new NotFoundException('ONU no encontrada');
+    const olt = await this.requireManagedOlt(schema, row.oltId);
+
+    const next = name
+      .trim()
+      .replace(/["\r\n]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .slice(0, 60);
+    if (!next) {
+      throw new BadRequestException('Nombre ONU vacío');
+    }
+
+    const result = await this.withTimeout(
+      this.oltCli(olt).configureOnuName({
+        ...this.zteConn(olt),
+        onuIf: row.onuIf,
+        name: next,
+        subtypeHint: olt.subtype,
+        firmwareHint: null,
+      }),
+      60_000,
+      `Name ${row.onuIf}`,
+    );
+    if (!result.ok) {
+      throw new BadRequestException(
+        result.error || 'No se pudo actualizar name en la OLT',
+      );
+    }
+
+    row.name = result.appliedName || next;
+    await onuRepo.save(row);
+
+    return {
+      ok: true,
+      message: result.message || 'Name actualizado',
+      name: row.name || null,
+      onu: this.serializeOnu(row, olt.name),
+    };
+  }
+
+  /**
    * Asigna una zona del catálogo CRM a la ONU (o la quita).
    * Guarda `zoneId` y el nombre en `zone` para la lista.
    */

@@ -797,6 +797,23 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
                                 >
                                   {exists ? 'creada' : 'no existe'}
                                 </span>
+                                {exists && !info?.loading && !info?.failed && (
+                                  <span
+                                    className={
+                                      (info?.uplinks ?? []).some((u) =>
+                                        u.taggedVlans.includes(currentVlanId),
+                                      )
+                                        ? 'ml-2 text-emerald-400'
+                                        : 'ml-2 text-amber-400'
+                                    }
+                                  >
+                                    {(info?.uplinks ?? []).some((u) =>
+                                      u.taggedVlans.includes(currentVlanId),
+                                    )
+                                      ? '· en uplink'
+                                      : '· sin uplink — actualizar'}
+                                  </span>
+                                )}
                               </span>
                               {canWrite && (
                                 <div className="flex shrink-0 items-center gap-1.5">
@@ -870,7 +887,7 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
                                   <span className="shrink-0 text-[var(--text-muted)]">
                                     {u.status}
                                     {u.taggedVlans.includes(currentVlanId)
-                                      ? ' · actual'
+                                      ? ' · agregada'
                                       : ''}
                                   </span>
                                 </label>

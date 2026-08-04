@@ -312,9 +312,25 @@ export class OnuMigrationService {
       );
     }
 
+    const now = new Date();
     onu.migrationSourceVlan = sourceVlan;
-    onu.migratedAt = new Date();
+    onu.migratedAt = now;
     await onuRepo.save(onu);
+
+    if (!linked.migratedAt) {
+      linked.migratedAt = now;
+      await serviceRepo.save(linked);
+    }
+
+    const clientRepo = await this.tenantConnections.getClientRepository(schema);
+    const client = await clientRepo.findOne({
+      where: { id: linked.clientId },
+    });
+    if (client && !client.migratedAt) {
+      client.migratedAt = now;
+      await clientRepo.save(client);
+    }
+
     return {
       ok: true,
       onuId: onu.id,
