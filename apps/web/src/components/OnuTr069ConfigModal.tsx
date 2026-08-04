@@ -107,7 +107,7 @@ export function OnuTr069ConfigModal({
         `/app/onus/${onuId}/tr069-config`,
         { method: 'POST', body: JSON.stringify(body) },
       ),
-    onSuccess: (r) => {
+    onSuccess: (r, vars) => {
       setMsg(r.message)
       setError(null)
       void queryClient.setQueryData(
@@ -117,12 +117,19 @@ export function OnuTr069ConfigModal({
       void queryClient.invalidateQueries({
         queryKey: ['app', 'onus', onuId, 'tr069-config'],
       })
+      if (vars.refresh) {
+        setMsg(r.message || 'Lectura desde ONU completada')
+      }
     },
     onError: (e: Error) => {
       setError(e.message)
       setMsg(null)
     },
   })
+
+  const isReading =
+    applyMutation.isPending && !!applyMutation.variables?.refresh
+  const isApplying = applyMutation.isPending && !isReading
 
   // First Inform often only has DeviceInfo — pull LAN/WiFi/users on open.
   useEffect(() => {
@@ -136,7 +143,7 @@ export function OnuTr069ConfigModal({
     const needsRefresh = wifiNeeds || usersNeed
     if (!needsRefresh) return
     autoRefreshDone.current = true
-    setMsg('Solicitando Wi‑Fi / Ethernet / usuarios web al ACS…')
+    setMsg('Leyendo Wi‑Fi / Ethernet / usuarios desde la ONU…')
     void applyMutation.mutateAsync({ refresh: true })
     // mutateAsync identity is stable enough; only react to first empty config
     // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot on open
@@ -494,10 +501,12 @@ export function OnuTr069ConfigModal({
               ) : (
                 <>
                   <p className="text-xs text-[var(--text-muted)]">
-                    Asigna una VLAN tipo TV (catálogo) como untagged en el
+                    Asigna una VLAN tipo TV (catálogo) como acceso untagged en el
                     puerto vía OMCI (
-                    <code className="text-[11px]">vlan port eth_0/N mode untag</code>
-                    ).
+                    <code className="text-[11px]">
+                      vlan port eth_0/N mode tag vlan VID
+                    </code>
+                    ; en ZTE «tag» entrega la VLAN sin etiqueta al CPE).
                     {(tvVlansQuery.data?.vlans.length ?? 0) === 0 && (
                       <>
                         {' '}
@@ -617,11 +626,12 @@ export function OnuTr069ConfigModal({
             }
             onClick={() => {
               setError(null)
+              setMsg('Leyendo Wi‑Fi / Ethernet / usuarios desde la ONU…')
               void applyMutation.mutateAsync({ refresh: true })
             }}
             className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm disabled:opacity-50"
           >
-            Refrescar desde ONU
+            {isReading ? 'Leyendo…' : 'Refrescar desde ONU'}
           </button>
           <div className="flex gap-2">
             <button
@@ -651,7 +661,11 @@ export function OnuTr069ConfigModal({
               }}
               className="rounded-lg bg-[var(--accent)] px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
             >
-              {applyMutation.isPending ? 'Aplicando…' : 'Aplicar vía TR069'}
+              {isReading
+                ? 'Leyendo…'
+                : isApplying
+                  ? 'Aplicando…'
+                  : 'Aplicar vía TR069'}
             </button>
           </div>
         </div>

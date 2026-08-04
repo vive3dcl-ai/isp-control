@@ -1774,8 +1774,16 @@ export class ZteOltClient {
   }
 
   /**
-   * Ligar un puerto LAN de la ONU a una VLAN (OMCI), igual que SmartOLT/IPTV:
-   * `vlan port eth_0/N mode tag|untag vlan VID`
+   * Ligar un puerto LAN de la ONU a una VLAN (OMCI), igual que SmartOLT/IPTV.
+   *
+   * Semántica del panel → CLI ZTE:
+   * - `untag` (acceso TV/IPTV, LAN sin tag) → `vlan port eth_0/N mode tag vlan VID`
+   *   (en ZTE "tag" = ONU etiqueta hacia PON y entrega untagged al CPE)
+   * - `tag` (passthrough tagged) → `mode transparent`
+   * - `hybrid` → `mode hybrid def-vlan VID`
+   *
+   * Secuencia: service-port + `service N gemport N vlan VID` + vlan port.
+   * `mode untag` NO es válido en ZTE C3xx (Error 20202 Invalid parameter).
    */
   async applyOnuEthPortVlan(params: {
     host: string;
@@ -1796,6 +1804,9 @@ export class ZteOltClient {
     const onuIf = this.cliOnuIf(params.onuIf, family);
     const eth = `eth_0/${params.portIndex}`;
     const mode = params.mode ?? 'untag';
+    /** IPTV / bridge: service-port 3 (1=WAN, 2=mgmt). */
+    const iptvSp = 3;
+    const iptvVport = 3;
     this.logger.log(
       `ONU eth VLAN ${onuIf} ${eth} (${family}) → ${
         params.vlanId == null ? 'quitar' : `${mode} vlan ${params.vlanId}`
@@ -1807,33 +1818,178 @@ export class ZteOltClient {
           await send(line);
           return read(waitMs);
         };
+        const failed = (out: string) =>
+          /%\s*Error|Invalid input|Unknown command|Incomplete|Failed|640\d+/i.test(
+            out,
+          );
+        const notes: string[] = [];
+
         await step('configure terminal', 12_000);
+
+        // —— OLT side: service-port so the VLAN reaches the ONU ——
+        {
+          let out = await step(`interface ${onuIf}`, 10_000);
+          if (/%Error|Invalid|Unknown/i.test(out)) {
+            throw new Error(
+              `No se pudo entrar a ${onuIf}: ${this.cleanCliNoise(out).slice(0, 120)}`,
+            );
+          }
+          await step(`no service-port ${iptvSp}`, 8_000);
+          if (params.vlanId != null) {
+            await step(
+              `tcont ${iptvSp} profile SMARTOLT-1000MB-UP`,
+              8_000,
+            ).catch(() => '');
+            await step(`gemport ${iptvSp} tcont ${iptvSp}`, 8_000).catch(
+              () => '',
+            );
+            // hybrid vport helps some firmwares accept the service-port
+            await step(`switchport mode hybrid vport ${iptvVport}`, 8_000).catch(
+              () => '',
+            );
+            out = await step(
+              `service-port ${iptvSp} vport ${iptvVport} user-vlan ${params.vlanId} vlan ${params.vlanId}`,
+              10_000,
+            );
+            if (failed(out)) {
+              await step(`no service-port ${iptvSp}`, 8_000);
+              out = await step(
+                `service-port ${iptvSp} user-vlan ${params.vlanId} vlan ${params.vlanId}`,
+                10_000,
+              );
+            }
+            if (failed(out)) {
+              notes.push(
+                `service-port ${iptvSp} aviso: ${this.cleanCliNoise(out)
+                  .replace(/\s+/g, ' ')
+                  .slice(0, 100)}`,
+              );
+            } else {
+              notes.push(
+                `service-port ${iptvSp} VLAN ${params.vlanId}`,
+              );
+            }
+          } else {
+            notes.push(`service-port ${iptvSp} eliminado`);
+          }
+          await step('exit', 5_000);
+        }
+
+        // —— ONU OMCI: flow/gemport + vlan port ——
         let out = await step(`pon-onu-mng ${onuIf}`, 10_000);
         if (/%Error|Invalid|Unknown/i.test(out)) {
           throw new Error(`No se pudo entrar a pon-onu-mng ${onuIf}`);
         }
+        await step(`no vlan port ${eth} mode`, 8_000);
         await step(`no vlan port ${eth}`, 8_000);
+        await step(`no service ${iptvSp}`, 8_000);
+        await step(`no gemport ${iptvSp} flow ${iptvSp}`, 8_000);
+        await step(`no flow ${iptvSp}`, 8_000);
+
         if (params.vlanId == null) {
           await step('exit', 5_000);
           await this.persistRunningConfig(send, read);
-          return { ok: true, message: `${eth}: VLAN liberada` };
+          return {
+            ok: true,
+            message: `${eth}: VLAN liberada${notes.length ? ` · ${notes.join(' · ')}` : ''}`,
+          };
         }
-        out = await step(
-          `vlan port ${eth} mode ${mode} vlan ${params.vlanId}`,
-          10_000,
-        );
-        if (/%Error|Invalid|Failed|640\d+/i.test(out)) {
-          throw new Error(
-            `vlan port ${eth} falló: ${this.cleanCliNoise(out)
-              .replace(/\s+/g, ' ')
-              .slice(0, 160)}`,
+
+        // HGUs con flow 1/2 (WAN/mgmt): IPTV va por flow N, no por `service`
+        // (`service N gemport N vlan` → Code 64010 conflict with flow data).
+        let linked = false;
+        {
+          const flowCmds = [
+            `flow ${iptvSp} switch switch_0/1`,
+            `flow mode ${iptvSp} tag-filter vlan-filter untag-filter discard`,
+            `flow ${iptvSp} pri 0 vlan ${params.vlanId}`,
+            `gemport ${iptvSp} flow ${iptvSp}`,
+          ];
+          let flowOk = true;
+          for (const cmd of flowCmds) {
+            out = await step(cmd, 10_000);
+            if (failed(out) && !/already|exist|duplicate/i.test(out)) {
+              flowOk = false;
+              notes.push(
+                `${cmd.split(' ').slice(0, 2).join(' ')}: ${this.cleanCliNoise(
+                  out,
+                )
+                  .replace(/\s+/g, ' ')
+                  .slice(0, 80)}`,
+              );
+              break;
+            }
+          }
+          if (flowOk) {
+            linked = true;
+            notes.push(
+              `flow ${iptvSp} vlan ${params.vlanId} · gemport ${iptvSp}`,
+            );
+          }
+        }
+        if (!linked) {
+          out = await step(
+            `service ${iptvSp} gemport ${iptvSp} vlan ${params.vlanId}`,
+            10_000,
+          );
+          if (!failed(out)) {
+            linked = true;
+            notes.push(
+              `service ${iptvSp} gemport ${iptvSp} vlan ${params.vlanId}`,
+            );
+          } else {
+            notes.push(
+              `service ${iptvSp}: ${this.cleanCliNoise(out)
+                .replace(/\s+/g, ' ')
+                .slice(0, 100)}`,
+            );
+          }
+        }
+
+        // Acceso untagged hacia el CPE = "mode tag vlan VID" en CLI ZTE.
+        // Passthrough tagged = transparent. Hybrid = def-vlan.
+        const candidates: string[] =
+          mode === 'untag'
+            ? [
+                `vlan port ${eth} mode tag vlan ${params.vlanId}`,
+                `vlan port ${eth} mode tag vlan ${params.vlanId} priority 0`,
+                `vlan port ${eth} mode hybrid def-vlan ${params.vlanId}`,
+              ]
+            : mode === 'tag'
+              ? [
+                  `vlan port ${eth} mode transparent`,
+                  `vlan port ${eth} mode tag vlan ${params.vlanId}`,
+                ]
+              : [
+                  `vlan port ${eth} mode hybrid def-vlan ${params.vlanId}`,
+                  `vlan port ${eth} mode tag vlan ${params.vlanId}`,
+                ];
+
+        let applied = '';
+        let lastErr = '';
+        for (const cmd of candidates) {
+          out = await step(cmd, 10_000);
+          if (!failed(out)) {
+            applied = cmd;
+            break;
+          }
+          lastErr = this.cleanCliNoise(out).replace(/\s+/g, ' ').slice(0, 160);
+          this.logger.warn(
+            `vlan port candidate rejected on ${onuIf}: «${cmd}» → ${lastErr}`,
           );
         }
+        if (!applied) {
+          throw new Error(`vlan port ${eth} falló: ${lastErr || 'sin respuesta'}`);
+        }
+        notes.push(applied);
+
         await step('exit', 5_000);
         await this.persistRunningConfig(send, read);
         return {
           ok: true,
-          message: `${eth}: ${mode} VLAN ${params.vlanId}`,
+          message: `${eth}: ${mode} VLAN ${params.vlanId}${
+            notes.length ? ` · ${notes.join(' · ')}` : ''
+          }`,
         };
       });
     } catch (err) {

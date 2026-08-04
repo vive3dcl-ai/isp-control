@@ -17,6 +17,7 @@ import {
   strVal,
 } from './genieacs-nbi.client';
 import { IpPoolService } from './ip-pool.service';
+import { ServiceVlanService } from './service-vlan.service';
 import { ZteOltClient } from './zte-olt.client';
 import { HuaweiOltClient } from './huawei-olt.client';
 import {
@@ -25,6 +26,7 @@ import {
   isManagedOltDevice,
 } from './olt.constants';
 import { stripHuaweiDialectTag } from './huawei-olt-firmware.util';
+import { oltIfFromOnuIf } from './zte-olt-onu.util';
 import {
   buildConnReqParameterValues,
   connReqPassword,
@@ -151,6 +153,7 @@ export class OnuTr069ConfigService {
   constructor(
     private readonly tenantConnections: TenantConnectionService,
     private readonly ipPools: IpPoolService,
+    private readonly serviceVlans: ServiceVlanService,
     private readonly zteOlt: ZteOltClient,
     private readonly huaweiOlt: HuaweiOltClient,
   ) {}
@@ -744,7 +747,10 @@ export class OnuTr069ConfigService {
       const merged = ethernet.map((e) => {
         const omci = byIndex.get(e.index);
         if (!omci) return e;
-        return { ...e, vlanId: omci.vlanId, vlanMode: omci.mode };
+        // ZTE "mode tag vlan X" = acceso untagged hacia el CPE (panel: untag).
+        const vlanMode =
+          omci.mode === 'tag' && omci.vlanId != null ? 'untag' : omci.mode;
+        return { ...e, vlanId: omci.vlanId, vlanMode };
       });
       // Si el ACS aún no tiene ETH pero la OLT sí tiene bindings, exponerlos.
       if (merged.length === 0 && result.ports.length > 0) {
@@ -757,7 +763,8 @@ export class OnuTr069ConfigService {
           status: null,
           mac: null,
           vlanId: p.vlanId,
-          vlanMode: p.mode,
+          vlanMode:
+            p.mode === 'tag' && p.vlanId != null ? 'untag' : p.mode,
         }));
       }
       // Asegurar índices presentes en OMCI aunque falten en ACS.
@@ -772,7 +779,8 @@ export class OnuTr069ConfigService {
           status: null,
           mac: null,
           vlanId: p.vlanId,
-          vlanMode: p.mode,
+          vlanMode:
+            p.mode === 'tag' && p.vlanId != null ? 'untag' : p.mode,
         });
       }
       return merged.sort((a, b) => a.index - b.index);
@@ -1037,6 +1045,43 @@ export class OnuTr069ConfigService {
         const vlanId = vlanSpecified ? (e.vlanId ?? null) : null;
         if (!vlanSpecified) continue;
         const mode = e.vlanMode ?? 'untag';
+
+        // Asegura VLAN en OLT + uplink antes del binding OMCI.
+        if (vlanId != null) {
+          try {
+            const uplink = await this.serviceVlans.ensureVlanTaggedOnUplinks(
+              schema,
+              onu.oltId,
+              vlanId,
+              `TV eth_0/${e.index}`,
+            );
+            if (uplink.message) omciNotes.push(uplink.message);
+          } catch (err) {
+            this.logger.warn(
+              `ensure uplink VLAN ${vlanId}: ${
+                err instanceof Error ? err.message : err
+              }`,
+            );
+          }
+          const ponIf = oltIfFromOnuIf(onu.onuIf);
+          if (ponIf) {
+            const ponTag = await this.zteOlt.upsertVlan({
+              ...this.zteConn(olt),
+              vlanId,
+              description: `TV`,
+              defaultPonPorts: [ponIf],
+              previousDefaultPonPorts: [],
+            });
+            if (!ponTag.ok) {
+              omciNotes.push(
+                `PON ${ponIf} VLAN ${vlanId}: ${ponTag.error || 'aviso'}`,
+              );
+            } else if (ponTag.message) {
+              omciNotes.push(ponTag.message);
+            }
+          }
+        }
+
         const omci = await this.zteOlt.applyOnuEthPortVlan({
           ...this.zteConn(olt),
           onuIf: onu.onuIf,
