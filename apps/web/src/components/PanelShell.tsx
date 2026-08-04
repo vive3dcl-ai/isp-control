@@ -68,7 +68,6 @@ export function PanelShell({
     if (!hideTechNav) return tenantNavBase
     return tenantNavBase.filter((l) => l.to !== '/movil')
   }, [variant, hideTechNav])
-  const panelLabel = variant === 'admin' ? 'Plataforma' : 'Empresa'
   const ticketBadge = summaryQuery.data?.ticketBadge ?? false
 
   async function onLogout() {
@@ -107,13 +106,14 @@ export function PanelShell({
           sidebarOpen ? 'translate-x-0' : '-translate-x-full',
         ].join(' ')}
       >
-        <div className="flex min-h-14 items-center gap-2 border-b border-[var(--border)] px-3 py-2">
-          <div className="min-w-0 flex-1">
-            <BrandLogo height={44} className="rounded-sm" />
-            <p className="mt-0.5 truncate pl-0.5 text-[10px] text-[var(--text-muted)]">
-              {panelLabel}
-              {isImpersonating && variant === 'tenant' ? ' · impersonando' : ''}
-            </p>
+        <div className="flex min-h-14 items-center justify-center border-b border-[var(--border)] px-3 py-2.5">
+          <div className="flex w-full min-w-0 flex-col items-center justify-center">
+            <BrandLogo height={42} />
+            {isImpersonating && variant === 'tenant' ? (
+              <p className="mt-1 text-center text-[10px] text-[var(--text-muted)]">
+                Impersonando
+              </p>
+            ) : null}
           </div>
         </div>
 

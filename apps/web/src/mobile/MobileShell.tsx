@@ -26,7 +26,7 @@ export function MobileShell() {
             className="flex min-w-0 items-center gap-2.5"
             end
           >
-            <BrandLogo height={40} className="min-w-0 shrink rounded-md" />
+            <BrandLogo height={40} className="min-w-0 max-w-[9.5rem] shrink" />
             <span className="min-w-0 border-l border-[var(--border)] pl-2.5">
               <p className="truncate text-base font-semibold leading-tight">
                 Técnico

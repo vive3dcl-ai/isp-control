@@ -1,7 +1,7 @@
 import { useBranding } from '../branding/BrandingContext'
 
-/** Logo estático por defecto (wordmark horizontal). */
-export const DEFAULT_BRAND_LOGO_URL = '/branding/isp-control-logo.jpg'
+/** Logo estático por defecto (PNG transparente, sin fondo). */
+export const DEFAULT_BRAND_LOGO_URL = '/branding/isp-control-logo.png'
 
 /**
  * Wordmark del producto para headers / login.
@@ -20,7 +20,7 @@ export function BrandLogo({
     <img
       src={src}
       alt={b.productName}
-      className={`block object-contain object-left ${className}`}
+      className={`mx-auto block object-contain object-center ${className}`}
       style={{ height, width: 'auto', maxWidth: '100%' }}
     />
   )
