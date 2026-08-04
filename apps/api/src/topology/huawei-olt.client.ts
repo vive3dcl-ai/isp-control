@@ -45,7 +45,11 @@ import {
   parseHuaweiUplinks,
   type HuaweiUplinkRaw,
 } from './huawei-olt-uplink.util';
-import { parseHuaweiVlans, type HuaweiVlanRaw } from './huawei-olt-vlan.util';
+import {
+  parseHuaweiOntEthPortVlans,
+  parseHuaweiVlans,
+  type HuaweiVlanRaw,
+} from './huawei-olt-vlan.util';
 import {
   mergeHuaweiSpeedProfiles,
   parseHuaweiDbaProfiles,
@@ -1318,6 +1322,174 @@ export class HuaweiOltClient {
       await io.read();
       return notes.join('; ') || 'VLAN service-port actualizado';
     });
+  }
+
+  /**
+   * Ligar un puerto ETH de la ONT a una VLAN (native-vlan + service-port IPTV).
+   * Misma semántica que ZTE `applyOnuEthPortVlan`: gemport 3 = IPTV
+   * (1=WAN, 2=mgmt). No toca service-ports WAN/mgmt existentes.
+   */
+  async applyOnuEthPortVlan(
+    params: CliParams & {
+      onuIf: string;
+      /** 1-based eth port id on the ONT */
+      portIndex: number;
+      vlanId: number | null;
+      mode?: 'tag' | 'untag' | 'hybrid';
+      firmwareHint?: string | null;
+      subtypeHint?: string | null;
+    },
+  ): Promise<{ ok: boolean; error?: string; message?: string }> {
+    const point = parseHuaweiOnuIf(params.onuIf);
+    if (!point) return { ok: false, error: 'Interfaz ONU Huawei inválida' };
+    if (
+      !Number.isInteger(params.portIndex) ||
+      params.portIndex < 1 ||
+      params.portIndex > 128
+    ) {
+      return { ok: false, error: 'Índice de puerto Ethernet inválido' };
+    }
+    /** IPTV / bridge: gemport 3 (1=WAN, 2=mgmt), igual que ZTE. */
+    const iptvGem = 3;
+    const ethLabel = `eth ${params.portIndex}`;
+    this.logger.log(
+      `ONU eth VLAN ${params.onuIf} ${ethLabel} → ${
+        params.vlanId == null ? 'quitar' : `native-vlan ${params.vlanId}`
+      }`,
+    );
+    return this.write(params, async (io) => {
+      const notes: string[] = [];
+      await this.config(io);
+
+      if (params.vlanId != null) {
+        await io.send(
+          `display service-port port 0/${point.slot}/${point.port} ont ${point.ontId}`,
+        );
+        const existing = await io.read();
+        const byVlan = parseServicePortIndexesByVlan(existing, params.vlanId);
+        if (byVlan.length === 0) {
+          let created = false;
+          for (const gem of [
+            iptvGem,
+            ...[1, 2, 3].filter((g) => g !== iptvGem),
+          ]) {
+            await io.send(
+              `service-port vlan ${params.vlanId} gpon 0/${point.slot}/${point.port} ont ${point.ontId} gemport ${gem} multi-service user-vlan ${params.vlanId} tag-transform translate`,
+            );
+            const out = await io.read();
+            if (!cliRejected(out)) {
+              created = true;
+              notes.push(`service-port VLAN ${params.vlanId} gem${gem}`);
+              break;
+            }
+          }
+          if (!created) {
+            throw new Error(
+              `OLT rechazó service-port VLAN ${params.vlanId} para IPTV`,
+            );
+          }
+        } else {
+          notes.push(`service-port VLAN ${params.vlanId} ya existía`);
+        }
+      }
+
+      await io.send(`interface gpon 0/${point.slot}`);
+      this.throwIfCliError(await io.read());
+      if (params.vlanId != null) {
+        await io.send(
+          `ont port native-vlan ${point.port} ${point.ontId} eth ${params.portIndex} vlan ${params.vlanId} priority 0`,
+        );
+        const out = await io.read();
+        if (cliRejected(out)) {
+          throw new Error(
+            `OLT rechazó native-vlan eth ${params.portIndex}: ${out
+              .replace(/\s+/g, ' ')
+              .slice(0, 160)}`,
+          );
+        }
+      } else {
+        await io.send(
+          `undo ont port native-vlan ${point.port} ${point.ontId} eth ${params.portIndex}`,
+        );
+        const out = await io.read();
+        // Si no había native-vlan, algunos firmwares avisan — no es fallo duro.
+        if (cliRejected(out) && !/does not exist|not exist|no such/i.test(out)) {
+          throw new Error(
+            `OLT rechazó undo native-vlan eth ${params.portIndex}: ${out
+              .replace(/\s+/g, ' ')
+              .slice(0, 160)}`,
+          );
+        }
+      }
+      await io.send('quit');
+      await io.read();
+
+      return params.vlanId != null
+        ? `${ethLabel} → VLAN ${params.vlanId}${
+            notes.length ? ` · ${notes.join(' · ')}` : ''
+          }`
+        : `${ethLabel} VLAN cleared${
+            notes.length ? ` · ${notes.join(' · ')}` : ''
+          }`;
+    });
+  }
+
+  /** Lee native-vlan / port-attribute de los ETH de la ONT. */
+  async getOmciEthPortVlans(
+    params: CliParams & {
+      onuIf: string;
+      firmwareHint?: string | null;
+      subtypeHint?: string | null;
+    },
+  ): Promise<{
+    ok: boolean;
+    ports: Array<{
+      portIndex: number;
+      mode: 'tag' | 'untag' | 'hybrid';
+      vlanId: number | null;
+    }>;
+    error?: string;
+  }> {
+    const point = parseHuaweiOnuIf(params.onuIf);
+    if (!point) {
+      return { ok: false, ports: [], error: 'Interfaz ONU Huawei inválida' };
+    }
+    try {
+      const ports = await this.run(params, false, async (io) => {
+        const chunks: string[] = [];
+        const tryCmd = async (cmd: string) => {
+          await io.send(cmd);
+          const out = await io.read();
+          chunks.push(out);
+          return out;
+        };
+        // Variantes según firmware MA56xx / MA58xx.
+        await tryCmd(
+          `display ont port attribute 0/${point.slot}/${point.port} ${point.ontId}`,
+        );
+        await this.config(io, `interface gpon 0/${point.slot}`);
+        await tryCmd(
+          `display ont port attribute ${point.port} ${point.ontId}`,
+        );
+        await tryCmd(
+          `display ont port native-vlan ${point.port} ${point.ontId}`,
+        );
+        await io.send('quit');
+        await io.read().catch(() => '');
+        return parseHuaweiOntEthPortVlans(chunks.join('\n')).map((p) => ({
+          portIndex: p.portIndex,
+          vlanId: p.vlanId,
+          mode: (p.mode ?? 'untag') as 'tag' | 'untag' | 'hybrid',
+        }));
+      });
+      return { ok: true, ports };
+    } catch (error) {
+      return {
+        ok: false,
+        ports: [],
+        error: this.message(error),
+      };
+    }
   }
 
   async applyOnuWanStaticOmci(

@@ -8,6 +8,70 @@ export interface HuaweiVlanRaw {
   isSystem: boolean;
 }
 
+export type HuaweiOntEthPortVlan = {
+  portIndex: number;
+  vlanId: number | null;
+  /** UI/API: native-vlan = acceso untagged hacia el CPE. */
+  mode: 'tag' | 'untag' | 'hybrid' | null;
+};
+
+/**
+ * Parsea `display ont port attribute` / `display ont port native-vlan`.
+ * Acepta filas ETH con Native-VLAN o columnas Port-ID + VLAN.
+ */
+export function parseHuaweiOntEthPortVlans(
+  text: string,
+): HuaweiOntEthPortVlan[] {
+  const byPort = new Map<number, HuaweiOntEthPortVlan>();
+  const set = (portIndex: number, vlanId: number | null) => {
+    if (!Number.isInteger(portIndex) || portIndex < 1 || portIndex > 128) return;
+    byPort.set(portIndex, {
+      portIndex,
+      vlanId,
+      mode: vlanId != null ? 'untag' : null,
+    });
+  };
+
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || /^[-={]+$/.test(line)) continue;
+
+    // Explicit: "ETH 4 ... Native-VLAN 801" / "eth 4 vlan 801"
+    const labeled = line.match(
+      /\beth(?:ernet)?\s*(?:port)?\s*[#:=-]?\s*(\d+)\b(?:(?!\beth\b).)*?\b(?:native[- ]?vlan|vlan(?:-id)?)\s*[:=]?\s*(\d+|-+|n\/?a)\b/i,
+    );
+    if (labeled) {
+      const vlanRaw = labeled[2];
+      const vlanId = /^\d+$/.test(vlanRaw) ? Number(vlanRaw) : null;
+      set(Number(labeled[1]), vlanId && vlanId > 0 ? vlanId : null);
+      continue;
+    }
+
+    // Table row: ... ETH 4 801 ... or Port-Type ETH Port-ID Native-VLAN
+    const ethRow = line.match(
+      /\beth\b\s+(\d+)\s+(?:[A-Za-z_][\w-]*\s+)*(\d{1,4}|-+)(?=\s|$)/i,
+    );
+    if (ethRow) {
+      const vlanRaw = ethRow[2];
+      const vlanId = /^\d+$/.test(vlanRaw) ? Number(vlanRaw) : null;
+      if (vlanId == null || (vlanId >= 1 && vlanId <= 4094)) {
+        set(Number(ethRow[1]), vlanId && vlanId > 0 ? vlanId : null);
+      }
+      continue;
+    }
+
+    // Compact: "port 4 native-vlan 801"
+    const compact = line.match(
+      /\bport(?:id)?\s*[:=]?\s*(\d+)\b(?:(?!\bport\b).)*?\bnative[- ]?vlan\s*[:=]?\s*(\d+)\b/i,
+    );
+    if (compact) {
+      set(Number(compact[1]), Number(compact[2]));
+    }
+  }
+
+  return [...byPort.values()].sort((a, b) => a.portIndex - b.portIndex);
+}
+
 export function parseHuaweiVlans(text: string): HuaweiVlanRaw[] {
   const rows = new Map<number, HuaweiVlanRaw>();
   const ensure = (vlanId: number) => {

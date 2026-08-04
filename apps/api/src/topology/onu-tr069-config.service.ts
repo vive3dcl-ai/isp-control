@@ -749,14 +749,13 @@ export class OnuTr069ConfigService {
       if (
         !olt ||
         !isManagedOltDevice(olt.type, olt.subtype) ||
-        isHuaweiOltDevice(olt.type, olt.subtype) ||
         !olt.mgmtHost ||
         !olt.mgmtUsername ||
         !olt.mgmtPassword
       ) {
         return ethernet;
       }
-      const result = await this.zteOlt.getOmciEthPortVlans({
+      const result = await this.oltCli(olt).getOmciEthPortVlans({
         ...this.zteConn(olt),
         onuIf: onu.onuIf,
         subtypeHint: olt.subtype,
@@ -768,6 +767,7 @@ export class OnuTr069ConfigService {
         const omci = byIndex.get(e.index);
         if (!omci) return e;
         // ZTE "mode tag vlan X" = acceso untagged hacia el CPE (panel: untag).
+        // Huawei native-vlan ya viene como untag desde el parser.
         const vlanMode =
           omci.mode === 'tag' && omci.vlanId != null ? 'untag' : omci.mode;
         return { ...e, vlanId: omci.vlanId, vlanMode };
@@ -1096,13 +1096,12 @@ export class OnuTr069ConfigService {
       if (
         olt &&
         isManagedOltDevice(olt.type, olt.subtype) &&
-        !isHuaweiOltDevice(olt.type, olt.subtype) &&
         olt.mgmtHost &&
         olt.mgmtUsername &&
         olt.mgmtPassword
       ) {
         for (const portIndex of ports) {
-          const omci = await this.zteOlt.applyOnuEthPortVlan({
+          const omci = await this.oltCli(olt).applyOnuEthPortVlan({
             ...this.zteConn(olt),
             onuIf: onu.onuIf,
             portIndex,
@@ -1498,14 +1497,10 @@ export class OnuTr069ConfigService {
           'OLT sin credenciales para aplicar VLAN de puerto Ethernet (OMCI)',
         );
       }
-      if (isHuaweiOltDevice(olt.type, olt.subtype)) {
-        throw new BadRequestException(
-          'Asignar VLAN a puerto Ethernet vía OMCI aún no está soportado en Huawei',
-        );
-      }
       if (!onu.onuIf) {
         throw new BadRequestException('ONU sin interfaz OLT (onuIf)');
       }
+      const oltClient = this.oltCli(olt);
       for (const e of ethVlanPatches) {
         const vlanSpecified = Object.prototype.hasOwnProperty.call(e, 'vlanId');
         const vlanId = vlanSpecified ? (e.vlanId ?? null) : null;
@@ -1529,26 +1524,41 @@ export class OnuTr069ConfigService {
               }`,
             );
           }
-          const ponIf = oltIfFromOnuIf(onu.onuIf);
-          if (ponIf) {
-            const ponTag = await this.zteOlt.upsertVlan({
+          if (isHuaweiOltDevice(olt.type, olt.subtype)) {
+            const created = await this.huaweiOlt.upsertVlan({
               ...this.zteConn(olt),
               vlanId,
-              description: `TV`,
-              defaultPonPorts: [ponIf],
-              previousDefaultPonPorts: [],
+              description: 'TV',
             });
-            if (!ponTag.ok) {
+            if (!created.ok) {
               omciNotes.push(
-                `PON ${ponIf} VLAN ${vlanId}: ${ponTag.error || 'aviso'}`,
+                `VLAN ${vlanId}: ${created.error || 'aviso Huawei'}`,
               );
-            } else if (ponTag.message) {
-              omciNotes.push(ponTag.message);
+            } else if (created.message) {
+              omciNotes.push(created.message);
+            }
+          } else {
+            const ponIf = oltIfFromOnuIf(onu.onuIf);
+            if (ponIf) {
+              const ponTag = await this.zteOlt.upsertVlan({
+                ...this.zteConn(olt),
+                vlanId,
+                description: `TV`,
+                defaultPonPorts: [ponIf],
+                previousDefaultPonPorts: [],
+              });
+              if (!ponTag.ok) {
+                omciNotes.push(
+                  `PON ${ponIf} VLAN ${vlanId}: ${ponTag.error || 'aviso'}`,
+                );
+              } else if (ponTag.message) {
+                omciNotes.push(ponTag.message);
+              }
             }
           }
         }
 
-        const omci = await this.zteOlt.applyOnuEthPortVlan({
+        const omci = await oltClient.applyOnuEthPortVlan({
           ...this.zteConn(olt),
           onuIf: onu.onuIf,
           portIndex: e.index,
