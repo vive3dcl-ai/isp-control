@@ -2,7 +2,7 @@
  * Criterio y ventanas del chequeo silencioso post-aprovisionamiento.
  *
  * Tras apply/migrate: cada 3 minutos durante 15 minutos. Si todo cuadra, ok y
- * se para. Si al cerrar la ventana fallan ARP/WAN/credenciales → fail.
+ * se para. Si al cerrar la ventana fallan ARP/WAN/DNS/credenciales → fail.
  */
 
 export const VERIFY_INTERVAL_MS = 3 * 60_000;
@@ -12,6 +12,14 @@ export const VERIFY_HEAL_MAX_ATTEMPTS = 3;
 export const VERIFY_MAX_CONCURRENCY_PER_TENANT = 5;
 /** Defensa adicional cuando hay muchos tenants activos al mismo tiempo. */
 export const VERIFY_MAX_GLOBAL_CONCURRENCY = 40;
+
+/**
+ * Resync forzado: intentos de despertar la ONU hasta que el ACS consiga
+ * connection_request (credenciales nuestras + kick con las heredadas).
+ * 10 × 15 s ≈ 2,5 min; si el Inform periódico cae en esa ventana, se aprovecha.
+ */
+export const RESYNC_WAKE_MAX_ATTEMPTS = 10;
+export const RESYNC_WAKE_DELAY_MS = 15_000;
 
 export type OnuVerifyStatus = 'idle' | 'test' | 'ok' | 'fail';
 
@@ -26,6 +34,7 @@ export type OnuVerifyDetail = {
   arp?: OnuVerifyCheckResult;
   connreq?: OnuVerifyCheckResult;
   wan?: OnuVerifyCheckResult;
+  dns?: OnuVerifyCheckResult;
   traffic?: OnuVerifyCheckResult;
   /** Notas de curación aplicadas en este tick. */
   healed?: string[];
@@ -96,8 +105,11 @@ export function decideVerifyOutcome(params: {
   const arpOk = !!params.detail.arp?.ok;
   const wanOk = !!params.detail.wan?.ok;
   const credOk = !!params.detail.connreq?.ok;
+  // Los detalles antiguos no tenían una entrada DNS separada. Se consideran
+  // compatibles; todas las comprobaciones nuevas sí la incluyen.
+  const dnsOk = params.detail.dns ? params.detail.dns.ok : true;
   const trafficOk = !!params.detail.traffic?.ok;
-  const essentials = arpOk && wanOk && credOk;
+  const essentials = arpOk && wanOk && credOk && dnsOk;
 
   if (essentials && trafficOk) return 'ok';
   if (essentials && params.windowExpired) return 'ok';
@@ -111,7 +123,7 @@ export function summarizeVerifyDetail(
 ): string {
   if (!detail) return '';
   const parts: string[] = [];
-  for (const key of ['arp', 'connreq', 'wan', 'traffic'] as const) {
+  for (const key of ['arp', 'connreq', 'wan', 'dns', 'traffic'] as const) {
     const c = detail[key];
     if (!c) continue;
     parts.push(`${key}: ${c.ok ? 'ok' : 'fail'} (${c.message})`);

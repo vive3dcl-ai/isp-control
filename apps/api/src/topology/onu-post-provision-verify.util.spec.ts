@@ -2,6 +2,8 @@ import {
   decideVerifyOutcome,
   isVerifyWindowExpired,
   mapWithConcurrency,
+  RESYNC_WAKE_DELAY_MS,
+  RESYNC_WAKE_MAX_ATTEMPTS,
   shouldCloseVerifyWindow,
   shouldRunVerifyTick,
   summarizeVerifyDetail,
@@ -86,6 +88,7 @@ describe('criterio de pase/fallo', () => {
     arp: { ok: true, message: 'resuelta' },
     connreq: { ok: true, message: 'acs' },
     wan: { ok: true, message: 'coincide' },
+    dns: { ok: true, message: '8.8.8.8,8.8.4.4' },
     traffic: { ok: true, message: '3 conexiones' },
   };
 
@@ -131,6 +134,18 @@ describe('criterio de pase/fallo', () => {
     ).toBe('fail');
   });
 
+  it('considera el DNS una comprobación esencial', () => {
+    expect(
+      decideVerifyOutcome({
+        detail: {
+          ...good,
+          dns: { ok: false, message: 'vacío' },
+        },
+        windowExpired: true,
+      }),
+    ).toBe('fail');
+  });
+
   it('falla de inmediato ante error irrecuperable', () => {
     expect(
       decideVerifyOutcome({
@@ -146,6 +161,11 @@ describe('criterio de pase/fallo', () => {
     expect(VERIFY_MAX_CONCURRENCY_PER_TENANT).toBe(5);
     expect(VERIFY_MAX_GLOBAL_CONCURRENCY).toBe(40);
   });
+
+  it('expone el presupuesto de despertar del Resync forzado', () => {
+    expect(RESYNC_WAKE_MAX_ATTEMPTS).toBe(10);
+    expect(RESYNC_WAKE_DELAY_MS).toBe(15_000);
+  });
 });
 
 describe('resumen', () => {
@@ -154,9 +174,10 @@ describe('resumen', () => {
       summarizeVerifyDetail({
         arp: { ok: true, message: 'resuelta' },
         wan: { ok: false, message: 'vlan 80' },
+        dns: { ok: false, message: 'vacío' },
         healed: ['credenciales'],
       }),
-    ).toContain('arp: ok');
+    ).toContain('dns: fail');
   });
 });
 

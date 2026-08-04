@@ -162,18 +162,28 @@ export function Tr069StatusView() {
     const steps: ProgressStep[] = [
       {
         id: "run",
-        label: "Consultando router del gateway y ACS",
+        label:
+          "Credenciales ACS primero, luego router/WAN/DNS (hasta 3 intentos)",
         status: "pending",
       },
-      { id: "arp", label: "ARP en el router del gateway", status: "pending" },
       {
         id: "connreq",
-        label: "Credenciales de petición de conexión",
+        label: "Credenciales de petición de conexión (nuestras)",
+        status: "pending",
+      },
+      {
+        id: "arp",
+        label: "ARP en el router del gateway",
         status: "pending",
       },
       {
         id: "wan",
-        label: "WAN TR-069 (IP, máscara, VLAN, NAT)",
+        label: "WAN TR-069 (IP, máscara, gateway, VLAN y NAT)",
+        status: "pending",
+      },
+      {
+        id: "dns",
+        label: "DNS de la WAN",
         status: "pending",
       },
       {
@@ -222,6 +232,12 @@ export function Tr069StatusView() {
         const c = checkOf("wan");
         if (!c?.ok) throw new Error(c?.message || "WAN falló");
         return c.message || "WAN OK";
+      },
+      dns: async () => {
+        await pause(350);
+        const c = checkOf("dns");
+        if (!c?.ok) throw new Error(c?.message || "DNS no aplicado");
+        return c.message || "DNS OK";
       },
       traffic: async () => {
         await pause(350);

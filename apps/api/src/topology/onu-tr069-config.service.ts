@@ -45,6 +45,10 @@ import {
   type WanConnectionCandidate,
 } from './onu-wan-connection.util';
 import { inspectWanVlanLeaves } from './onu-wan-vlan-leaf.util';
+import {
+  RESYNC_WAKE_DELAY_MS,
+  RESYNC_WAKE_MAX_ATTEMPTS,
+} from './onu-post-provision-verify.util';
 import { computeIpNetwork } from './ip-pool.util';
 import type { NetworkDevice } from './entities/network-device.entity';
 import type { Tr069Profile } from './entities/tr069-profile.entity';
@@ -1436,22 +1440,185 @@ export class OnuTr069ConfigService {
     schema: string,
     onuId: string,
   ): Promise<string | null> {
+    const result = await this.ensureCredentialsFirst(schema, onuId);
+    return result.note;
+  }
+
+  /**
+   * Paso 0 de cualquier curación TR-069: las credenciales de petición de
+   * conexión tienen que ser las nuestras. Sin ellas el ACS recibe 401 y toda
+   * la WAN se queda en cola hasta el Inform periódico.
+   *
+   * Un único intento (encola + kick). El Resync forzado usa `wakeForTr069`
+   * para insistir varias veces.
+   *
+   * `probeReachable` sólo lo pide el Resync: el silencioso no necesita pegarle
+   * al CPE en cada tick si el usuario ya es el nuestro.
+   */
+  async ensureCredentialsFirst(
+    schema: string,
+    onuId: string,
+    opts?: { probeReachable?: boolean },
+  ): Promise<{
+    ours: boolean;
+    awake: boolean;
+    username: string | null;
+    note: string | null;
+  }> {
     const onuRepo = await this.tenantConnections.getOnuRepository(schema);
     const onu = await onuRepo.findOne({ where: { id: onuId } });
-    if (!onu?.sn?.trim()) return null;
+    if (!onu?.sn?.trim()) {
+      return {
+        ours: false,
+        awake: false,
+        username: null,
+        note: 'credenciales: sin SN',
+      };
+    }
     try {
       const client = this.nbi();
-      const device = await client.findBySerial(onu.sn);
-      if (!device?._id) return 'curación connreq: sin Inform';
+      let device = await client.findBySerial(onu.sn);
+      if (!device?._id) {
+        return {
+          ours: false,
+          awake: false,
+          username: null,
+          note: 'credenciales: sin Inform al ACS',
+        };
+      }
       const deviceId = deviceIdString(device._id);
-      return await this.ensureConnReqCredentials(
+      const root = detectDataModelRoot(device);
+      const base = `${root}.ManagementServer`;
+      const usernamePath = `${base}.ConnectionRequestUsername`;
+      let username = strVal(genieGet(device, usernamePath));
+
+      if (!shouldWriteConnReqCredentials(username)) {
+        const awake = opts?.probeReachable
+          ? await this.probeAcsReachable(client, deviceId, base)
+          : true;
+        return {
+          ours: true,
+          awake,
+          username,
+          // Sin nota si ya eran nuestras: no es una curación, sólo un probe.
+          note: null,
+        };
+      }
+
+      const note = await this.ensureConnReqCredentials(
         client,
         deviceId,
         device,
         onu.sn,
       );
+      device = (await client.findBySerial(onu.sn)) ?? device;
+      username = strVal(genieGet(device, usernamePath));
+      const ours = !shouldWriteConnReqCredentials(username);
+      const awake = opts?.probeReachable
+        ? await this.probeAcsReachable(client, deviceId, base)
+        : ours;
+      return {
+        ours,
+        awake,
+        username,
+        note: note ?? (ours ? 'credenciales nuestras' : null),
+      };
     } catch (e) {
-      return `curación connreq: ${e instanceof Error ? e.message : String(e)}`;
+      return {
+        ours: false,
+        awake: false,
+        username: null,
+        note: `credenciales: ${e instanceof Error ? e.message : String(e)}`,
+      };
+    }
+  }
+
+  /**
+   * Resync forzado: insiste hasta que el ACS pueda hablar con el CPE.
+   *
+   * Orden por intento: comprobar usuario → si es ajeno, encolar el nuestro +
+   * acortar Inform + kick con las credenciales heredadas → probar
+   * connection_request. Si el CPE abre sesión (Inform o kick), el siguiente
+   * intento ya ve usuario `acs` y un SPV 200.
+   */
+  async wakeForTr069(
+    schema: string,
+    onuId: string,
+    opts?: { maxAttempts?: number; delayMs?: number },
+  ): Promise<{
+    ok: boolean;
+    awake: boolean;
+    ours: boolean;
+    attempts: number;
+    username: string | null;
+    notes: string[];
+    message: string;
+  }> {
+    const maxAttempts = Math.max(
+      1,
+      opts?.maxAttempts ?? RESYNC_WAKE_MAX_ATTEMPTS,
+    );
+    const delayMs = Math.max(0, opts?.delayMs ?? RESYNC_WAKE_DELAY_MS);
+    const notes: string[] = [];
+    let awake = false;
+    let ours = false;
+    let username: string | null = null;
+    let attempts = 0;
+
+    for (let i = 1; i <= maxAttempts; i += 1) {
+      attempts = i;
+      const tick = await this.ensureCredentialsFirst(schema, onuId, {
+        probeReachable: true,
+      });
+      username = tick.username;
+      ours = tick.ours;
+      awake = tick.awake;
+      if (tick.note) notes.push(`intento ${i}: ${tick.note}`);
+
+      if (awake && ours) {
+        // Ya despierta: reempujar WAN/DNS por si el apply anterior quedó en cola.
+        const wanNote = await this.repushWanForVerify(schema, onuId);
+        if (wanNote) notes.push(wanNote);
+        return {
+          ok: true,
+          awake: true,
+          ours: true,
+          attempts,
+          username,
+          notes,
+          message: `ONU despierta tras ${attempts} intento(s)`,
+        };
+      }
+
+      if (i < maxAttempts && delayMs > 0) {
+        await new Promise((r) => setTimeout(r, delayMs));
+      }
+    }
+
+    return {
+      ok: false,
+      awake,
+      ours,
+      attempts,
+      username,
+      notes,
+      message: awake
+        ? `ACS alcanzó al CPE pero credenciales aún ajenas (${username || '—'})`
+        : `ONU no despertó tras ${attempts} intento(s); se aplicará en su próximo Inform`,
+    };
+  }
+
+  /** ¿El ACS consigue connection_request ahora? Un refresh ligero basta. */
+  private async probeAcsReachable(
+    client: GenieAcsNbiClient,
+    deviceId: string,
+    managementServerBase: string,
+  ): Promise<boolean> {
+    try {
+      const r = await client.refreshObject(deviceId, managementServerBase);
+      return r.status === 200;
+    } catch {
+      return false;
     }
   }
 
@@ -1765,13 +1932,25 @@ export class OnuTr069ConfigService {
       else if (result.status === 202) notes.push('WAN encolada en ACS');
       else notes.push(`WAN TR069 status ${result.status}`);
 
-      const maskNote = await this.ensureWanSubnetMask(
+      const maskNote = await this.ensureWanLeaf(
         client,
         deviceId,
         conn,
+        'SubnetMask',
         wan.wanMask,
+        'máscara',
       );
       if (maskNote) notes.push(maskNote);
+
+      const dnsNote = await this.ensureWanLeaf(
+        client,
+        deviceId,
+        conn,
+        'DNSServers',
+        dns,
+        'DNS',
+      );
+      if (dnsNote) notes.push(dnsNote);
 
       // La VLAN va en una hoja propietaria distinta por fabricante y sólo se
       // manda si el árbol la expone: SetParameterValues es atómico, así que una
@@ -1820,28 +1999,32 @@ export class OnuTr069ConfigService {
   }
 
   /**
-   * Empuja SubnetMask en un SPV propio y, si el CPE la deja en blanco, lo
-   * reintenta una vez. Algunos Huawei aceptan el resto del lote WAN y borran
-   * la máscara: el resultado es Connected sin ARP.
+   * Escribe una hoja de la WAN sola, relee y reintenta si no quedó puesta.
+   *
+   * Huawei HG8245W5 responde 200 al lote completo y aun así deja hojas en
+   * blanco: pasó con SubnetMask (sin máscara no hay ARP ni unicast) y con
+   * DNSServers (la WAN navega por IP pero el cliente no resuelve nombres).
    */
-  private async ensureWanSubnetMask(
+  private async ensureWanLeaf(
     client: GenieAcsNbiClient,
     deviceId: string,
     conn: string,
-    wanMask: string,
+    leaf: string,
+    value: string,
+    label: string,
   ): Promise<string | null> {
-    const path = `${conn}.SubnetMask`;
+    const path = `${conn}.${leaf}`;
     try {
       const first = await client.setParameterValues(deviceId, [
-        [path, wanMask, 'xsd:string'],
+        [path, value, 'xsd:string'],
       ]);
       if (first.status !== 200 && first.status !== 202) {
-        return `máscara WAN status ${first.status}`;
+        return `${label} WAN status ${first.status}`;
       }
 
       // Solo podemos verificar al momento si la escritura fue síncrona.
       if (first.status === 202) {
-        return `máscara ${wanMask} encolada`;
+        return `${label} ${value} encolado`;
       }
 
       try {
@@ -1852,18 +2035,18 @@ export class OnuTr069ConfigService {
       const rows = await client.findDevices({ _id: deviceId });
       const device = rows[0];
       const got = device ? strVal(genieGet(device, path)) : null;
-      if (got && got === wanMask) {
-        return `máscara ${wanMask}`;
+      if (got && got === value) {
+        return `${label} ${value}`;
       }
 
       const retry = await client.setParameterValues(deviceId, [
-        [path, wanMask, 'xsd:string'],
+        [path, value, 'xsd:string'],
       ]);
       return retry.status === 200
-        ? `máscara ${wanMask} (reintento; antes=${got || 'vacía'})`
-        : `máscara reintento status ${retry.status} (antes=${got || 'vacía'})`;
+        ? `${label} ${value} (reintento; antes=${got || 'vacío'})`
+        : `${label} reintento status ${retry.status} (antes=${got || 'vacío'})`;
     } catch (e) {
-      return `máscara WAN: ${e instanceof Error ? e.message : String(e)}`;
+      return `${label} WAN: ${e instanceof Error ? e.message : String(e)}`;
     }
   }
 

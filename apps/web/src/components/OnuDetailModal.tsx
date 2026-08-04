@@ -603,6 +603,12 @@ export function OnuDetailModal({
         status: 'pending',
       },
       {
+        id: 'wake',
+        label:
+          'Despertando ONU (credenciales ACS + reintentos hasta connection_request)',
+        status: 'pending',
+      },
+      {
         id: 'verify',
         label: 'Arrancando chequeo silencioso (15 min)',
         status: 'pending',
@@ -630,6 +636,26 @@ export function OnuDetailModal({
           { method: 'POST', body: JSON.stringify(body) },
         )
         return r.message || 'ONU OK'
+      },
+      wake: async () => {
+        // Hasta ~2,5 min: credenciales → kick → probe, y reempuja WAN al despertar.
+        // Si no despierta, no abortamos: el chequeo silencioso sigue intentando.
+        const r = await apiFetch<{
+          ok: boolean
+          awake?: boolean
+          ours?: boolean
+          attempts?: number
+          username?: string | null
+          message?: string
+          notes?: string[]
+        }>(`/app/onus/${onuDbId}/tr069/wake`, { method: 'POST' })
+        if (!r.ok) {
+          return (
+            (r.message || 'ONU aún no despierta') +
+            ' · el chequeo silencioso seguirá'
+          )
+        }
+        return r.message || 'ONU despierta'
       },
       verify: async () => {
         const r = await apiFetch<{ message?: string }>(
@@ -677,7 +703,13 @@ export function OnuDetailModal({
     const steps: ProgressStep[] = [
       {
         id: 'run',
-        label: 'Consultando router del gateway y ACS',
+        label:
+          'Credenciales ACS primero, luego router/WAN/DNS (hasta 3 intentos)',
+        status: 'pending',
+      },
+      {
+        id: 'connreq',
+        label: 'Credenciales de petición de conexión (nuestras)',
         status: 'pending',
       },
       {
@@ -686,13 +718,13 @@ export function OnuDetailModal({
         status: 'pending',
       },
       {
-        id: 'connreq',
-        label: 'Credenciales de petición de conexión',
+        id: 'wan',
+        label: 'WAN TR-069 (IP, máscara, gateway, VLAN y NAT)',
         status: 'pending',
       },
       {
-        id: 'wan',
-        label: 'WAN TR-069 (IP, máscara, VLAN, NAT)',
+        id: 'dns',
+        label: 'DNS de la WAN',
         status: 'pending',
       },
       {
@@ -749,6 +781,12 @@ export function OnuDetailModal({
         const c = checkOf('wan')
         if (!c?.ok) throw new Error(c?.message || 'WAN falló')
         return c.message || 'WAN OK'
+      },
+      dns: async () => {
+        await pause(350)
+        const c = checkOf('dns')
+        if (!c?.ok) throw new Error(c?.message || 'DNS no aplicado')
+        return c.message || 'DNS OK'
       },
       traffic: async () => {
         await pause(350)

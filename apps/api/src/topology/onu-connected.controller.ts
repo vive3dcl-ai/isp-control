@@ -436,8 +436,24 @@ export class OnuConnectedController {
   }
 
   /**
+   * Resync forzado: insiste en despertar la ONU (credenciales nuestras + kick
+   * con las heredadas) y reempujar WAN cuando el ACS ya puede hablar con ella.
+   */
+  @Post(':id/tr069/wake')
+  @TenantRoles(...FIELD_INSTALL_ROLES)
+  async wakeTr069(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    const schema = user.schemaName;
+    if (!schema) throw new BadRequestException('Sin esquema de empresa');
+    const result = await this.tr069Config.wakeForTr069(schema, id);
+    return result;
+  }
+
+  /**
    * Check ONU: corre ya las mismas pruebas que el verificador automático
-   * (ARP, connreq, WAN, tráfico) y actualiza el indicador.
+   * (ARP, connreq, WAN, DNS, tráfico) y actualiza el indicador.
    */
   @Post(':id/verify/run')
   @TenantRoles(...FIELD_INSTALL_ROLES)
