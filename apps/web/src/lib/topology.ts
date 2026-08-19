@@ -434,6 +434,7 @@ export interface TopologyDevice {
   subtype?: string | null
   note: string
   isActive: boolean
+  technicianMode?: boolean
   mgmtHost?: string | null
   mgmtPort?: number | null
   mgmtUsername?: string | null

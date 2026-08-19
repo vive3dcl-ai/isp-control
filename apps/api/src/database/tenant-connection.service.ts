@@ -24,6 +24,7 @@ import { OnuMetricSample } from '../topology/shared/entities/onu-metric-sample.e
 import { OnuDenied } from '../topology/shared/entities/onu-denied.entity';
 import { OnuAcsDriver } from '../topology/shared/entities/onu-acs-driver.entity';
 import { OnuFirmwareImage } from '../topology/shared/entities/onu-firmware-image.entity';
+import { OltConfigSnapshot } from '../topology/shared/entities/olt-config-snapshot.entity';
 import { DeviceAuditEvent } from '../topology/shared/entities/device-audit-event.entity';
 import { NetworkAlarm } from '../topology/shared/entities/network-alarm.entity';
 import { OnuOrphanSighting } from '../topology/shared/entities/onu-orphan-sighting.entity';
@@ -396,6 +397,22 @@ const TOPOLOGY_ALTER = (schema: string) => `
     ADD COLUMN IF NOT EXISTS "internet_egress_port_name" varchar(80) NULL;
   ALTER TABLE "${schema}"."network_devices"
     ADD COLUMN IF NOT EXISTS "internet_egress_vlan_id" int NULL;
+  ALTER TABLE "${schema}"."network_devices"
+    ADD COLUMN IF NOT EXISTS "technician_mode" boolean NOT NULL DEFAULT false;
+
+  CREATE TABLE IF NOT EXISTS "${schema}"."olt_config_snapshots" (
+    "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    "olt_id" uuid NOT NULL REFERENCES "${schema}"."network_devices"("id") ON DELETE CASCADE,
+    "source" varchar(16) NOT NULL,
+    "byte_size" int NOT NULL DEFAULT 0,
+    "sha256" varchar(64) NOT NULL DEFAULT '',
+    "complete" boolean NOT NULL DEFAULT false,
+    "file_name" varchar(255) NOT NULL,
+    "note" text NULL,
+    "created_at" TIMESTAMPTZ NOT NULL DEFAULT now()
+  );
+  CREATE INDEX IF NOT EXISTS "idx_olt_config_snapshots_olt_time"
+    ON "${schema}"."olt_config_snapshots" ("olt_id", "created_at" DESC);
 
   CREATE TABLE IF NOT EXISTS "${schema}"."device_metric_samples" (
     "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1059,7 +1076,7 @@ const TOPOLOGY_ALTER = (schema: string) => `
 `;
 
 /** Bump when tenant DDL adds new tables/columns so existing processes re-apply. */
-const TENANT_SCHEMA_VERSION = 55;
+const TENANT_SCHEMA_VERSION = 56;
 
 @Injectable()
 export class TenantConnectionService implements OnModuleDestroy {
@@ -1117,6 +1134,7 @@ export class TenantConnectionService implements OnModuleDestroy {
         OnuDenied,
         OnuAcsDriver,
         OnuFirmwareImage,
+        OltConfigSnapshot,
         DeviceAuditEvent,
         NetworkAlarm,
         OnuOrphanSighting,
@@ -1323,6 +1341,14 @@ export class TenantConnectionService implements OnModuleDestroy {
     await this.ensureTenantSchema(schemaName);
     const ds = await this.getDataSource(schemaName);
     return ds.getRepository(OnuFirmwareImage);
+  }
+
+  async getOltConfigSnapshotRepository(
+    schemaName: string,
+  ): Promise<Repository<OltConfigSnapshot>> {
+    await this.ensureTenantSchema(schemaName);
+    const ds = await this.getDataSource(schemaName);
+    return ds.getRepository(OltConfigSnapshot);
   }
 
   async getOnuDeniedRepository(

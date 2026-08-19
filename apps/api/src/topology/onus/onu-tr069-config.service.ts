@@ -33,6 +33,7 @@ import {
   isHuaweiOltDevice,
   isManagedOltDevice,
 } from '../olts/olt.constants';
+import { shouldSkipOltHealWrites } from '../olts/olt-config-backup.util';
 import { stripHuaweiDialectTag } from '../../drivers/olt/huawei/huawei-olt-firmware.util';
 import { oltIfFromOnuIf } from '../../drivers/olt/zte/shared/zte-olt-onu.util';
 import {
@@ -2215,6 +2216,8 @@ export class OnuTr069ConfigService {
         healed: false,
       };
     }
+    const heal =
+      opts?.heal === true && !shouldSkipOltHealWrites(olt.technicianMode);
     const protocol: 'telnet' | 'ssh' =
       olt.mgmtProtocol === 'ssh' ? 'ssh' : 'telnet';
     const conn = {
@@ -2242,13 +2245,15 @@ export class OnuTr069ConfigService {
         healed: false,
       };
     }
-    if (!opts?.heal) {
+    if (!heal) {
       return {
         ok: false,
         matched: false,
         expected: expected.upProfile,
         actual,
-        message: `T-CONT 1 ${actual ?? '—'} ≠ ${expected.upProfile}`,
+        message: shouldSkipOltHealWrites(olt.technicianMode)
+          ? 'Técnico en OLT: no se escribe T-CONT'
+          : `T-CONT 1 ${actual ?? '—'} ≠ ${expected.upProfile}`,
         healed: false,
       };
     }

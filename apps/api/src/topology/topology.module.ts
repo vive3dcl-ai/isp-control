@@ -19,6 +19,9 @@ import { OnuMetricsPollService } from './onus/onu-metrics-poll.service';
 import { OnuPostProvisionVerifyService } from './onus/onu-post-provision-verify.service';
 import { OnuPostProvisionVerifyPollService } from './onus/onu-post-provision-verify-poll.service';
 import { OltInventoryPollService } from './olts/olt-inventory-poll.service';
+import { OltConfigBackupService } from './olts/olt-config-backup.service';
+import { OltConfigBackupPollService } from './olts/olt-config-backup-poll.service';
+import { OltConfigBackupController } from './olts/olt-config-backup.controller';
 import { VpnService } from './vpn.service';
 import { VpnController, VpnPublicController } from './vpn.controller';
 import { VpnAdminController } from './vpn.admin.controller';
@@ -74,6 +77,7 @@ import { SupportModule } from '../support/support.module';
     OnuCatalogAdminController,
     OnuConnectedController,
     OnuFirmwareController,
+    OltConfigBackupController,
     OnuMigrationController,
     IpPoolController,
     ServiceVlanController,
@@ -96,6 +100,8 @@ import { SupportModule } from '../support/support.module';
     OnuPostProvisionVerifyService,
     OnuPostProvisionVerifyPollService,
     OltInventoryPollService,
+    OltConfigBackupService,
+    OltConfigBackupPollService,
     VpnService,
     Tr069Service,
     OnuCatalogAdminService,

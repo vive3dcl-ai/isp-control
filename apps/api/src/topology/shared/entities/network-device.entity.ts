@@ -61,6 +61,13 @@ export class NetworkDevice {
   @Column({ name: 'is_active', type: 'boolean', default: true })
   isActive: boolean;
 
+  /**
+   * Technician on this OLT: poller must not write T-CONT / uplink WAN VLAN.
+   * Independent of isActive (which hides the box from the dashboard).
+   */
+  @Column({ name: 'technician_mode', type: 'boolean', default: false })
+  technicianMode: boolean;
+
   // —— Management connection ——
   @Column({ name: 'mgmt_host', type: 'varchar', length: 255, nullable: true })
   mgmtHost: string | null;

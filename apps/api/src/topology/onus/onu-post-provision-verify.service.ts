@@ -1,5 +1,6 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { TenantConnectionService } from '../../database/tenant-connection.service';
+import { shouldSkipOltHealWrites } from '../olts/olt-config-backup.util';
 import type { Onu } from '../shared/entities/onu.entity';
 import type { NetworkDevice } from '../shared/entities/network-device.entity';
 import {
@@ -403,8 +404,20 @@ export class OnuPostProvisionVerifyService {
     const verifyChecks = resolveVerifyChecks(verifyDriver);
     const needs = (id: OnuVerifyCheckId) => verifyChecks[id] !== 'skip';
 
+    let technicianMode = false;
+    if (onu.oltId) {
+      const deviceRepo =
+        await this.tenantConnections.getNetworkDeviceRepository(schema);
+      const olt = await deviceRepo.findOne({
+        where: { id: onu.oltId },
+        select: ['id', 'technicianMode'],
+      });
+      technicianMode = shouldSkipOltHealWrites(olt?.technicianMode);
+    }
     const canHeal =
-      opts.allowHeal !== false && attempt <= VERIFY_HEAL_MAX_ATTEMPTS;
+      opts.allowHeal !== false &&
+      attempt <= VERIFY_HEAL_MAX_ATTEMPTS &&
+      !technicianMode;
 
     try {
       const dba = await this.tr069.syncInternetDba(schema, onuId, {

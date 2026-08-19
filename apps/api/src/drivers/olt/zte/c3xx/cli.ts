@@ -5261,6 +5261,21 @@ export class ZteC3xxOltClient {
     return buf;
   }
 
+  /** Full `show running-config` for backup (may be truncated; caller checks completeness). */
+  async dumpRunningConfig(params: {
+    host: string;
+    port: number;
+    protocol: 'telnet' | 'ssh';
+    username: string;
+    password: string;
+    priority?: 'interactive' | 'background';
+  }): Promise<string> {
+    return this.runConfigWrite(params, async (send, read) => {
+      await send('show running-config');
+      return read(120_000);
+    });
+  }
+
   /** Leave config modes, then persist. Avoids Invalid command for `write` in submodes. */
   private async persistRunningConfig(
     send: (line: string) => Promise<void>,

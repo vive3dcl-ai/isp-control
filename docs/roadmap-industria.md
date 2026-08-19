@@ -123,13 +123,11 @@ Hecho: pestaña Firmware junto a Huérfanas; archivo en disco + registro GenieAC
 
 ---
 
-## Etapa 8 — Backup OLT y modo mantenimiento
+## Etapa 8 — Backup OLT y modo mantenimiento — **Cumplido**
 
-- Backup periódico de running-config (archivo, no pisar postgres a lo loco).
-- Diff antes/después de un cambio masivo.
-- “Técnico en OLT”: el poller no escribe T-CONT/WAN en esa caja.
+Backup por OLT y por tenant (archivo en disco, no Postgres). Diff entre copias. “Técnico en OLT” para que el poller no escriba T-CONT/WAN.
 
-Hecho: se restaura un C320 de backup de ayer; el poller no pelea con una sesión CLI humana.
+Hecho: pestaña Respaldo en la ficha OLT; dump diario + manual; restore operativo (descargar .cfg y aplicar en CLI con modo técnico ON).
 
 ---
 

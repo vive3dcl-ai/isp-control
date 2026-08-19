@@ -120,6 +120,7 @@ services:
       WEB_PUSH_VAPID_PRIVATE_KEY: ${WEB_PUSH_VAPID_PRIVATE_KEY:-}
       WEB_PUSH_SUBJECT: ${WEB_PUSH_SUBJECT:-mailto:soporte@tudominio.com}
       FIRMWARE_DIR: /data/firmware
+      OLT_BACKUP_DIR: /data/olt-backups
     ports:
       - "127.0.0.1:${API_PORT}:3000"
     healthcheck:
@@ -135,6 +136,7 @@ services:
     volumes:
       - vpn_runtime_data:/vpn-runtime:ro
       - firmware_data:/data/firmware
+      - olt_backup_data:/data/olt-backups
     depends_on:
       postgres:
         condition: service_healthy
@@ -327,3 +329,5 @@ volumes:
     name: isp-control_vpn_runtime
   firmware_data:
     name: isp-control_firmware
+  olt_backup_data:
+    name: isp-control_olt_backups

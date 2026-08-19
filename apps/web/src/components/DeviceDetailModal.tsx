@@ -37,6 +37,7 @@ import { OltPonPortsPanel } from './OltPonPortsPanel'
 import { OltUplinksPanel } from './OltUplinksPanel'
 import { OltVlansPanel } from './OltVlansPanel'
 import { OltSpeedProfilesPanel } from './OltSpeedProfilesPanel'
+import { OltConfigBackupPanel } from './OltConfigBackupPanel'
 import { SwitchBridgeVlansPanel } from './SwitchBridgeVlansPanel'
 import { OnuImportModal } from './OnuImportModal'
 import { useNotify } from './NotifyProvider'
@@ -71,6 +72,7 @@ type TabId =
   | 'uplinks'
   | 'vlans'
   | 'speed_profiles'
+  | 'backup'
 
 export function DeviceDetailModal({
   open,
@@ -535,6 +537,20 @@ export function DeviceDetailModal({
                   ].join(' ')}
                 >
                   Perfiles de velocidad
+                </button>
+              )}
+              {isManagedOlt && (
+                <button
+                  type="button"
+                  onClick={() => setTab('backup')}
+                  className={[
+                    'shrink-0 border-b-2 px-2.5 py-2.5 text-xs whitespace-nowrap transition sm:px-3 sm:text-sm',
+                    tab === 'backup'
+                      ? 'border-[var(--accent)] text-[var(--accent)]'
+                      : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text)]',
+                  ].join(' ')}
+                >
+                  Respaldo
                 </button>
               )}
             </div>
@@ -1677,6 +1693,13 @@ export function DeviceDetailModal({
             )}
             {device && tab === 'speed_profiles' && isManagedOlt && deviceId && (
               <OltSpeedProfilesPanel deviceId={deviceId} canWrite={canWrite} />
+            )}
+            {device && tab === 'backup' && isManagedOlt && deviceId && (
+              <OltConfigBackupPanel
+                deviceId={deviceId}
+                canWrite={canWrite}
+                technicianMode={!!device.technicianMode}
+              />
             )}
           </div>
         </div>

@@ -420,6 +420,9 @@ export class TopologyService {
     }
     if (dto.note !== undefined) device.note = dto.note.trim();
     if (dto.isActive !== undefined) device.isActive = dto.isActive;
+    if (dto.technicianMode !== undefined) {
+      device.technicianMode = dto.technicianMode;
+    }
 
     await devices.save(device);
     return this.getDeviceDetail(user, id);

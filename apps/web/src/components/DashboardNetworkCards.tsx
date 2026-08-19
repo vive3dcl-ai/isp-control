@@ -250,6 +250,7 @@ export function OltDeviceCard({
             {board ?? family}
             {device.mgmtHost ? ` · ${device.mgmtHost}` : ''}
             {` · ${mode}`}
+            {device.technicianMode ? ' · Técnico' : ''}
           </p>
         </div>
         <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs sm:grid-cols-4">

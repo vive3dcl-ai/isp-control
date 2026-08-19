@@ -835,6 +835,18 @@ export class HuaweiOltClient {
     };
   }
 
+  /** Full `display current-configuration` for backup (may paginate/truncate). */
+  async dumpRunningConfig(
+    params: CliParams & { priority?: 'interactive' | 'background' },
+  ): Promise<string> {
+    return this.run(params, false, async (io) => {
+      await io.send('screen-length 0 temporary').catch(() => undefined);
+      await io.read(8_000).catch(() => '');
+      await io.send('display current-configuration');
+      return io.read(180_000);
+    });
+  }
+
   async getRogueDetect(params: CliParams) {
     try {
       return await this.run(params, false, async (io) => {

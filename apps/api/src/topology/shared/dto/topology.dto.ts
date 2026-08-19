@@ -82,6 +82,10 @@ export class UpdateNetworkDeviceDto {
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  technicianMode?: boolean;
 }
 
 export class UpdateDeviceConnectionDto {
