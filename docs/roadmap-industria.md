@@ -63,9 +63,7 @@ Hecho: un reboot OMCI no cambia la IP de internet; un sync ACS no borra el T-CON
 
 ---
 
-## Etapa 3 — Velocidad SmartOLT (OLT, no router)
-
-Ya existen perfiles y sync. Falta **aplicarlos a la ONU**.
+## Etapa 3 — Velocidad SmartOLT (OLT, no router) — **Cumplido (ZTE)**
 
 | Paso | Qué |
 |------|-----|
@@ -77,6 +75,8 @@ Ya existen perfiles y sync. Falta **aplicarlos a la ONU**.
 Hecho: un plan “100/50” en CRM se ve en `show gpon onu tcont` / traffic de esa ONU; el MikroTik no tiene queues por abonado residencial.
 
 Fuera de alcance: moldeo en router (queda para mayorista/BNG opcional, etapa 9).
+3.4 Huawei MA queda pendiente. El T-CONT de internet en ZTE usa el perfil del plan; el revisor silencioso unifica Resync y no re-chequear `ok`.
+
 
 ---
 

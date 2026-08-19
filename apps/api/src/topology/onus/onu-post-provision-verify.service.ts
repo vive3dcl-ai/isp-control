@@ -32,6 +32,10 @@ import {
 import { assessServiceRoute } from '../../drivers/onu/models/generic-zte/route';
 import { resolveServiceWanForVerify } from '../../drivers/onu/infra/resolve-service-wan-for-verify';
 import { OnuTr069ConfigService } from './onu-tr069-config.service';
+import {
+  needsMigratedHealthBackfill,
+  shouldSkipHealthPass,
+} from '../../drivers/olt/zte/shared/zte-olt-dba.util';
 import { ServiceVlanService } from '../olts/service-vlan.service';
 import {
   resolveAcsModelFromDevice,
@@ -187,16 +191,18 @@ export class OnuPostProvisionVerifyService {
   ): Promise<Array<{ schema: string; id: string; sn: string | null }>> {
     const onuRepo = await this.tenantConnections.getOnuRepository(schema);
     const candidates = await onuRepo.find({
-      where: { verifyStatus: 'test' },
-      select: ['id', 'sn', 'verifyStatus', 'verifyCheckedAt'],
+      where: [{ verifyStatus: 'test' }],
+      select: ['id', 'sn', 'verifyStatus', 'verifyCheckedAt', 'verifyAttempt'],
     });
     return candidates
-      .filter((onu) =>
-        shouldRunVerifyTick({
-          status: onu.verifyStatus,
+      .filter((onu) => {
+        const st = onu.verifyStatus ?? 'idle';
+        if (st === 'ok' || st === 'fail' || st === 'check') return false;
+        return shouldRunVerifyTick({
+          status: 'test',
           checkedAt: onu.verifyCheckedAt,
-        }),
-      )
+        });
+      })
       .map((onu) => ({ schema, id: onu.id, sn: onu.sn }));
   }
 
@@ -225,14 +231,35 @@ export class OnuPostProvisionVerifyService {
     });
   }
 
-  async runOne(schema: string, onuId: string): Promise<Onu> {
+  /**
+   * Un pipeline de salud (resync = revisor). force=false salta ok/check/fail.
+   */
+  async runOnuHealthPass(
+    schema: string,
+    onuId: string,
+    opts?: { force?: boolean },
+  ): Promise<Onu> {
+    const force = !!opts?.force;
     return this.withOnuVerifyLock(schema, onuId, async () => {
       const onuRepo = await this.tenantConnections.getOnuRepository(schema);
       const onu = await onuRepo.findOne({ where: { id: onuId } });
       if (!onu) throw new NotFoundException('ONU not found');
-      if (onu.verifyStatus !== 'test') return onu;
-      return this.executeCheck(schema, onuId, { manual: false });
+      if (shouldSkipHealthPass(onu.verifyStatus, force)) return onu;
+      if (!force && (onu.verifyStatus === 'fail' || onu.verifyStatus === 'check')) {
+        return onu;
+      }
+      if (onu.verifyStatus !== 'test') {
+        onu.verifyStatus = 'test';
+        onu.verifyStartedAt = onu.verifyStartedAt ?? new Date();
+        if (force) onu.verifyAttempt = 0;
+        await onuRepo.save(onu);
+      }
+      return this.executeCheck(schema, onuId, { manual: force });
     });
+  }
+
+  async runOne(schema: string, onuId: string): Promise<Onu> {
+    return this.runOnuHealthPass(schema, onuId, { force: false });
   }
 
   /**
@@ -287,6 +314,50 @@ export class OnuPostProvisionVerifyService {
     });
   }
 
+  async countMigratedHealthPending(schema: string): Promise<number> {
+    const onuRepo = await this.tenantConnections.getOnuRepository(schema);
+    const rows = await onuRepo.find({
+      select: ['id', 'migratedAt', 'verifyStatus', 'verifyCheckedAt'],
+    });
+    return rows.filter((o) =>
+      needsMigratedHealthBackfill({
+        migratedAt: o.migratedAt,
+        verifyStatus: o.verifyStatus,
+        verifyCheckedAt: o.verifyCheckedAt,
+      }),
+    ).length;
+  }
+
+  /** Encola un pass de salud para ONUs migradas pendientes (Recheck all). */
+  async recheckMigrated(schema: string): Promise<{ queued: number }> {
+    const onuRepo = await this.tenantConnections.getOnuRepository(schema);
+    const rows = await onuRepo.find();
+    const pending = rows.filter((o) =>
+      needsMigratedHealthBackfill({
+        migratedAt: o.migratedAt,
+        verifyStatus: o.verifyStatus,
+        verifyCheckedAt: o.verifyCheckedAt,
+      }),
+    );
+    for (const o of pending) {
+      o.verifyStatus = 'idle';
+      o.verifyAttempt = 0;
+    }
+    if (pending.length) await onuRepo.save(pending);
+    await mapWithConcurrency(pending, 2, async (o) => {
+      try {
+        await this.runOnuHealthPass(schema, o.id, { force: true });
+      } catch (err) {
+        this.logger.warn(
+          `recheckMigrated ${o.sn ?? o.id}: ${
+            err instanceof Error ? err.message : err
+          }`,
+        );
+      }
+    });
+    return { queued: pending.length };
+  }
+
   private async executeCheck(
     schema: string,
     onuId: string,
@@ -315,7 +386,29 @@ export class OnuPostProvisionVerifyService {
     const verifyChecks = resolveVerifyChecks(verifyDriver);
     const needs = (id: OnuVerifyCheckId) => verifyChecks[id] !== 'skip';
 
-    if (!onu.wanIp?.trim()) {
+    const canHeal =
+      opts.allowHeal !== false && attempt <= VERIFY_HEAL_MAX_ATTEMPTS;
+
+    try {
+      const dba = await this.tr069.syncInternetDba(schema, onuId, {
+        heal: canHeal,
+      });
+      detail.plan = {
+        ok: dba.matched,
+        message: dba.message,
+      };
+      if (dba.healed) healed.push(dba.message);
+    } catch (err) {
+      detail.plan = {
+        ok: false,
+        message: err instanceof Error ? err.message : String(err),
+      };
+    }
+    const skipAcs = detail.plan?.ok === false;
+
+    if (skipAcs) {
+      /* DBA del plan no cuadra: no tocar ACS/OMCI WAN en esta visita. */
+    } else if (!onu.wanIp?.trim()) {
       if (needs('arp')) detail.arp = { ok: false, message: 'sin IP WAN asignada' };
       if (needs('wan')) detail.wan = { ok: false, message: 'sin IP WAN asignada' };
       if (needs('dns')) detail.dns = { ok: false, message: 'sin IP WAN' };
@@ -332,9 +425,6 @@ export class OnuPostProvisionVerifyService {
       const wanPool = onu.wanPoolId
         ? await poolRepo.findOne({ where: { id: onu.wanPoolId } })
         : null;
-
-      const canHeal =
-        opts.allowHeal !== false && attempt <= VERIFY_HEAL_MAX_ATTEMPTS;
 
       // Paso 0: credenciales nuestras ANTES de mirar WAN/DNS. Sin ellas el ACS
       // recibe 401 y cualquier curación de WAN se queda en cola.
@@ -560,12 +650,15 @@ export class OnuPostProvisionVerifyService {
       windowExpired: rawWindowExpired,
       healingApplied: healed.length > 0,
     });
-    const next = decideVerifyOutcome({
-      detail,
-      windowExpired,
-      irrecoverable,
-      checks: verifyChecks,
-    });
+    const next = skipAcs
+      ? 'check'
+      : decideVerifyOutcome({
+          detail,
+          windowExpired,
+          irrecoverable,
+          checks: verifyChecks,
+          planOk: detail.plan ? detail.plan.ok : null,
+        });
 
     onu = (await onuRepo.findOne({ where: { id: onuId } }))!;
     // No degradar un ok reciente: ticks concurrentes (Check ONU × N) o un

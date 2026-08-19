@@ -15,6 +15,54 @@ const PAGE_SIZE = 50
 const selectClass =
   'rounded-lg border border-[var(--border)] bg-[var(--bg)] px-2 py-1.5 text-sm outline-none ring-[var(--accent)] focus:ring-2'
 
+function HealthBadge({ onu }: { onu: ConnectedOnu }) {
+  const st = onu.verifyStatus ?? 'idle'
+  const title =
+    typeof onu.verifyDetail?.plan === 'object' &&
+    onu.verifyDetail?.plan &&
+    'message' in (onu.verifyDetail.plan as object)
+      ? String((onu.verifyDetail.plan as { message?: string }).message ?? '')
+      : undefined
+  if (st === 'ok') {
+    return (
+      <span
+        className="rounded bg-emerald-500/20 px-1.5 py-0.5 text-xs font-medium text-emerald-400"
+        title={title || 'Perfiles y provision OK'}
+      >
+        OK
+      </span>
+    )
+  }
+  if (st === 'check') {
+    return (
+      <span
+        className="rounded bg-amber-500/20 px-1.5 py-0.5 text-xs font-medium text-amber-400"
+        title={title || 'Revisar plan / DBA'}
+      >
+        CHECK
+      </span>
+    )
+  }
+  if (st === 'fail') {
+    return (
+      <span
+        className="rounded bg-red-500/20 px-1.5 py-0.5 text-xs font-medium text-red-400"
+        title={title || 'Fallo de provision / WAN'}
+      >
+        FAIL
+      </span>
+    )
+  }
+  if (st === 'test') {
+    return (
+      <span className="text-xs text-[var(--text-muted)]" title="Chequeo en curso">
+        …
+      </span>
+    )
+  }
+  return <span className="text-[var(--text-muted)]">—</span>
+}
+
 function StatusIcon({ onu }: { onu: ConnectedOnu }) {
   if (onu.online) {
     return (
@@ -144,6 +192,30 @@ export function OnuConnectedPanel({
     queryFn: () => apiFetch<ConnectedOnusResponse>('/app/onus'),
     staleTime: 20_000,
     refetchInterval: 60_000,
+  })
+
+  const recheckPendingQuery = useQuery({
+    queryKey: ['app', 'onus', 'recheck-migrated'],
+    queryFn: () =>
+      apiFetch<{ pending: number; show: boolean }>(
+        '/app/onus/verify/recheck-migrated/pending',
+      ),
+    staleTime: 15_000,
+    enabled: canWrite,
+  })
+
+  const recheckMutation = useMutation({
+    mutationFn: () =>
+      apiFetch<{ queued: number; message?: string }>(
+        '/app/onus/verify/recheck-migrated',
+        { method: 'POST' },
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['app', 'onus'] })
+      void queryClient.invalidateQueries({
+        queryKey: ['app', 'onus', 'recheck-migrated'],
+      })
+    },
   })
 
   const syncMutation = useMutation({
@@ -507,6 +579,17 @@ export function OnuConnectedPanel({
         >
           {listQuery.isFetching ? 'Cargando…' : 'Refrescar'}
         </button>
+        {canWrite && recheckPendingQuery.data?.show ? (
+          <button
+            type="button"
+            disabled={recheckMutation.isPending}
+            onClick={() => void recheckMutation.mutateAsync()}
+            className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--bg)] disabled:opacity-60"
+            title="Pasa el checker una vez por las ONUs migradas pendientes"
+          >
+            {recheckMutation.isPending ? 'Recheck…' : 'Recheck all'}
+          </button>
+        ) : null}
         {canWrite && (
           <button
             type="button"
@@ -590,7 +673,7 @@ export function OnuConnectedPanel({
               <th className="px-2 py-2 font-medium">Señal</th>
               <th className="px-2 py-2 font-medium">B/R</th>
               <th className="px-2 py-2 font-medium">VLAN</th>
-              <th className="px-2 py-2 font-medium">VoIP</th>
+              <th className="px-2 py-2 font-medium">Salud</th>
               <th className="px-2 py-2 font-medium">TV</th>
               <th className="px-2 py-2 font-medium">Tipo</th>
               <th className="px-2 py-2 font-medium">Auth</th>
@@ -676,7 +759,7 @@ export function OnuConnectedPanel({
                 </td>
                 <td className="px-2 py-2">{o.vlan ?? '—'}</td>
                 <td className="px-2 py-2 text-[var(--text-muted)]">
-                  {o.voip ?? '—'}
+                  <HealthBadge onu={o} />
                 </td>
                 <td className="px-2 py-2 text-[var(--text-muted)]">
                   {o.tv ?? '—'}

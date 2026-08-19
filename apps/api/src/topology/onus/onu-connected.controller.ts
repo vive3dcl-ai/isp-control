@@ -441,6 +441,31 @@ export class OnuConnectedController {
    * Arranca (o reinicia) el chequeo silencioso post-aprovisionamiento.
    * Lo usa Resync tras reaplicar OLT/assign/apply.
    */
+  @Get('verify/recheck-migrated/pending')
+  @TenantRoles(...FIELD_INSTALL_ROLES)
+  async migratedHealthPending(@CurrentUser() user: AuthUser) {
+    const schema = user.schemaName;
+    if (!schema) throw new BadRequestException('Sin esquema de empresa');
+    const pending = await this.verify.countMigratedHealthPending(schema);
+    return { pending, show: pending > 0 };
+  }
+
+  @Post('verify/recheck-migrated')
+  @TenantRoles(...FIELD_INSTALL_ROLES)
+  async recheckMigrated(@CurrentUser() user: AuthUser) {
+    const schema = user.schemaName;
+    if (!schema) throw new BadRequestException('Sin esquema de empresa');
+    const result = await this.verify.recheckMigrated(schema);
+    return {
+      ok: true,
+      queued: result.queued,
+      message:
+        result.queued === 0
+          ? 'No hay ONUs migradas pendientes de recheck'
+          : `Recheck encolado para ${result.queued} ONU(s) migradas`,
+    };
+  }
+
   @Post(':id/verify/start')
   @TenantRoles(...FIELD_INSTALL_ROLES)
   async startPostProvisionVerify(

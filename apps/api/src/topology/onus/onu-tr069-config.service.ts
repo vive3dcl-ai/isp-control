@@ -8,7 +8,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { In } from 'typeorm';
+import { In, Not } from 'typeorm';
 import type { AuthUser } from '../../auth/auth.types';
 import { TenantConnectionService } from '../../database/tenant-connection.service';
 import {
@@ -32,6 +32,12 @@ import {
 } from '../olts/olt.constants';
 import { stripHuaweiDialectTag } from '../../drivers/olt/huawei/huawei-olt-firmware.util';
 import { oltIfFromOnuIf } from '../../drivers/olt/zte/shared/zte-olt-onu.util';
+import {
+  expectedInternetTcontUp,
+  expectedInternetTrafficDown,
+  internetTcontProfileOf,
+  tcontProfileMatches,
+} from '../../drivers/olt/zte/shared/zte-olt-dba.util';
 import {
   addLanPort,
   boundEthPortsFromWan,
@@ -2089,11 +2095,13 @@ export class OnuTr069ConfigService {
       return { ok: true, message: 'OLT: sin cambios de VLAN' };
     }
 
+    const dba = await this.resolveInternetDba(schema, onu.id);
     const result = await this.oltCli(olt).applyOnuServiceVlans({
       ...conn,
       onuIf: onu.onuIf,
       wanVlan,
       mgmtVlan,
+      internetTcontProfile: dba?.upProfile ?? null,
       subtypeHint: olt.subtype,
       firmwareHint: oltFirmwareHint(olt),
     });
@@ -2103,6 +2111,169 @@ export class OnuTr069ConfigService {
       );
     }
     return { ok: true, message: result.message ?? 'OLT actualizada' };
+  }
+
+  async resolveInternetDba(
+    schema: string,
+    onuId: string,
+  ): Promise<{
+    upProfile: string;
+    downProfile: string | null;
+    speedProfileName: string;
+  } | null> {
+    const svcRepo =
+      await this.tenantConnections.getClientServiceRepository(schema);
+    const svc = await svcRepo.findOne({
+      where: { onuId, status: Not('ended') },
+      relations: { servicePlan: { speedProfile: true } },
+      order: { createdAt: 'DESC' },
+    });
+    const name = svc?.servicePlan?.speedProfile?.name?.trim();
+    const up = expectedInternetTcontUp(name);
+    if (!up) return null;
+    return {
+      upProfile: up,
+      downProfile: expectedInternetTrafficDown(name),
+      speedProfileName: name!,
+    };
+  }
+
+  /**
+   * Alinea T-CONT 1 de internet con el plan CRM. Una escritura si hay mismatch.
+   */
+  async syncInternetDba(
+    schema: string,
+    onuId: string,
+    opts?: { heal?: boolean },
+  ): Promise<{
+    ok: boolean;
+    matched: boolean;
+    expected: string | null;
+    actual: string | null;
+    message: string;
+    healed: boolean;
+  }> {
+    const onuRepo = await this.tenantConnections.getOnuRepository(schema);
+    const onu = await onuRepo.findOne({ where: { id: onuId } });
+    if (!onu?.onuIf) {
+      return {
+        ok: false,
+        matched: false,
+        expected: null,
+        actual: null,
+        message: 'ONU sin interfaz OLT',
+        healed: false,
+      };
+    }
+    const expected = await this.resolveInternetDba(schema, onuId);
+    if (!expected) {
+      return {
+        ok: true,
+        matched: true,
+        expected: null,
+        actual: null,
+        message: 'sin plan/perfil de velocidad ligado',
+        healed: false,
+      };
+    }
+    const deviceRepo =
+      await this.tenantConnections.getNetworkDeviceRepository(schema);
+    const olt = await deviceRepo.findOne({ where: { id: onu.oltId } });
+    if (!olt || !isManagedOltDevice(olt.type, olt.subtype)) {
+      return {
+        ok: false,
+        matched: false,
+        expected: expected.upProfile,
+        actual: null,
+        message: 'OLT no gestionada',
+        healed: false,
+      };
+    }
+    if (!olt.mgmtHost || !olt.mgmtUsername || !olt.mgmtPassword) {
+      return {
+        ok: false,
+        matched: false,
+        expected: expected.upProfile,
+        actual: null,
+        message: 'OLT sin credenciales',
+        healed: false,
+      };
+    }
+    if (isHuaweiOltDevice(olt.type, olt.subtype)) {
+      return {
+        ok: true,
+        matched: true,
+        expected: expected.upProfile,
+        actual: null,
+        message: 'DBA Huawei MA pendiente (etapa 3.4)',
+        healed: false,
+      };
+    }
+    const protocol: 'telnet' | 'ssh' =
+      olt.mgmtProtocol === 'ssh' ? 'ssh' : 'telnet';
+    const conn = {
+      host: olt.mgmtHost,
+      port:
+        olt.mgmtPort ??
+        (protocol === 'ssh' ? DEFAULT_OLT_PORTS.ssh : DEFAULT_OLT_PORTS.telnet),
+      protocol,
+      username: olt.mgmtUsername,
+      password: olt.mgmtPassword,
+      onuIf: onu.onuIf,
+      subtypeHint: olt.subtype,
+      firmwareHint: oltFirmwareHint(olt),
+    };
+    const cli = this.oltCli(olt);
+    const read = await cli.readOnuTcontBinds(conn);
+    const actual = internetTcontProfileOf(read.tconts ?? []);
+    if (tcontProfileMatches(actual, expected.upProfile)) {
+      return {
+        ok: true,
+        matched: true,
+        expected: expected.upProfile,
+        actual,
+        message: `T-CONT 1 ${actual}`,
+        healed: false,
+      };
+    }
+    if (!opts?.heal) {
+      return {
+        ok: false,
+        matched: false,
+        expected: expected.upProfile,
+        actual,
+        message: `T-CONT 1 ${actual ?? '—'} ≠ ${expected.upProfile}`,
+        healed: false,
+      };
+    }
+    const applied = await cli.applyOnuInternetTcont({
+      ...conn,
+      upProfile: expected.upProfile,
+      downProfile: expected.downProfile,
+    });
+    if (!applied.ok) {
+      return {
+        ok: false,
+        matched: false,
+        expected: expected.upProfile,
+        actual,
+        message: applied.error || 'no se aplicó T-CONT',
+        healed: false,
+      };
+    }
+    const again = await cli.readOnuTcontBinds(conn);
+    const after = internetTcontProfileOf(again.tconts ?? []);
+    const matched = tcontProfileMatches(after, expected.upProfile);
+    return {
+      ok: matched,
+      matched,
+      expected: expected.upProfile,
+      actual: after,
+      message: matched
+        ? `T-CONT 1 curado → ${after}`
+        : `T-CONT 1 sigue ${after ?? '—'} (esperado ${expected.upProfile})`,
+      healed: true,
+    };
   }
 
   /** Step 2: assign/release IPs from pools in DB. */

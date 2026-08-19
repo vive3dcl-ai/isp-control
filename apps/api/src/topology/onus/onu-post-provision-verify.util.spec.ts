@@ -249,6 +249,16 @@ describe('criterio de pase/fallo', () => {
     ).toBe('ok');
   });
 
+  it('plan/DBA mal cuadra en check, no en fail', () => {
+    expect(
+      decideVerifyOutcome({
+        detail: good,
+        windowExpired: false,
+        planOk: false,
+      }),
+    ).toBe('check');
+  });
+
   it('falla de inmediato ante error irrecuperable', () => {
     expect(
       decideVerifyOutcome({

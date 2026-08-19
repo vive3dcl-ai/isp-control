@@ -13,6 +13,7 @@ import type { AuthUser } from '../auth/auth.types';
 import { TenantConnectionService } from '../database/tenant-connection.service';
 import { TopologyService } from '../topology/topology.service';
 import { OnuConnectedService } from '../topology/onus/onu-connected.service';
+import { OnuTr069ConfigService } from '../topology/onus/onu-tr069-config.service';
 import { SuspensionPortalService } from '../topology/suspension-portal.service';
 import { isManagedOltDevice } from '../topology/olts/olt.constants';
 import { Tenant } from '../tenants/entities/tenant.entity';
@@ -62,6 +63,7 @@ export class CrmService {
     private readonly billing: BillingService,
     private readonly inventory: InventoryService,
     private readonly onus: OnuConnectedService,
+    private readonly tr069: OnuTr069ConfigService,
     private readonly suspensionPortal: SuspensionPortalService,
     @InjectRepository(Tenant)
     private readonly tenants: Repository<Tenant>,
@@ -1156,7 +1158,29 @@ export class CrmService {
     if (dto.latitude !== undefined) service.latitude = dto.latitude;
     if (dto.longitude !== undefined) service.longitude = dto.longitude;
 
-    return repo.save(service);
+    const saved = await repo.save(service);
+    if (
+      saved.onuId &&
+      (dto.servicePlanId !== undefined || dto.onuId !== undefined)
+    ) {
+      try {
+        const dba = await this.tr069.syncInternetDba(schema, saved.onuId, {
+          heal: true,
+        });
+        const onuRepo = await this.tenantConnections.getOnuRepository(schema);
+        const onu = await onuRepo.findOne({ where: { id: saved.onuId } });
+        if (onu) {
+          onu.verifyStatus = dba.matched ? 'idle' : 'check';
+          onu.verifyAttempt = 0;
+          await onuRepo.save(onu);
+        }
+      } catch (err) {
+        this.logger.warn(
+          `DBA plan ${saved.id}: ${err instanceof Error ? err.message : err}`,
+        );
+      }
+    }
+    return saved;
   }
 
   async setServiceStatus(

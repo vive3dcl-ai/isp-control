@@ -76,7 +76,7 @@ function VerifyStatusPill({
   showIdle,
   onOpenProgress,
 }: {
-  status: 'idle' | 'test' | 'ok' | 'fail' | undefined
+  status: 'idle' | 'test' | 'ok' | 'fail' | 'check' | undefined
   detail?: Record<string, unknown>
   /** Si la ONU ya está en ACS pero nunca arrancó el chequeo. */
   showIdle?: boolean
@@ -114,6 +114,16 @@ function VerifyStatusPill({
       >
         test
       </button>
+    )
+  }
+  if (status === 'check') {
+    return (
+      <span
+        title={title || 'Revisar plan / DBA'}
+        className="rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-medium text-amber-400"
+      >
+        CHECK
+      </span>
     )
   }
   return (
@@ -598,12 +608,6 @@ export function OnuDetailModal({
 
   function startResync() {
     if (!isUuid(onuDbId) || !o) return
-    const body: {
-      mgmtVlanId?: number
-      wanVlanId?: number | null
-    } = {}
-    if (o.mgmtVlanId != null) body.mgmtVlanId = o.mgmtVlanId
-    if (o.wanVlanId != null) body.wanVlanId = o.wanVlanId
 
     const steps: ProgressStep[] = [
       {
@@ -612,29 +616,8 @@ export function OnuDetailModal({
         status: 'pending',
       },
       {
-        id: 'olt',
-        label: 'Reaplicando VLANs en la OLT (service-port)',
-        status: 'pending',
-      },
-      {
-        id: 'assign',
-        label: 'Confirmando IPs del pool (mgmt / WAN)',
-        status: 'pending',
-      },
-      {
-        id: 'apply',
-        label: 'Reaplicando a la ONU (OMCI + TR069)',
-        status: 'pending',
-      },
-      {
-        id: 'wake',
-        label:
-          'Despertando ONU (credenciales ACS + reintentos hasta connection_request)',
-        status: 'pending',
-      },
-      {
-        id: 'verify',
-        label: 'Arrancando chequeo silencioso (15 min)',
+        id: 'health',
+        label: 'Chequeo de salud (DBA del plan + WAN si aplica)',
         status: 'pending',
       },
     ]
@@ -650,53 +633,13 @@ export function OnuDetailModal({
         }>(`/app/onus/${onuDbId}/model/sync-acs`, { method: 'POST' })
         return r.message || 'Modelo ACS OK'
       },
-      olt: async () => {
-        const r = await apiFetch<{ message?: string }>(
-          `/app/onus/${onuDbId}/network-vlans/olt`,
-          { method: 'POST', body: JSON.stringify(body) },
-        )
-        return r.message || 'OLT OK'
-      },
-      assign: async () => {
-        const r = await apiFetch<{ message?: string }>(
-          `/app/onus/${onuDbId}/network-vlans/assign`,
-          { method: 'POST', body: JSON.stringify(body) },
-        )
-        return r.message || 'Asignación OK'
-      },
-      apply: async () => {
-        const r = await apiFetch<{ message?: string }>(
-          `/app/onus/${onuDbId}/network-vlans/apply`,
-          { method: 'POST', body: JSON.stringify(body) },
-        )
-        return r.message || 'ONU OK'
-      },
-      wake: async () => {
-        // Hasta ~2,5 min: credenciales → kick → probe, y reempuja WAN al despertar.
-        // Si no despierta, no abortamos: el chequeo silencioso sigue intentando.
+      health: async () => {
         const r = await apiFetch<{
-          ok: boolean
-          awake?: boolean
-          ours?: boolean
-          attempts?: number
-          username?: string | null
+          ok?: boolean
+          verifyStatus?: string
           message?: string
-          notes?: string[]
-        }>(`/app/onus/${onuDbId}/tr069/wake`, { method: 'POST' })
-        if (!r.ok) {
-          return (
-            (r.message || 'ONU aún no despierta') +
-            ' · el chequeo silencioso seguirá'
-          )
-        }
-        return r.message || 'ONU despierta'
-      },
-      verify: async () => {
-        const r = await apiFetch<{ message?: string }>(
-          `/app/onus/${onuDbId}/verify/start`,
-          { method: 'POST' },
-        )
-        return r.message || 'Chequeo arrancado'
+        }>(`/app/onus/${onuDbId}/verify/run`, { method: 'POST' })
+        return r.message || `Salud ${r.verifyStatus ?? ''}`.trim()
       },
     }
 

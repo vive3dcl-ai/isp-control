@@ -96,6 +96,7 @@ import {
   parseTrafficProfiles,
   sanitizeSpeedProfileName,
 } from '../shared/zte-olt-speed.util';
+import { parseOnuTcontBinds } from '../shared/zte-olt-dba.util';
 import {
   defaultDescription,
   ethIfList,
@@ -1351,6 +1352,8 @@ export class ZteTitanOltClient {
     wanVlan?: number | null;
     /** Management VLAN → service-port 2. null = remove. undefined = leave. */
     mgmtVlan?: number | null;
+    /** T-CONT de internet (service-port 1). Default SMARTOLT-1000MB-UP. */
+    internetTcontProfile?: string | null;
     firmwareHint?: string | null;
     subtypeHint?: string | null;
   }): Promise<{ ok: boolean; error?: string; message?: string }> {
@@ -1381,6 +1384,10 @@ export class ZteTitanOltClient {
           return raw;
         };
         const notes: string[] = [`dialect=${family}`];
+        const wanTcont =
+          params.internetTcontProfile?.trim() || 'SMARTOLT-1000MB-UP';
+        const tcontFor = (sp: number) =>
+          sp === 1 ? wanTcont : 'SMARTOLT-VOIPMNG-10M';
 
         await step('configure terminal', 12_000);
 
@@ -1402,7 +1409,7 @@ export class ZteTitanOltClient {
             await step('exit', 5_000);
             return;
           }
-          await step(`tcont ${sp} profile SMARTOLT-1000MB-UP`, 8_000);
+          await step(`tcont ${sp} profile ${tcontFor(sp)}`, 8_000);
           await step(`gemport ${sp} tcont ${sp}`, 8_000);
           out = await step(
             `service-port ${sp} vport ${vport} user-vlan ${vlan} vlan ${vlan}`,
@@ -1445,7 +1452,7 @@ export class ZteTitanOltClient {
           // Ensure tcont/gemport on ONU interface first
           let out = await step(`interface ${onuIf}`, 10_000);
           if (!/%Error|Invalid|Unknown/i.test(out) && vlan != null) {
-            await step(`tcont ${sp} profile SMARTOLT-1000MB-UP`, 8_000);
+            await step(`tcont ${sp} profile ${tcontFor(sp)}`, 8_000);
             await step(`gemport ${sp} tcont ${sp}`, 8_000);
             await step('exit', 5_000);
           } else if (!/%Error|Invalid|Unknown/i.test(out)) {
@@ -3855,6 +3862,93 @@ export class ZteTitanOltClient {
             .filter(Boolean)
             .join(' · '),
         };
+      });
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
+
+  async readOnuTcontBinds(params: {
+    host: string;
+    port: number;
+    protocol: 'telnet' | 'ssh';
+    username: string;
+    password: string;
+    onuIf: string;
+    firmwareHint?: string | null;
+    subtypeHint?: string | null;
+  }): Promise<{
+    ok: boolean;
+    error?: string;
+    tconts: Array<{ tcontId: number; profile: string }>;
+    raw?: string;
+  }> {
+    const family = this.resolveFwFamily(params);
+    const onuIf = this.cliOnuIf(params.onuIf, family);
+    try {
+      const raw = await this.runConfigWrite(params, async (send, read) => {
+        await send(`show gpon remote-onu tcont ${onuIf}`);
+        let out = this.cleanCliNoise(await read(20_000));
+        if (/Unknown|Invalid|%Error/i.test(out) || out.length < 8) {
+          await send(`show pon onu tcont ${onuIf}`);
+          out = this.cleanCliNoise(await read(20_000));
+        }
+        return out;
+      });
+      return { ok: true, tconts: parseOnuTcontBinds(raw), raw };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+        tconts: [],
+      };
+    }
+  }
+
+  async applyOnuInternetTcont(params: {
+    host: string;
+    port: number;
+    protocol: 'telnet' | 'ssh';
+    username: string;
+    password: string;
+    onuIf: string;
+    upProfile: string;
+    downProfile?: string | null;
+    firmwareHint?: string | null;
+    subtypeHint?: string | null;
+  }): Promise<{ ok: boolean; error?: string; message?: string }> {
+    const family = this.resolveFwFamily(params);
+    const onuIf = this.cliOnuIf(params.onuIf, family);
+    const up = params.upProfile.trim();
+    if (!up) return { ok: false, error: 'perfil T-CONT vacío' };
+    try {
+      return await this.runConfigWrite(params, async (send, read) => {
+        const step = async (line: string, waitMs = 10_000) => {
+          await send(line);
+          return this.cleanCliNoise(await read(waitMs));
+        };
+        await step('configure terminal', 12_000);
+        const entered = await step(`interface ${onuIf}`, 10_000);
+        if (/%Error|Invalid|Unknown/i.test(entered)) {
+          throw new Error(
+            `No se pudo entrar a ${onuIf}: ${entered.slice(0, 120)}`,
+          );
+        }
+        const out = await step(`tcont 1 profile ${up}`, 8_000);
+        if (params.downProfile?.trim()) {
+          await step(
+            `gemport 1 traffic-limit ${params.downProfile.trim()}`,
+            8_000,
+          ).catch(() => '');
+        }
+        await step('exit', 5_000);
+        if (/%Error|Invalid|Failed|Unknown/i.test(out)) {
+          throw new Error(`tcont 1 profile ${up}: ${out.slice(0, 160)}`);
+        }
+        return { ok: true, message: `tcont 1 profile ${up}` };
       });
     } catch (err) {
       return {

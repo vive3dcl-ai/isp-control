@@ -1289,6 +1289,7 @@ export class HuaweiOltClient {
       onuIf: string;
       wanVlan?: number | null;
       mgmtVlan?: number | null;
+      internetTcontProfile?: string | null;
       firmwareHint?: string | null;
       subtypeHint?: string | null;
     },

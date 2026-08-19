@@ -26,7 +26,7 @@ export const VERIFY_MAX_GLOBAL_CONCURRENCY = 40;
 export const RESYNC_WAKE_MAX_ATTEMPTS = 10;
 export const RESYNC_WAKE_DELAY_MS = 15_000;
 
-export type OnuVerifyStatus = 'idle' | 'test' | 'ok' | 'fail';
+export type OnuVerifyStatus = 'idle' | 'test' | 'ok' | 'fail' | 'check';
 
 export type OnuVerifyCheckResult = {
   ok: boolean;
@@ -48,6 +48,8 @@ export type OnuVerifyDetail = {
   /** VLAN WAN etiquetada en al menos un uplink de la OLT. */
   uplinkVlan?: OnuVerifyCheckResult;
   traffic?: OnuVerifyCheckResult;
+  /** DBA T-CONT internet vs plan CRM. */
+  plan?: OnuVerifyCheckResult;
   /** Notas de curación aplicadas en este tick. */
   healed?: string[];
   /**
@@ -132,6 +134,8 @@ export function decideVerifyOutcome(params: {
   windowExpired: boolean;
   irrecoverable?: boolean;
   checks?: Record<OnuVerifyCheckId, OnuVerifyCheckMode>;
+  /** false = DBA del plan no cuadra (badge check, no fail). */
+  planOk?: boolean | null;
 }): OnuVerifyStatus {
   if (params.irrecoverable) return 'fail';
 
@@ -169,9 +173,18 @@ export function decideVerifyOutcome(params: {
   const trafficOk = !!params.detail.traffic?.ok;
 
   // required traffic: exige ok. optional: no bloquea (acelera si ya hay evidencia).
-  if (essentials && trafficMode !== 'required') return 'ok';
-  if (essentials && trafficOk) return 'ok';
-  if (essentials && params.windowExpired) return 'ok';
+  if (essentials && trafficMode !== 'required') {
+    if (params.planOk === false) return 'check';
+    return 'ok';
+  }
+  if (essentials && trafficOk) {
+    if (params.planOk === false) return 'check';
+    return 'ok';
+  }
+  if (essentials && params.windowExpired) {
+    if (params.planOk === false) return 'check';
+    return 'ok';
+  }
   if (params.windowExpired) return 'fail';
   return 'test';
 }
@@ -190,6 +203,7 @@ export function summarizeVerifyDetail(
     'route',
     'uplinkVlan',
     'traffic',
+    'plan',
   ] as const) {
     const c = detail[key];
     if (!c) continue;

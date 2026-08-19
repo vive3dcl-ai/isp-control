@@ -410,7 +410,10 @@ export class OnuConnectedService {
       wanPoolId: row.wanPoolId ?? null,
       tr069ProfileId: row.tr069ProfileId ?? null,
       provisionMode: (row.provisionMode as 'auto' | 'manual') ?? 'auto',
-      verifyStatus: (row.verifyStatus as 'idle' | 'test' | 'ok' | 'fail') ?? 'idle',
+      verifyStatus:
+        (row.verifyStatus as 'idle' | 'test' | 'ok' | 'fail' | 'check') ??
+        'idle',
+      migratedAt: row.migratedAt?.toISOString() ?? null,
       verifyStartedAt: row.verifyStartedAt?.toISOString() ?? null,
       verifyCheckedAt: row.verifyCheckedAt?.toISOString() ?? null,
       verifyAttempt: row.verifyAttempt ?? 0,
