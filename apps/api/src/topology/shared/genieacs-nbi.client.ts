@@ -281,6 +281,55 @@ export class GenieAcsNbiClient {
       { connectionRequest: true, timeoutMs: 60_000 },
     );
   }
+
+  /**
+   * Register a file in GenieACS (`PUT /files/:name`).
+   * Download tasks reference this name as `file`.
+   */
+  async putFile(
+    fileName: string,
+    body: Buffer,
+    headers: {
+      fileType: string;
+      productClass?: string;
+      version?: string;
+      oui?: string;
+    },
+  ): Promise<void> {
+    const encoded = encodeURIComponent(fileName);
+    const h: Record<string, string> = {
+      fileType: headers.fileType,
+    };
+    if (headers.productClass?.trim()) {
+      h.productClass = headers.productClass.trim();
+    }
+    if (headers.version?.trim()) h.version = headers.version.trim();
+    if (headers.oui?.trim()) h.oui = headers.oui.trim();
+    const res = await fetch(`${this.root()}/files/${encoded}`, {
+      method: 'PUT',
+      headers: h,
+      body: new Uint8Array(body),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(
+        `GenieACS file PUT ${res.status}: ${text.slice(0, 240)}`,
+      );
+    }
+  }
+
+  async deleteFile(fileName: string): Promise<void> {
+    const encoded = encodeURIComponent(fileName);
+    const res = await fetch(`${this.root()}/files/${encoded}`, {
+      method: 'DELETE',
+    });
+    if (!res.ok && res.status !== 404) {
+      const text = await res.text().catch(() => '');
+      throw new Error(
+        `GenieACS file DELETE ${res.status}: ${text.slice(0, 240)}`,
+      );
+    }
+  }
 }
 
 /** Read `_value` leaf from GenieACS nested device document. */

@@ -32,6 +32,8 @@ import { OnuCatalogAdminController } from './onus/onu-catalog-admin.controller';
 import { OnuCatalogItem } from './shared/entities/onu-catalog.entity';
 import { OnuConnectedService } from './onus/onu-connected.service';
 import { OnuConnectedController } from './onus/onu-connected.controller';
+import { OnuFirmwareService } from './onus/onu-firmware.service';
+import { OnuFirmwareController } from './onus/onu-firmware.controller';
 import { OnuMigrationService } from './onus/onu-migration.service';
 import { OnuMigrationController } from './onus/onu-migration.controller';
 import { OnuTypeOltSyncService } from './onus/onu-type-olt-sync.service';
@@ -71,6 +73,7 @@ import { SupportModule } from '../support/support.module';
     OnuSettingsController,
     OnuCatalogAdminController,
     OnuConnectedController,
+    OnuFirmwareController,
     OnuMigrationController,
     IpPoolController,
     ServiceVlanController,
@@ -98,6 +101,7 @@ import { SupportModule } from '../support/support.module';
     OnuCatalogAdminService,
     OnuSettingsService,
     OnuConnectedService,
+    OnuFirmwareService,
     OnuMigrationService,
     OnuTypeOltSyncService,
     IpPoolService,

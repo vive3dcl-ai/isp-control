@@ -36,6 +36,7 @@ services:
       VPN_ROUTE_GATEWAY_IP: ${VPN_ROUTE_GATEWAY_IP:-172.28.10.20}
       VPN_TUNNEL_CIDR: ${VPN_TUNNEL_CIDR:-10.69.0.0/16}
       VPN_RUNTIME_STATUS_DIR: /vpn-runtime
+      FIRMWARE_DIR: /data/firmware
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
@@ -46,6 +47,7 @@ services:
       - ./apps/api/nest-cli.json:/app/apps/api/nest-cli.json
       - ./deploy/vpn-routes/install-routes.sh:/vpn-routes/install-routes.sh:ro
       - ./deploy/lab-tr069/ovpn:/vpn-runtime:ro
+      - firmware_data:/data/firmware
     depends_on:
       postgres:
         condition: service_healthy
@@ -146,3 +148,4 @@ services:
 
 volumes:
   wa_sessions_data:
+  firmware_data:

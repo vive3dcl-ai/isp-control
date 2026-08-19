@@ -115,11 +115,11 @@ Hecho: campana + Web Push al abrir; dashboard Alertas = `network_alarms` abierta
 
 ---
 
-## Etapa 7 — Firmware
+## Etapa 7 — Firmware — **Cumplido**
 
-Inventario `SoftwareVersion` ACS + tipo OLT. Imagen aprobada por modelo. Upgrade masivo con ventana y tope.
+Inventario manual y opcional: el operador sube la imagen, la asocia a un modelo y pulsa Actualizar (una ONU o las online del modelo). Sin job automático ni “firmware aprobado obligatorio”.
 
-Hecho: se lista “HG9 en firmware X (N unidades); aprobado = Y”.
+Hecho: pestaña Firmware junto a Huérfanas; archivo en disco + registro GenieACS; Download TR-069 a demanda; auditoría `firmware_upgrade`.
 
 ---
 

@@ -4,13 +4,14 @@ import { apiFetch } from '../lib/api'
 import type { OnuType, OnuTypesResponse } from '../lib/onu-settings'
 import { OnuConnectedPanel } from './OnuConnectedPanel'
 import { OnuOrphansPanel } from './OnuOrphansPanel'
+import { OnuFirmwarePanel } from './OnuFirmwarePanel'
 import { SettingsSubTabs } from './SettingsSubTabs'
 import { ModalPortal } from './ModalPortal'
 
 const inputClass =
   'w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 outline-none ring-[var(--accent)] focus:ring-2'
 
-type SubView = 'connected' | 'types' | 'orphans'
+type SubView = 'connected' | 'types' | 'orphans' | 'firmware'
 type TypeModal = 'create' | 'edit' | null
 
 const ETH_OPTIONS = [0, 1, 2, 3, 4, 5, 6, 7, 8]
@@ -196,6 +197,7 @@ export function OnuSettingsTab({ canWrite }: { canWrite: boolean }) {
             { id: 'connected', label: 'Conectadas' },
             { id: 'types', label: 'Tipos de ONU' },
             { id: 'orphans', label: 'Huérfanas' },
+            { id: 'firmware', label: 'Firmware' },
           ] as const
         }
       />
@@ -350,6 +352,8 @@ export function OnuSettingsTab({ canWrite }: { canWrite: boolean }) {
       )}
 
       {view === 'orphans' && <OnuOrphansPanel canWrite={canWrite} />}
+
+      {view === 'firmware' && <OnuFirmwarePanel canWrite={canWrite} />}
 
       {typeModal && (
         <ModalPortal>

@@ -23,6 +23,7 @@ import { Onu } from '../topology/shared/entities/onu.entity';
 import { OnuMetricSample } from '../topology/shared/entities/onu-metric-sample.entity';
 import { OnuDenied } from '../topology/shared/entities/onu-denied.entity';
 import { OnuAcsDriver } from '../topology/shared/entities/onu-acs-driver.entity';
+import { OnuFirmwareImage } from '../topology/shared/entities/onu-firmware-image.entity';
 import { DeviceAuditEvent } from '../topology/shared/entities/device-audit-event.entity';
 import { NetworkAlarm } from '../topology/shared/entities/network-alarm.entity';
 import { OnuOrphanSighting } from '../topology/shared/entities/onu-orphan-sighting.entity';
@@ -657,6 +658,21 @@ const TOPOLOGY_ALTER = (schema: string) => `
   );
   CREATE INDEX IF NOT EXISTS "idx_onu_acs_drivers_family"
     ON "${schema}"."onu_acs_drivers" ("family");
+
+  CREATE TABLE IF NOT EXISTS "${schema}"."onu_firmware_images" (
+    "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    "model_key" varchar(80) NOT NULL,
+    "version" varchar(80) NOT NULL,
+    "file_name" varchar(255) NOT NULL,
+    "file_path" varchar(500) NOT NULL,
+    "byte_size" bigint NOT NULL DEFAULT 0,
+    "genie_file_id" varchar(255) NULL,
+    "note" text NULL,
+    "created_at" TIMESTAMPTZ NOT NULL DEFAULT now()
+  );
+  CREATE INDEX IF NOT EXISTS "idx_onu_firmware_images_model"
+    ON "${schema}"."onu_firmware_images" ("model_key");
+
   CREATE TABLE IF NOT EXISTS "${schema}"."device_audit_events" (
     "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     "occurred_at" TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -1100,6 +1116,7 @@ export class TenantConnectionService implements OnModuleDestroy {
         OnuMetricSample,
         OnuDenied,
         OnuAcsDriver,
+        OnuFirmwareImage,
         DeviceAuditEvent,
         NetworkAlarm,
         OnuOrphanSighting,
@@ -1298,6 +1315,14 @@ export class TenantConnectionService implements OnModuleDestroy {
     await this.ensureTenantSchema(schemaName);
     const ds = await this.getDataSource(schemaName);
     return ds.getRepository(OnuAcsDriver);
+  }
+
+  async getOnuFirmwareImageRepository(
+    schemaName: string,
+  ): Promise<Repository<OnuFirmwareImage>> {
+    await this.ensureTenantSchema(schemaName);
+    const ds = await this.getDataSource(schemaName);
+    return ds.getRepository(OnuFirmwareImage);
   }
 
   async getOnuDeniedRepository(

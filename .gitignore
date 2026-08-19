@@ -14,6 +14,7 @@ vpn.local.auth
 *.log
 .DS_Store
 coverage/
+data/firmware/
 .turbo/
 apps/landing/public/config.js
 

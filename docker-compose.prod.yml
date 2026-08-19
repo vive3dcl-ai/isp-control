@@ -119,6 +119,7 @@ services:
       WEB_PUSH_VAPID_PUBLIC_KEY: ${WEB_PUSH_VAPID_PUBLIC_KEY:-}
       WEB_PUSH_VAPID_PRIVATE_KEY: ${WEB_PUSH_VAPID_PRIVATE_KEY:-}
       WEB_PUSH_SUBJECT: ${WEB_PUSH_SUBJECT:-mailto:soporte@tudominio.com}
+      FIRMWARE_DIR: /data/firmware
     ports:
       - "127.0.0.1:${API_PORT}:3000"
     healthcheck:
@@ -133,6 +134,7 @@ services:
       start_period: 20s
     volumes:
       - vpn_runtime_data:/vpn-runtime:ro
+      - firmware_data:/data/firmware
     depends_on:
       postgres:
         condition: service_healthy
@@ -323,3 +325,5 @@ volumes:
     name: isp-control_vpn_pki
   vpn_runtime_data:
     name: isp-control_vpn_runtime
+  firmware_data:
+    name: isp-control_firmware
