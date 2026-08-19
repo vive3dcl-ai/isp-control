@@ -138,6 +138,16 @@ describe('OnuDriver contract', () => {
     expect(typeof d?.provisionPipeline).toBe('function');
   });
 
+  it('generic Huawei: omciPlan skip (WAN ACS, no wan-ip OMCI)', () => {
+    const d = resolveOnuDriver({
+      sn: 'HWTC0000ABCD',
+      onuType: 'HG8240H',
+    });
+    expect(d?.id).toBe('generic-huawei');
+    expect(d?.omciPlan?.serviceWanOmci).toBe('skip');
+    expect(resolveOmciPlan(d).serviceWanOmci).toBe('skip');
+  });
+
   it('generic ZTE: omciPlan apply + route required', () => {
     const d = resolveOnuDriver({
       sn: 'ZTEGD71F2028',

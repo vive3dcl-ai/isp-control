@@ -15,6 +15,7 @@ import type {
   ResolveServiceWanOpts,
 } from '../../types';
 import { TR098_VERIFY_CHECKS } from '../../types';
+import { ACS_HGU_PARAM_OWNERS } from '../../param-owners';
 import {
   connreqCredentialsTrusted,
   detectDataModelRoot,
@@ -79,6 +80,7 @@ export const huaweiHg8145x6Handler: OnuDriver = {
   brand: 'huawei',
   omciPlan: { serviceWanOmci: 'skip' },
   skipOmciServiceWan: true,
+  paramOwners: ACS_HGU_PARAM_OWNERS,
   verifyChecks: TR098_VERIFY_CHECKS,
   progressPlan: HG8145X6_PROGRESS_PLAN,
   supportsTr181RouteHeal: false,

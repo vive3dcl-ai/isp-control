@@ -49,9 +49,9 @@ Hoy cada botón (suspender OLT, denegar, cortar) cuenta una historia distinta. C
 
 ---
 
-## Etapa 2 — Dueños de parámetros (OMCI / ACS / OLT DBA)
+## Etapa 2 — Dueños de parámetros (OMCI / ACS / OLT DBA) — **Cumplido**
 
-Tabla por modelo: quién escribe VLAN servicio, IP WAN, IP mgmt, ACS URL, T-CONT, NAT, bind LAN.
+Tabla por modelo: quién escribe VLAN servicio, IP WAN, IP mgmt, ACS URL, T-CONT, NAT, bind LAN. Cerrado en el contrato del driver (`paramOwners` + `resolveParamOwners`), sin tablas. Genéricos Huawei/FiberHome omiten `wan-ip` OMCI; ZTE bridge no deja que ACS escriba VLAN.
 
 Reglas:
 

@@ -18,6 +18,7 @@
 
 ```
 omciPlan.serviceWanOmci  → 'skip' | 'apply' (CLI OMCI lo ejecuta el OLT)
+paramOwners              → dueños por parámetro (WAN/VLAN/mgmt/T-CONT/NAT)
 skipOmciServiceWan       → @deprecated; se deriva de omciPlan
 verifyChecks             → arp/wan/… required|optional|skip (criterio de OK)
 ownsWanSelection         → provision exclusivo (no SPV genérico)
@@ -39,6 +40,21 @@ resolveOnuDriver(sn, onuType, acsModel)
   1. models/<modelo> específico (HG8145X6, HG6143D, HGU-VEIP, …)
   2. models/generic-<marca>   # HWTC→huawei, ZTEG→zte, FHTT→fiberhome
 ```
+
+## Dueños de parámetros (Etapa 2)
+
+Quién escribe cada hoja vive **en el driver**, no en Postgres. `resolveParamOwners()`
+completa defaults desde `omciPlan.serviceWanOmci`.
+
+| Driver | WAN servicio | VLAN servicio | IP mgmt / ACS URL | T-CONT | NAT / bind |
+|--------|--------------|---------------|-------------------|--------|------------|
+| `huawei-hg8145x6`, `tenda-hg9`, `huawei-hgu-veip`, `fiberhome-hg6143d` | ACS | ACS | OMCI | OLT DBA | ACS |
+| `generic-huawei`, `generic-fiberhome` | ACS | ACS | OMCI | OLT DBA | ACS |
+| `generic-zte` | OMCI | OMCI (ACS no escribe `X_HW_VLAN`) | OMCI | OLT DBA | ACS NAT |
+| `generic-unknown` | OMCI | OMCI | OMCI | OLT DBA | ACS NAT |
+
+Un reboot OMCI (ip-host + tr069-mgmt) no debe reescribir la IP de internet en HGU ACS.
+Un SPV ACS no escribe rate (`MaxBitRate`…) ni VLAN si el dueño es OMCI.
 
 ## Apply
 

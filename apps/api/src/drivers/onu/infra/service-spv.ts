@@ -14,6 +14,7 @@ import {
 import { inspectWanVlanLeaves } from './wan-vlan-leaf';
 import type { ApplyServiceSpvParams } from '../types';
 import { ensureWanLeaf } from './ensure-wan-leaf';
+import { isHguRateLeaf } from '../param-owners';
 
 /** @deprecated Use ApplyServiceSpvParams from types. */
 export type ApplyGenericServiceSpvParams = ApplyServiceSpvParams;
@@ -78,7 +79,12 @@ export async function applyGenericServiceSpv(
     notes.push('NAT: el modelo no lo publica en el árbol TR069');
   }
 
-  const result = await client.setParameterValues(deviceId, core);
+  const safeCore = core.filter(([path]) => !isHguRateLeaf(path));
+  if (safeCore.length !== core.length) {
+    notes.push('rate HGU omitido (dueño T-CONT = OLT DBA)');
+  }
+
+  const result = await client.setParameterValues(deviceId, safeCore);
   if (result.status === 200) notes.push('WAN estática aplicada por TR069');
   else if (result.status === 202) notes.push('WAN encolada en ACS');
   else notes.push(`WAN TR069 status ${result.status}`);
@@ -111,7 +117,9 @@ export async function applyGenericServiceSpv(
   }
 
   const vlanLeaf = targets.vlan;
-  if (!vlanLeaf) {
+  if (params.owners?.serviceVlan === 'omci') {
+    notes.push('VLAN WAN: dueño OMCI — ACS no escribe hoja VLAN');
+  } else if (!vlanLeaf) {
     const exposed =
       found.model === 'tr098'
         ? inspectWanVlanLeaves(device, conn, connDevice)

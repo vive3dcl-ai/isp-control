@@ -6,6 +6,7 @@
  */
 import type { OnuDriver, ResolveServiceWanOpts } from '../../types';
 import { TR098_VERIFY_CHECKS } from '../../types';
+import { ACS_HGU_PARAM_OWNERS } from '../../param-owners';
 import { matchesTendaHg9 } from './match';
 import {
   ensureTendaHg9ServiceWan,
@@ -54,6 +55,7 @@ export const tendaHg9Handler: OnuDriver = {
   brand: 'unknown',
   omciPlan: { serviceWanOmci: 'skip' },
   skipOmciServiceWan: true,
+  paramOwners: ACS_HGU_PARAM_OWNERS,
   verifyChecks: TR098_VERIFY_CHECKS,
   progressPlan: TENDA_HG9_PROGRESS_PLAN,
   supportsTr181RouteHeal: false,

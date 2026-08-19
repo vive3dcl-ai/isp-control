@@ -15,6 +15,8 @@ export type {
   OnuModelProvisionWanPlan,
   OnuModelRebootResult,
   OnuOmciPlan,
+  OnuParamOwner,
+  OnuParamOwners,
   OnuOmciTr069Result,
   OnuProgressState,
   OnuProgressStepDef,
@@ -58,6 +60,12 @@ export {
 } from './infra/reboot-cap.util';
 export type { ModelPrepState, RebootDecision } from './infra/reboot-cap.util';
 export { applyGenericServiceSpv } from './infra/service-spv';
+export {
+  ACS_HGU_PARAM_OWNERS,
+  OMCI_BRIDGE_PARAM_OWNERS,
+  isHguRateLeaf,
+  resolveParamOwners,
+} from './param-owners';
 export { ensureWanLeaf } from './infra/ensure-wan-leaf';
 export {
   resolveServiceWanForVerify,

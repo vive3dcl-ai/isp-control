@@ -1,5 +1,6 @@
 import type { OnuDriver } from '../../types';
 import { TR098_VERIFY_CHECKS } from '../../types';
+import { ACS_HGU_PARAM_OWNERS } from '../../param-owners';
 import { FIBERHOME_HG6143D_PROGRESS_PLAN } from '../_progress-plans';
 import {
   ensureFiberhomeServiceWan,
@@ -48,6 +49,7 @@ export const fiberhomeHg6143dHandler: OnuDriver = {
   brand: 'fiberhome',
   omciPlan: { serviceWanOmci: 'skip' },
   skipOmciServiceWan: true,
+  paramOwners: ACS_HGU_PARAM_OWNERS,
   verifyChecks: TR098_VERIFY_CHECKS,
   progressPlan: FIBERHOME_HG6143D_PROGRESS_PLAN,
   supportsTr181RouteHeal: false,

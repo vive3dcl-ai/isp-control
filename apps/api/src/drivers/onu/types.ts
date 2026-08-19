@@ -102,6 +102,19 @@ export type ResolveServiceWanOpts = {
   expectedVlanId?: number | null;
 };
 
+/** Quién escribe cada parámetro (Etapa 2). No se persiste: vive en el driver. */
+export type OnuParamOwner = 'acs' | 'omci' | 'olt_dba' | 'none';
+
+export type OnuParamOwners = {
+  serviceWan: 'acs' | 'omci';
+  serviceVlan: 'acs' | 'omci';
+  mgmtIp: 'omci';
+  acsUrl: 'omci';
+  tcont: 'olt_dba';
+  nat: 'acs' | 'none';
+  lanBind: 'acs' | 'none';
+};
+
 export type ApplyServiceSpvParams = {
   client: GenieAcsNbiClient;
   deviceId: string;
@@ -111,6 +124,8 @@ export type ApplyServiceSpvParams = {
   found: WanConnectionRef;
   priorNotes?: string[];
   onEnqueued?: () => Promise<string | null>;
+  /** Si `serviceVlan === 'omci'`, el SPV no escribe hoja VLAN. */
+  owners?: OnuParamOwners;
 };
 
 /** Política OMCI de servicio (CLI lo ejecuta el driver OLT). */
@@ -162,6 +177,12 @@ export const TR098_VERIFY_CHECKS: OnuVerifyChecksPlan = {
 };
 
 export function resolveOmciPlan(driver: OnuDriver | null | undefined): OnuOmciPlan {
+  if (driver?.paramOwners?.serviceWan === 'acs') {
+    return { serviceWanOmci: 'skip' };
+  }
+  if (driver?.paramOwners?.serviceWan === 'omci') {
+    return { serviceWanOmci: 'apply' };
+  }
   if (driver?.omciPlan) return driver.omciPlan;
   if (driver?.skipOmciServiceWan) return { serviceWanOmci: 'skip' };
   return { serviceWanOmci: 'apply' };
@@ -272,6 +293,8 @@ export interface OnuDriver {
   matches(ctx: OnuModelProvisionMatchCtx): boolean;
   /** Política OMCI de servicio (preferido). */
   omciPlan?: OnuOmciPlan;
+  /** Dueños por parámetro (Etapa 2). Si falta, se deriva de omciPlan. */
+  paramOwners?: Partial<OnuParamOwners>;
   /**
    * @deprecated Prefer `omciPlan.serviceWanOmci === 'skip'`.
    * Se sigue leyendo si no hay omciPlan.

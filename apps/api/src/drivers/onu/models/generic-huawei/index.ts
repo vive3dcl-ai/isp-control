@@ -5,6 +5,7 @@
 import { vendorFromSn } from '../../infra/vendor-from-sn';
 import { resolveGenericServiceWan } from '../../infra/resolve-service-wan';
 import { applyGenericServiceSpv } from '../../infra/service-spv';
+import { ACS_HGU_PARAM_OWNERS } from '../../param-owners';
 import {
   detectDataModelRoot,
   connreqCredentialsTrusted,
@@ -65,6 +66,7 @@ async function verifyHeal(ctx: OnuVerifyHealCtx): Promise<OnuModelProvisionResul
     sn: ctx.sn,
     wan: ctx.wan,
     found,
+    owners: ACS_HGU_PARAM_OWNERS,
   });
   return {
     ok: true,
@@ -80,8 +82,9 @@ async function verifyHeal(ctx: OnuVerifyHealCtx): Promise<OnuModelProvisionResul
 export const genericHuaweiDriver: OnuDriver = {
   id: 'generic-huawei',
   brand: 'huawei',
-  omciPlan: { serviceWanOmci: 'apply' },
-  skipOmciServiceWan: false,
+  omciPlan: { serviceWanOmci: 'skip' },
+  skipOmciServiceWan: true,
+  paramOwners: ACS_HGU_PARAM_OWNERS,
   verifyChecks: TR098_VERIFY_CHECKS,
   progressPlan: GENERIC_HUAWEI_PROGRESS_PLAN,
   supportsTr181RouteHeal: false,
@@ -108,7 +111,10 @@ export const genericHuaweiDriver: OnuDriver = {
     return resolveGenericServiceWan(device, wanOpts);
   },
   applyServiceSpv(params: ApplyServiceSpvParams): Promise<string> {
-    return applyGenericServiceSpv(params);
+    return applyGenericServiceSpv({
+      ...params,
+      owners: params.owners ?? ACS_HGU_PARAM_OWNERS,
+    });
   },
 };
 

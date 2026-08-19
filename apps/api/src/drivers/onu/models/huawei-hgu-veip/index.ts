@@ -1,5 +1,6 @@
 import type { OnuDriver, ResolveServiceWanOpts } from '../../types';
 import { TR098_VERIFY_CHECKS } from '../../types';
+import { ACS_HGU_PARAM_OWNERS } from '../../param-owners';
 import { HGU_VEIP_PROGRESS_PLAN } from '../_progress-plans';
 import { matchesHuaweiHguVeip } from './match';
 import {
@@ -30,6 +31,7 @@ export const huaweiHguVeipHandler: OnuDriver = {
   brand: 'huawei',
   omciPlan: { serviceWanOmci: 'skip' },
   skipOmciServiceWan: true,
+  paramOwners: ACS_HGU_PARAM_OWNERS,
   verifyChecks: TR098_VERIFY_CHECKS,
   progressPlan: HGU_VEIP_PROGRESS_PLAN,
   supportsTr181RouteHeal: false,

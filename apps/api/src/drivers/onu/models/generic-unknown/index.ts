@@ -4,6 +4,7 @@
 import { vendorFromSn } from '../../infra/vendor-from-sn';
 import { resolveGenericServiceWan } from '../../infra/resolve-service-wan';
 import { applyGenericServiceSpv } from '../../infra/service-spv';
+import { OMCI_BRIDGE_PARAM_OWNERS } from '../../param-owners';
 import type {
   ApplyServiceSpvParams,
   OnuDriver,
@@ -39,6 +40,7 @@ async function verifyHeal(ctx: OnuVerifyHealCtx): Promise<OnuModelProvisionResul
     sn: ctx.sn,
     wan: ctx.wan,
     found,
+    owners: OMCI_BRIDGE_PARAM_OWNERS,
   });
   return {
     ok: true,
@@ -56,6 +58,7 @@ export const genericUnknownDriver: OnuDriver = {
   brand: 'unknown',
   omciPlan: { serviceWanOmci: 'apply' },
   skipOmciServiceWan: false,
+  paramOwners: OMCI_BRIDGE_PARAM_OWNERS,
   verifyChecks: DEFAULT_VERIFY_CHECKS,
   progressPlan: GENERIC_UNKNOWN_PROGRESS_PLAN,
   supportsTr181RouteHeal: false,
@@ -87,6 +90,9 @@ export const genericUnknownDriver: OnuDriver = {
     return resolveGenericServiceWan(device, wanOpts);
   },
   applyServiceSpv(params: ApplyServiceSpvParams): Promise<string> {
-    return applyGenericServiceSpv(params);
+    return applyGenericServiceSpv({
+      ...params,
+      owners: params.owners ?? OMCI_BRIDGE_PARAM_OWNERS,
+    });
   },
 };
