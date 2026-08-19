@@ -235,6 +235,16 @@ export class OnuConnectedController {
     return this.onus.listSuspended(user);
   }
 
+  @Get(':id/audit')
+  audit(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('limit') limit?: string,
+  ) {
+    const n = limit != null ? Number(limit) : 50;
+    return this.onus.listAudit(user, id, Number.isFinite(n) ? n : 50);
+  }
+
   @Get(':id/metrics')
   metrics(
     @CurrentUser() user: AuthUser,

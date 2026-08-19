@@ -91,13 +91,13 @@ Fuera de alcance: moldeo en router (queda para mayorista/BNG opcional, etapa 9).
 
 ---
 
-## Etapa 5 — Auditoría OLT/ACS
+## Etapa 5 — Auditoría OLT/ACS — **Cumplido**
 
 Cada acción: actor, SN, OLT, comando o SPV, respuesta, duración.
 
 Hecho: se puede responder “quién suspendió el SN X el martes” sin logs Docker.
 
-Preferible tabla `device_audit_events` (esta etapa **sí** pide BD; acordar antes). Hasta entonces, log estructurado JSON en API.
+Tabla tenant `device_audit_events` (escrituras OLT/ACS). Historial en ficha ONU. Sin Telegram (etapa 6).
 
 ---
 

@@ -57,6 +57,7 @@ import {
   type CrmServiceDesired,
   type ServiceStateView,
 } from './onu-service-state.util';
+import { NetworkAuditService } from './network-audit.service';
 
 function isAdminDisabled(state: string | null | undefined): boolean {
   return /disable/i.test(state ?? '');
@@ -110,9 +111,34 @@ export class OnuConnectedService {
     private readonly huaweiSnmp: HuaweiOltSnmpClient,
     private readonly onuCatalog: OnuCatalogAdminService,
     private readonly onuTypeSync: OnuTypeOltSyncService,
+    private readonly audit: NetworkAuditService,
     @InjectRepository(Tenant)
     private readonly tenants: Repository<Tenant>,
   ) {}
+
+  private async auditOltOnuAction<T>(
+    user: AuthUser,
+    action: string,
+    oltId: string,
+    onuIf: string,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const schema = this.requireSchema(user);
+    const onuRepo = await this.tenantConnections.getOnuRepository(schema);
+    const row = await onuRepo.findOne({ where: { oltId, onuIf } });
+    return this.audit.run(
+      schema,
+      {
+        ...this.audit.actorFromUser(user),
+        action,
+        sn: row?.sn ?? null,
+        onuId: row?.id ?? null,
+        oltId,
+        onuIf,
+      },
+      fn,
+    );
+  }
 
   private recentlyDeletedKey(schema: string, kind: 'sn' | 'if', value: string) {
     return `${schema}:${kind}:${value}`;
@@ -1070,6 +1096,15 @@ export class OnuConnectedService {
     const schema = this.requireSchema(user);
     const sn = onuSnKey(body.sn);
     if (!sn) throw new BadRequestException('sn requerido');
+    return this.audit.run(
+      schema,
+      {
+        ...this.audit.actorFromUser(user),
+        action: 'deny',
+        sn,
+        oltId: body.oltId ?? null,
+      },
+      async () => {
 
     const onuRepo = await this.tenantConnections.getOnuRepository(schema);
     const inConnected = await onuRepo
@@ -1128,6 +1163,8 @@ export class OnuConnectedService {
         deniedAt: row.deniedAt.toISOString(),
       },
     };
+      },
+    );
   }
 
   async undeny(user: AuthUser, id: string) {
@@ -1195,6 +1232,16 @@ export class OnuConnectedService {
     if (!oltIf || !sn) {
       throw new BadRequestException('oltIf y sn son requeridos');
     }
+    return this.audit.run(
+      schema,
+      {
+        ...this.audit.actorFromUser(user),
+        action: 'authorize',
+        sn,
+        oltId: body.oltId,
+        onuIf: oltIf,
+      },
+      async () => {
     const onuId = String(body.onuId ?? '').trim()
       ? String(body.onuId).trim()
       : await this.resolveNextOnuId(olt, oltIf);
@@ -1625,6 +1672,8 @@ export class OnuConnectedService {
       detectedModel: displayType,
       steps,
     };
+      },
+    );
   }
 
   /** Insert-or-update denied SN without unique-constraint races. */
@@ -2652,18 +2701,21 @@ export class OnuConnectedService {
     if (!onuIf?.trim()) {
       throw new BadRequestException('onuIf requerido');
     }
-    const result = await this.withTimeout(
-      this.oltCli(olt).rebootOnu({
-        ...this.zteConn(olt),
-        onuIf: onuIf.trim(),
-      }),
-      60_000,
-      `ONU reboot ${onuIf}`,
-    );
-    if (!result.ok) {
-      throw new BadRequestException(result.error || 'Fallo al reiniciar ONU');
-    }
-    return result;
+    const ifName = onuIf.trim();
+    return this.auditOltOnuAction(user, 'reboot', oltId, ifName, async () => {
+      const result = await this.withTimeout(
+        this.oltCli(olt).rebootOnu({
+          ...this.zteConn(olt),
+          onuIf: ifName,
+        }),
+        60_000,
+        `ONU reboot ${ifName}`,
+      );
+      if (!result.ok) {
+        throw new BadRequestException(result.error || 'Fallo al reiniciar ONU');
+      }
+      return result;
+    });
   }
 
   /** Admin-disable ONU on OLT; keeps registration in Conectadas as offline. */
@@ -2674,6 +2726,7 @@ export class OnuConnectedService {
       throw new BadRequestException('onuIf requerido');
     }
     const ifName = onuIf.trim();
+    return this.auditOltOnuAction(user, 'disable', oltId, ifName, async () => {
     const result = await this.withTimeout(
       this.oltCli(olt).disableOnu({
         ...this.zteConn(olt),
@@ -2700,6 +2753,7 @@ export class OnuConnectedService {
     }
 
     return result;
+    });
   }
 
   /** Re-enable a previously admin-disabled ONU on OLT. */
@@ -2710,6 +2764,7 @@ export class OnuConnectedService {
       throw new BadRequestException('onuIf requerido');
     }
     const ifName = onuIf.trim();
+    return this.auditOltOnuAction(user, 'enable', oltId, ifName, async () => {
     const result = await this.withTimeout(
       this.oltCli(olt).enableOnu({
         ...this.zteConn(olt),
@@ -2737,6 +2792,7 @@ export class OnuConnectedService {
     }
 
     return result;
+    });
   }
 
   /**
@@ -2750,6 +2806,7 @@ export class OnuConnectedService {
       throw new BadRequestException('onuIf requerido');
     }
     const ifName = onuIf.trim();
+    return this.auditOltOnuAction(user, 'delete_onu', oltId, ifName, async () => {
     let result: { ok: boolean; error?: string; message?: string };
     try {
       result = await this.withTimeout(
@@ -2784,6 +2841,7 @@ export class OnuConnectedService {
 
     await this.purgeDeletedOnuFromDb(schema, oltId, ifName);
     return result;
+    });
   }
 
   /** True si la ONU ya no figura en `show onu state` de su OLT. */
@@ -3325,6 +3383,15 @@ export class OnuConnectedService {
         /* skip */
       }
     }
+  }
+
+  async listAudit(user: AuthUser, onuId: string, limit?: number) {
+    const schema = this.requireSchema(user);
+    const onuRepo = await this.tenantConnections.getOnuRepository(schema);
+    const onu = await onuRepo.findOne({ where: { id: onuId } });
+    if (!onu) throw new NotFoundException('ONU no encontrada');
+    const events = await this.audit.listForOnu(schema, onuId, limit ?? 50);
+    return { onuId, sn: onu.sn, events };
   }
 }
 

@@ -36,6 +36,7 @@ import {
   acsModelKey,
   OnuAcsDriverCatalogService,
 } from './onu-acs-driver-catalog.service';
+import { NetworkAuditService } from './network-audit.service';
 import {
   needsMigratedHealthBackfill,
   shouldSkipHealthPass,
@@ -81,6 +82,7 @@ export class OnuPostProvisionVerifyService {
     private readonly tr069: OnuTr069ConfigService,
     private readonly serviceVlans: ServiceVlanService,
     private readonly acsDrivers: OnuAcsDriverCatalogService,
+    private readonly audit: NetworkAuditService,
   ) {}
 
   private async withOnuVerifyLock<T>(
@@ -122,7 +124,17 @@ export class OnuPostProvisionVerifyService {
       onu.verifyCheckedAt = null;
       onu.verifyAttempt = 0;
       onu.verifyDetail = {};
-      return onuRepo.save(onu);
+      const saved = await onuRepo.save(onu);
+      await this.audit.record(schema, {
+        action: 'resync',
+        actorKind: 'user',
+        ok: true,
+        sn: saved.sn,
+        onuId: saved.id,
+        oltId: saved.oltId,
+        onuIf: saved.onuIf,
+      });
+      return saved;
     });
   }
 

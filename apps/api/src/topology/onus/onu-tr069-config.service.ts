@@ -24,6 +24,7 @@ import { IpPoolService } from '../routers/ip-pool.service';
 import { ServiceVlanService } from '../olts/service-vlan.service';
 import { OnuCatalogAdminService } from './onu-catalog-admin.service';
 import { OnuAcsDriverCatalogService } from './onu-acs-driver-catalog.service';
+import { NetworkAuditService } from './network-audit.service';
 import { isZteHguModel } from '../../drivers/onu/infra/inspect-generic-playbook';
 import { HuaweiOltClient } from '../../drivers/olt/huawei/huawei-olt.client';
 import { resolveOltCli, type ManagedOltCliClient } from '../../drivers/olt';
@@ -219,6 +220,7 @@ export class OnuTr069ConfigService {
     private readonly serviceVlans: ServiceVlanService,
     private readonly onuCatalog: OnuCatalogAdminService,
     private readonly acsDrivers: OnuAcsDriverCatalogService,
+    private readonly audit: NetworkAuditService,
     private readonly zteC3xxOlt: ZteC3xxOltClient,
     private readonly zteTitanOlt: ZteTitanOltClient,
     private readonly huaweiOlt: HuaweiOltClient,
@@ -2156,6 +2158,7 @@ export class OnuTr069ConfigService {
     message: string;
     healed: boolean;
   }> {
+    const t0 = Date.now();
     const onuRepo = await this.tenantConnections.getOnuRepository(schema);
     const onu = await onuRepo.findOne({ where: { id: onuId } });
     if (!onu?.onuIf) {
@@ -2255,7 +2258,7 @@ export class OnuTr069ConfigService {
       downProfile: expected.downProfile,
     });
     if (!applied.ok) {
-      return {
+      const fail = {
         ok: false,
         matched: false,
         expected: expected.upProfile,
@@ -2263,11 +2266,23 @@ export class OnuTr069ConfigService {
         message: applied.error || 'no se aplicó T-CONT',
         healed: false,
       };
+      await this.audit.record(schema, {
+        action: 'dba_heal',
+        actorKind: 'system',
+        ok: false,
+        durationMs: Date.now() - t0,
+        sn: onu.sn,
+        onuId: onu.id,
+        oltId: onu.oltId,
+        onuIf: onu.onuIf,
+        detail: { message: fail.message },
+      });
+      return fail;
     }
     const again = await cli.readOnuTcontBinds(conn);
     const after = internetTcontProfileOf(again.tconts ?? []);
     const matched = tcontProfileMatches(after, expected.upProfile);
-    return {
+    const out = {
       ok: matched,
       matched,
       expected: expected.upProfile,
@@ -2277,6 +2292,18 @@ export class OnuTr069ConfigService {
         : `T-CONT 1 sigue ${after ?? '—'} (esperado ${expected.upProfile})`,
       healed: true,
     };
+    await this.audit.record(schema, {
+      action: 'dba_heal',
+      actorKind: 'system',
+      ok: out.ok,
+      durationMs: Date.now() - t0,
+      sn: onu.sn,
+      onuId: onu.id,
+      oltId: onu.oltId,
+      onuIf: onu.onuIf,
+      detail: { message: out.message },
+    });
+    return out;
   }
 
   /** Step 2: assign/release IPs from pools in DB. */
@@ -3343,6 +3370,16 @@ export class OnuTr069ConfigService {
             }),
           );
           const msg = result.notes.join(' · ') || creator.id;
+          await this.audit.record(schema, {
+            action: 'acs_wan',
+            actorKind: 'system',
+            ok: result.ok,
+            sn: onu.sn,
+            onuId: onu.id,
+            oltId: onu.oltId ?? null,
+            onuIf: onu.onuIf ?? null,
+            detail: { message: msg, driver: creator.id },
+          });
           return withNotes(
             result.ok
               ? `driver ${creator.id}: ${msg}`
@@ -3373,9 +3410,33 @@ export class OnuTr069ConfigService {
           this.ensureConnReqCredentials(client, deviceId, device, onu.sn!, {
             force: true,
           }),
-      }).then((msg) => (driver ? `${msg} · driver ${driver.id}` : msg));
+      }).then(async (msg) => {
+        const text = driver ? `${msg} · driver ${driver.id}` : msg;
+        await this.audit.record(schema, {
+          action: 'apply_wan',
+          actorKind: 'system',
+          ok: true,
+          sn: onu.sn,
+          onuId: onu.id,
+          oltId: onu.oltId ?? null,
+          onuIf: onu.onuIf ?? null,
+          detail: { message: text },
+        });
+        return text;
+      });
     } catch (e) {
-      return `WAN en DB; TR069 falló: ${e instanceof Error ? e.message : e}`;
+      const fail = `WAN en DB; TR069 falló: ${e instanceof Error ? e.message : e}`;
+      await this.audit.record(schema, {
+        action: 'apply_wan',
+        actorKind: 'system',
+        ok: false,
+        sn: onu.sn,
+        onuId: onu.id,
+        oltId: onu.oltId ?? null,
+        onuIf: onu.onuIf ?? null,
+        detail: { message: fail },
+      });
+      return fail;
     }
   }
 

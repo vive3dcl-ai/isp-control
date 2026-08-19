@@ -23,6 +23,7 @@ import { Onu } from '../topology/shared/entities/onu.entity';
 import { OnuMetricSample } from '../topology/shared/entities/onu-metric-sample.entity';
 import { OnuDenied } from '../topology/shared/entities/onu-denied.entity';
 import { OnuAcsDriver } from '../topology/shared/entities/onu-acs-driver.entity';
+import { DeviceAuditEvent } from '../topology/shared/entities/device-audit-event.entity';
 import { OnuOrphanSighting } from '../topology/shared/entities/onu-orphan-sighting.entity';
 import { IpPool } from '../topology/shared/entities/ip-pool.entity';
 import { IpPoolAllocation } from '../topology/shared/entities/ip-pool-allocation.entity';
@@ -655,6 +656,28 @@ const TOPOLOGY_ALTER = (schema: string) => `
   );
   CREATE INDEX IF NOT EXISTS "idx_onu_acs_drivers_family"
     ON "${schema}"."onu_acs_drivers" ("family");
+  CREATE TABLE IF NOT EXISTS "${schema}"."device_audit_events" (
+    "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    "occurred_at" TIMESTAMPTZ NOT NULL DEFAULT now(),
+    "actor_id" varchar(80) NULL,
+    "actor_email" varchar(160) NULL,
+    "actor_kind" varchar(16) NOT NULL DEFAULT 'user',
+    "action" varchar(40) NOT NULL,
+    "ok" boolean NOT NULL DEFAULT true,
+    "duration_ms" int NOT NULL DEFAULT 0,
+    "sn" varchar(40) NULL,
+    "onu_id" uuid NULL,
+    "olt_id" uuid NULL,
+    "onu_if" varchar(80) NULL,
+    "detail" jsonb NOT NULL DEFAULT '{}'::jsonb
+  );
+  CREATE INDEX IF NOT EXISTS "idx_device_audit_sn_time"
+    ON "${schema}"."device_audit_events" ("sn", "occurred_at" DESC);
+  CREATE INDEX IF NOT EXISTS "idx_device_audit_olt_time"
+    ON "${schema}"."device_audit_events" ("olt_id", "occurred_at" DESC);
+  CREATE INDEX IF NOT EXISTS "idx_device_audit_onu_time"
+    ON "${schema}"."device_audit_events" ("onu_id", "occurred_at" DESC);
+
 
 
   CREATE TABLE IF NOT EXISTS "${schema}"."ip_pools" (
@@ -1056,6 +1079,7 @@ export class TenantConnectionService implements OnModuleDestroy {
         OnuMetricSample,
         OnuDenied,
         OnuAcsDriver,
+        DeviceAuditEvent,
         OnuOrphanSighting,
         IpPool,
         IpPoolAllocation,
@@ -1227,6 +1251,15 @@ export class TenantConnectionService implements OnModuleDestroy {
     return ds.getRepository(OnuMetricSample);
   }
 
+
+
+  async getDeviceAuditEventRepository(
+    schemaName: string,
+  ): Promise<Repository<DeviceAuditEvent>> {
+    await this.ensureTenantSchema(schemaName);
+    const ds = await this.getDataSource(schemaName);
+    return ds.getRepository(DeviceAuditEvent);
+  }
 
   async getOnuAcsDriverRepository(
     schemaName: string,

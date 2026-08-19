@@ -51,6 +51,22 @@ function pendingBtn(label: string) {
   )
 }
 
+function auditActionLabel(action: string): string {
+  const map: Record<string, string> = {
+    authorize: 'Autorizar',
+    deny: 'Denegar',
+    reboot: 'Reboot',
+    disable: 'Suspender',
+    enable: 'Habilitar',
+    delete_onu: 'Borrar ONU',
+    apply_wan: 'Aplicar WAN',
+    acs_wan: 'WAN ACS',
+    dba_heal: 'Heal DBA',
+    resync: 'Resync',
+  }
+  return map[action] ?? action
+}
+
 function isUuid(id: string | undefined): id is string {
   return !!id && /^[0-9a-f-]{36}$/i.test(id)
 }
@@ -265,6 +281,27 @@ export function OnuDetailModal({
       isUuid(onuDbId) &&
       !!(detailQuery.data?.onu?.tr069Enabled || detailQuery.data?.onu?.mgmtIp),
     refetchInterval: 20_000,
+  })
+
+  const auditQuery = useQuery({
+    queryKey: ['app', 'onus', onuDbId, 'audit'],
+    queryFn: () =>
+      apiFetch<{
+        onuId: string
+        sn: string | null
+        events: Array<{
+          id: string
+          occurredAt: string
+          actorEmail: string | null
+          actorKind: string
+          action: string
+          ok: boolean
+          durationMs: number
+          detail: Record<string, unknown>
+        }>
+      }>(`/app/onus/${onuDbId}/audit?limit=50`),
+    enabled: isUuid(onuDbId),
+    staleTime: 15_000,
   })
 
   // (El avance del script se abre con Check ONU / VLANs; no auto-abrir
@@ -1325,6 +1362,47 @@ export function OnuDetailModal({
                       : 'Pendiente / no detectado'}
                 </p>
               </div>
+
+              <Section title="Historial">
+                {auditQuery.isLoading ? (
+                  <p className="text-xs text-[var(--text-muted)]">Cargando…</p>
+                ) : (auditQuery.data?.events.length ?? 0) === 0 ? (
+                  <p className="text-xs text-[var(--text-muted)]">
+                    Sin acciones de red registradas aún.
+                  </p>
+                ) : (
+                  <ul className="max-h-48 space-y-1 overflow-y-auto text-xs">
+                    {auditQuery.data!.events.map((ev) => (
+                      <li
+                        key={ev.id}
+                        className="flex flex-wrap gap-x-2 border-t border-[var(--border)] py-1 first:border-t-0"
+                      >
+                        <span className="text-[var(--text-muted)]">
+                          {new Date(ev.occurredAt).toLocaleString()}
+                        </span>
+                        <span
+                          className={
+                            ev.ok ? 'text-emerald-400' : 'text-red-400'
+                          }
+                        >
+                          {ev.ok ? 'ok' : 'fail'}
+                        </span>
+                        <span className="font-medium">
+                          {auditActionLabel(ev.action)}
+                        </span>
+                        <span className="text-[var(--text-muted)]">
+                          {ev.actorEmail || ev.actorKind}
+                        </span>
+                        {typeof ev.detail?.message === 'string' ? (
+                          <span className="w-full text-[var(--text-muted)]">
+                            {ev.detail.message}
+                          </span>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </Section>
 
               <div className="flex flex-wrap gap-2 border-t border-[var(--border)] pt-4">
                 {canWrite ? (
