@@ -1,4 +1,15 @@
 # Production API — multi-stage build
+FROM golang:1.22-bookworm AS tv-agent
+WORKDIR /src
+COPY apps/tv-agent/ ./
+RUN go mod download \
+ && mkdir -p /out \
+ && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o /out/isp-tv-agent-linux-amd64 . \
+ && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o /out/isp-tv-agent-linux-arm64 . \
+ && cp install.sh /out/install.sh \
+ && cp VERSION /out/VERSION \
+ && chmod +x /out/install.sh
+
 FROM node:22-alpine AS deps
 WORKDIR /app
 RUN apk add --no-cache python3 make g++
@@ -26,6 +37,7 @@ COPY apps/web/package.json ./apps/web/
 COPY apps/whatsapp-baileys/package.json ./apps/whatsapp-baileys/
 RUN npm ci --workspace=@isp-control/api --omit=dev && npm cache clean --force
 COPY --from=build /app/apps/api/dist ./apps/api/dist
+COPY --from=tv-agent /out /opt/isp-tv-agent
 COPY apps/api/docker-entrypoint.sh /docker-entrypoint.sh
 COPY deploy/vpn-routes/install-routes.sh /vpn-routes/install-routes.sh
 RUN chmod +x /docker-entrypoint.sh /vpn-routes/install-routes.sh

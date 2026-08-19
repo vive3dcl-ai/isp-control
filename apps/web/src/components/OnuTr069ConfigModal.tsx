@@ -20,7 +20,54 @@ const inputClass =
   'w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm outline-none ring-[var(--accent)] focus:ring-2'
 
 type Tab = 'wifi' | 'users' | 'ethernet' | 'info'
+type ApplyTab = 'wifi' | 'users' | 'ethernet'
+type TabApplyStatus =
+  | 'idle'
+  | 'dirty'
+  | 'applying'
+  | 'applied'
+  | 'queued'
+  | 'failed'
 type BusyMode = 'idle' | 'read' | 'apply'
+
+const IDLE_TAB_STATUS: Record<ApplyTab, TabApplyStatus> = {
+  wifi: 'idle',
+  users: 'idle',
+  ethernet: 'idle',
+}
+
+function TabStatusBadge({ status }: { status: TabApplyStatus }) {
+  if (status === 'idle') return null
+  const styles: Record<Exclude<TabApplyStatus, 'idle'>, string> = {
+    dirty: 'text-[var(--text-muted)]',
+    applying: 'text-[var(--accent)]',
+    applied: 'text-emerald-400',
+    queued: 'text-amber-300',
+    failed: 'text-[var(--danger)]',
+  }
+  const labels: Record<Exclude<TabApplyStatus, 'idle'>, string> = {
+    dirty: 'cambios',
+    applying: 'aplicando',
+    applied: 'aplicado',
+    queued: 'encolado',
+    failed: 'error',
+  }
+  return (
+    <span className={`ml-1.5 text-[10px] font-normal ${styles[status]}`}>
+      {status === 'applying' ? (
+        <span className="inline-flex items-center gap-1">
+          <span
+            className="inline-block h-2.5 w-2.5 animate-spin rounded-full border border-current border-t-transparent"
+            aria-hidden
+          />
+          {labels[status]}
+        </span>
+      ) : (
+        labels[status]
+      )}
+    </span>
+  )
+}
 
 export function OnuTr069ConfigModal({
   onuId,
@@ -37,6 +84,8 @@ export function OnuTr069ConfigModal({
   const [error, setError] = useState<string | null>(null)
   const [busyMode, setBusyMode] = useState<BusyMode>('idle')
   const autoRefreshDone = useRef(false)
+  const [tabStatus, setTabStatus] =
+    useState<Record<ApplyTab, TabApplyStatus>>(IDLE_TAB_STATUS)
   const [progressOpen, setProgressOpen] = useState(false)
   const [progressTitle, setProgressTitle] = useState('')
   const [progressSteps, setProgressSteps] = useState<ProgressStep[]>([])
@@ -63,6 +112,13 @@ export function OnuTr069ConfigModal({
   const [userDraft, setUserDraft] = useState<
     Record<number, { username: string; password: string }>
   >({})
+
+  const markTabDirty = (id: ApplyTab) => {
+    setTabStatus((prev) => {
+      if (prev[id] === 'dirty' || prev[id] === 'applying') return prev
+      return { ...prev, [id]: 'dirty' }
+    })
+  }
 
   const configQuery = useQuery({
     queryKey: ['app', 'onus', onuId, 'tr069-config'],
@@ -136,6 +192,16 @@ export function OnuTr069ConfigModal({
       })
       if (vars.refresh) {
         setMsg(r.message || 'Lectura desde ONU completada')
+        // Confirmación: lo encolado pasa a aplicado tras leer de la ONU.
+        setTabStatus((prev) => {
+          const next = { ...prev }
+          for (const id of ['wifi', 'users', 'ethernet'] as ApplyTab[]) {
+            if (prev[id] === 'queued' || prev[id] === 'applied') {
+              next[id] = 'applied'
+            }
+          }
+          return next
+        })
       }
     },
     onError: (e: Error) => {
@@ -146,14 +212,17 @@ export function OnuTr069ConfigModal({
   })
 
   const isReading = busyMode === 'read'
-  const isApplying = busyMode === 'apply'
+  const isApplying = busyMode === 'apply' || progressRunning
+  const hasQueued = (['wifi', 'users', 'ethernet'] as ApplyTab[]).some(
+    (id) => tabStatus[id] === 'queued',
+  )
   const bridgeActive = !!configQuery.data?.iptvBridge?.active
 
   async function runBridgeProgress(
     title: string,
     steps: ProgressStep[],
     runners: Record<string, () => Promise<string | void>>,
-  ) {
+  ): Promise<boolean> {
     setProgressTitle(title)
     setProgressSteps(steps)
     setProgressRunners(runners)
@@ -170,6 +239,7 @@ export function OnuTr069ConfigModal({
         queryKey: ['app', 'onus', onuId, 'tr069-config'],
       })
     }
+    return result.ok
   }
 
   function startEnableBridge() {
@@ -271,55 +341,94 @@ export function OnuTr069ConfigModal({
   }
 
   function startApplyWithProgress(body: ApplyTr069OnuConfigBody) {
-    const hasEth = (body.ethernet?.length ?? 0) > 0
     setError(null)
-    if (!hasEth) {
-      setBusyMode('apply')
-      void applyMutation.mutateAsync(body)
+    const sections: Array<{
+      id: ApplyTab
+      label: string
+      patch: ApplyTr069OnuConfigBody
+    }> = []
+    if (body.wifi?.length) {
+      sections.push({
+        id: 'wifi',
+        label: 'Encolar Wi‑Fi',
+        patch: { wifi: body.wifi },
+      })
+    }
+    if (body.webUsers?.length) {
+      sections.push({
+        id: 'users',
+        label: 'Encolar usuario web',
+        patch: { webUsers: body.webUsers },
+      })
+    }
+    if (body.ethernet?.length) {
+      sections.push({
+        id: 'ethernet',
+        label: 'Aplicar Ethernet (OMCI + encolar TR069)',
+        patch: { ethernet: body.ethernet },
+      })
+    }
+    if (!sections.length) {
+      setError('No hay cambios para guardar')
       return
     }
-    const steps: ProgressStep[] = [
-      {
-        id: 'bridge',
-        label: 'Comprobar bridge IPTV activo',
-        status: 'pending',
-      },
-      {
-        id: 'apply',
-        label: 'Aplicar VLAN en puertos (OMCI + TR069 lanbind)',
-        status: 'pending',
-      },
-      { id: 'done', label: 'Actualizar vista', status: 'pending' },
-    ]
-    const runners: Record<string, () => Promise<string | void>> = {
-      bridge: async () => {
-        const c = await apiFetch<Tr069OnuConfig>(
-          `/app/onus/${onuId}/tr069-config`,
-        )
-        if (!c.iptvBridge?.active) {
-          throw new Error('Activa el bridge IPTV antes de asignar VLAN TV')
+
+    setTabStatus((prev) => {
+      const next = { ...prev }
+      for (const s of sections) next[s.id] = 'applying'
+      return next
+    })
+
+    const steps: ProgressStep[] = sections.map((s) => ({
+      id: s.id,
+      label: s.label,
+      status: 'pending',
+    }))
+    const runners: Record<string, () => Promise<string | void>> = {}
+    for (const s of sections) {
+      runners[s.id] = async () => {
+        if (s.id === 'ethernet') {
+          const c = await apiFetch<Tr069OnuConfig>(
+            `/app/onus/${onuId}/tr069-config`,
+          )
+          const needsVlan = (s.patch.ethernet ?? []).some(
+            (e) => e.vlanId != null,
+          )
+          if (needsVlan && !c.iptvBridge?.active) {
+            throw new Error('Activa el bridge IPTV antes de asignar VLAN TV')
+          }
         }
-        return 'Bridge OK'
-      },
-      apply: async () => {
         const r = await apiFetch<ApplyTr069OnuConfigResponse>(
           `/app/onus/${onuId}/tr069-config`,
-          { method: 'POST', body: JSON.stringify(body) },
+          { method: 'POST', body: JSON.stringify(s.patch) },
         )
         void queryClient.setQueryData(
           ['app', 'onus', onuId, 'tr069-config'],
           r.config,
         )
+        setTabStatus((prev) => ({
+          ...prev,
+          [s.id]: r.queued ? 'queued' : 'applied',
+        }))
         setMsg(r.message)
-        return r.message
-      },
-      done: async () => {
-        await queryClient.invalidateQueries({
-          queryKey: ['app', 'onus', onuId, 'tr069-config'],
-        })
-      },
+        return r.queued
+          ? `Encolado · ${r.message}`
+          : r.message || 'Aplicado'
+      }
     }
-    void runBridgeProgress('Aplicar VLAN TV en Ethernet', steps, runners)
+    void runBridgeProgress('Aplicar configuración', steps, runners).then(
+      (ok) => {
+        if (!ok) {
+          setTabStatus((prev) => {
+            const next = { ...prev }
+            for (const s of sections) {
+              if (next[s.id] === 'applying') next[s.id] = 'failed'
+            }
+            return next
+          })
+        }
+      },
+    )
   }
 
   // First Inform often only has DeviceInfo — pull LAN/WiFi/users on open.
@@ -406,12 +515,12 @@ export function OnuTr069ConfigModal({
   const onuUnlockEnabled = !!modulesQuery.data?.find(
     (m) => m.id === 'onu_unlock',
   )?.contracted
-  const tabs: { id: Tab; label: string }[] = [
-    { id: 'wifi', label: 'Wi‑Fi' },
+  const tabs: { id: Tab; label: string; applyId?: ApplyTab }[] = [
+    { id: 'wifi', label: 'Wi‑Fi', applyId: 'wifi' },
     ...(onuUnlockEnabled
-      ? ([{ id: 'users', label: 'Usuario web' }] as const)
+      ? ([{ id: 'users' as const, label: 'Usuario web', applyId: 'users' as const }] as const)
       : []),
-    { id: 'ethernet', label: 'Ethernet' },
+    { id: 'ethernet', label: 'Ethernet', applyId: 'ethernet' },
     { id: 'info', label: 'Info ACS' },
   ]
 
@@ -466,6 +575,9 @@ export function OnuTr069ConfigModal({
               ].join(' ')}
             >
               {t.label}
+              {t.applyId ? (
+                <TabStatusBadge status={tabStatus[t.applyId]} />
+              ) : null}
             </button>
           ))}
         </nav>
@@ -559,7 +671,8 @@ export function OnuTr069ConfigModal({
                             type="checkbox"
                             checked={d.enabled}
                             disabled={!canWrite || !c.inAcs}
-                            onChange={(e) =>
+                            onChange={(e) => {
+                              markTabDirty('wifi')
                               setWifiDraft((prev) => ({
                                 ...prev,
                                 [r.index]: {
@@ -567,7 +680,7 @@ export function OnuTr069ConfigModal({
                                   enabled: e.target.checked,
                                 },
                               }))
-                            }
+                            }}
                           />
                           Activo
                         </label>
@@ -580,12 +693,13 @@ export function OnuTr069ConfigModal({
                           className={inputClass}
                           value={d.ssid}
                           disabled={!canWrite || !c.inAcs}
-                          onChange={(e) =>
+                          onChange={(e) => {
+                            markTabDirty('wifi')
                             setWifiDraft((prev) => ({
                               ...prev,
                               [r.index]: { ...d, ssid: e.target.value },
                             }))
-                          }
+                          }}
                         />
                       </label>
                       <label className="block text-sm">
@@ -600,12 +714,13 @@ export function OnuTr069ConfigModal({
                           }
                           value={d.key}
                           disabled={!canWrite || !c.inAcs || !r.keyPath}
-                          onChange={(e) =>
+                          onChange={(e) => {
+                            markTabDirty('wifi')
                             setWifiDraft((prev) => ({
                               ...prev,
                               [r.index]: { ...d, key: e.target.value },
                             }))
-                          }
+                          }}
                         />
                       </label>
                     </div>
@@ -643,7 +758,8 @@ export function OnuTr069ConfigModal({
                           className={inputClass}
                           value={d.username}
                           disabled={!canWrite || !c.inAcs}
-                          onChange={(e) =>
+                          onChange={(e) => {
+                            markTabDirty('users')
                             setUserDraft((prev) => ({
                               ...prev,
                               [u.index]: {
@@ -651,7 +767,7 @@ export function OnuTr069ConfigModal({
                                 username: e.target.value,
                               },
                             }))
-                          }
+                          }}
                         />
                       </label>
                       <label className="block text-sm">
@@ -664,7 +780,8 @@ export function OnuTr069ConfigModal({
                           placeholder="(vacío = no cambiar)"
                           value={d.password}
                           disabled={!canWrite || !c.inAcs}
-                          onChange={(e) =>
+                          onChange={(e) => {
+                            markTabDirty('users')
                             setUserDraft((prev) => ({
                               ...prev,
                               [u.index]: {
@@ -672,7 +789,7 @@ export function OnuTr069ConfigModal({
                                 password: e.target.value,
                               },
                             }))
-                          }
+                          }}
                         />
                       </label>
                     </div>
@@ -801,7 +918,8 @@ export function OnuTr069ConfigModal({
                                   portsLocked ||
                                   progressRunning
                                 }
-                                onChange={(e) =>
+                                onChange={(e) => {
+                                  markTabDirty('ethernet')
                                   setEthDraft((prev) => ({
                                     ...prev,
                                     [p.index]: {
@@ -810,7 +928,7 @@ export function OnuTr069ConfigModal({
                                       vlanMode: 'untag',
                                     },
                                   }))
-                                }
+                                }}
                               >
                                 <option value="">Sin VLAN</option>
                                 {currentId != null && !currentInList ? (
@@ -842,7 +960,8 @@ export function OnuTr069ConfigModal({
                                   portsLocked ||
                                   progressRunning
                                 }
-                                onChange={(e) =>
+                                onChange={(e) => {
+                                  markTabDirty('ethernet')
                                   setEthDraft((prev) => ({
                                     ...prev,
                                     [p.index]: {
@@ -850,7 +969,7 @@ export function OnuTr069ConfigModal({
                                       enabled: e.target.checked,
                                     },
                                   }))
-                                }
+                                }}
                               />
                             </td>
                           </tr>
@@ -865,24 +984,32 @@ export function OnuTr069ConfigModal({
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--border)] px-5 py-3">
-          <button
-            type="button"
-            disabled={
-              !canWrite ||
-              applyMutation.isPending ||
-              progressRunning ||
-              !c?.inAcs
-            }
-            onClick={() => {
-              setError(null)
-              setMsg('Leyendo Wi‑Fi / Ethernet / usuarios desde la ONU…')
-              setBusyMode('read')
-              void applyMutation.mutateAsync({ refresh: true })
-            }}
-            className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm disabled:opacity-50"
-          >
-            {isReading ? 'Leyendo…' : 'Refrescar desde ONU'}
-          </button>
+          <div className="flex min-w-0 flex-col gap-1">
+            <button
+              type="button"
+              disabled={
+                !canWrite ||
+                applyMutation.isPending ||
+                progressRunning ||
+                !c?.inAcs
+              }
+              onClick={() => {
+                setError(null)
+                setMsg('Leyendo Wi‑Fi / Ethernet / usuarios desde la ONU…')
+                setBusyMode('read')
+                void applyMutation.mutateAsync({ refresh: true })
+              }}
+              className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm disabled:opacity-50"
+            >
+              {isReading ? 'Leyendo…' : 'Refrescar desde ONU'}
+            </button>
+            {hasQueued ? (
+              <p className="max-w-xs text-[11px] text-amber-300">
+                Hay cambios encolados; usa Refrescar tras el Inform para
+                confirmar.
+              </p>
+            ) : null}
+          </div>
           <div className="flex gap-2">
             <button
               type="button"
@@ -911,8 +1038,13 @@ export function OnuTr069ConfigModal({
                   return
                 }
                 if ((body.ethernet?.length ?? 0) > 0 && !bridgeActive) {
-                  setError('Activa el bridge IPTV antes de aplicar VLAN TV')
-                  return
+                  const needsVlan = (body.ethernet ?? []).some(
+                    (e) => e.vlanId != null,
+                  )
+                  if (needsVlan) {
+                    setError('Activa el bridge IPTV antes de aplicar VLAN TV')
+                    return
+                  }
                 }
                 startApplyWithProgress(body)
               }}
@@ -920,9 +1052,9 @@ export function OnuTr069ConfigModal({
             >
               {isReading
                 ? 'Leyendo…'
-                : isApplying || progressRunning
+                : isApplying
                   ? 'Aplicando…'
-                  : 'Aplicar vía TR069'}
+                  : 'Aplicar'}
             </button>
           </div>
         </div>

@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { BrandLogo } from '../components/BrandLogo'
 import {
@@ -10,7 +10,12 @@ import {
 export function LoginPage() {
   const { login } = useAuth()
   const navigate = useNavigate()
-  const [email, setEmail] = useState(() => getRememberedEmail())
+  const [searchParams] = useSearchParams()
+  const justRegistered = searchParams.get('registered') === '1'
+  const emailFromQuery = (searchParams.get('email') || '').trim()
+  const [email, setEmail] = useState(
+    () => emailFromQuery || getRememberedEmail(),
+  )
   const [password, setPassword] = useState('')
   const [remember, setRemember] = useState(
     () => getRememberPreference() || !!getRememberedEmail(),
@@ -46,6 +51,13 @@ export function LoginPage() {
             Iniciar sesión
           </h1>
         </div>
+
+        {justRegistered && (
+          <p className="mb-4 rounded-xl border border-[var(--accent)]/35 bg-[var(--accent)]/10 px-3 py-2.5 text-sm text-[var(--text)]">
+            Cuenta creada. Inicia sesión con el email del dueño para entrar al
+            panel.
+          </p>
+        )}
 
         <form
           onSubmit={onSubmit}

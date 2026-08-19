@@ -3,10 +3,10 @@ set -eu
 PANEL_URL="${PANEL_URL:-https://panel.ispcontrol.ai}"
 API_PUBLIC_URL="${API_PUBLIC_URL:-/api}"
 CONTACT_EMAIL="${CONTACT_EMAIL:-hola@ispcontrol.ai}"
-REGISTER_URL="${REGISTER_URL:-${PANEL_URL%/}/login}"
-# Si viene vacío desde compose, vuelve al login del panel.
+REGISTER_URL="${REGISTER_URL:-/register.html}"
+# Si viene vacío desde compose, usa la página de registro del landing.
 if [ -z "${REGISTER_URL}" ]; then
-  REGISTER_URL="${PANEL_URL%/}/login"
+  REGISTER_URL="/register.html"
 fi
 export PANEL_URL API_PUBLIC_URL CONTACT_EMAIL REGISTER_URL
 envsubst '${PANEL_URL} ${API_PUBLIC_URL} ${CONTACT_EMAIL} ${REGISTER_URL}' \

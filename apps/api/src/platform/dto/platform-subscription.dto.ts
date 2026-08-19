@@ -23,6 +23,10 @@ export class SystemPlanPriceItemDto {
 
   @IsBoolean()
   enabled!: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  isFree?: boolean;
 }
 
 export class UpdateSystemPlansDto {

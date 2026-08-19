@@ -25,6 +25,14 @@ import {
   runProgressSteps,
   type ProgressStep,
 } from './OperationProgressModal'
+import { runOnuApplyAndVerify } from '../lib/onu-apply-verify-progress'
+import {
+  applyWifiAfterProvision,
+  buildWifiCredsOrNull,
+  sanitizeSsid,
+  validateWifiCredsInput,
+  type WifiCreds,
+} from '../lib/onu-wifi-apply'
 import type { Zone } from './ZonasSettingsTab'
 import { ModalPortal } from './ModalPortal'
 
@@ -37,7 +45,10 @@ const STEPS = [
   { n: 2, label: 'Ubicación' },
   { n: 3, label: 'Plan' },
   { n: 4, label: 'Red' },
+  { n: 5, label: 'Wi‑Fi' },
 ] as const
+
+const LAST_STEP = 5
 
 export function NewServiceWizardModal({
   open,
@@ -89,15 +100,34 @@ export function NewServiceWizardModal({
   const [wanVlanPick, setWanVlanPick] = useState('')
   const [tr069ProfilePick, setTr069ProfilePick] = useState('')
 
+  // Paso 5 — Wi‑Fi (se aplica al final, tras el provision)
+  const [wifiSsid24, setWifiSsid24] = useState('')
+  const [wifiKey24, setWifiKey24] = useState('')
+  const [wifiSsid5, setWifiSsid5] = useState('')
+  const [wifiKey5, setWifiKey5] = useState('')
+  const [wifiSameKey, setWifiSameKey] = useState(true)
+  const [wifiSkip, setWifiSkip] = useState(false)
+
   // Progreso final
   const [progressOpen, setProgressOpen] = useState(false)
   const [progressSteps, setProgressSteps] = useState<ProgressStep[]>([])
   const [progressRunning, setProgressRunning] = useState(false)
   const [progressFailed, setProgressFailed] = useState(false)
   const [progressDone, setProgressDone] = useState(false)
-  const runnersRef = useRef<Record<string, () => Promise<string | void>>>({})
+  const [driverId, setDriverId] = useState<string | null>(null)
   /** Resultados intermedios que sobreviven a los reintentos. */
-  const ctxRef = useRef<{ onuDbId?: string; serviceId?: string }>({})
+  const ctxRef = useRef<{ onuDbId?: string; serviceId?: string; wanApplied?: boolean }>({})
+  const finishArgsRef = useRef<{
+    hasNetwork: boolean
+    vlanBody: {
+      mgmtVlanId?: number
+      wanVlanId?: number
+      tr069ProfileId?: string
+    }
+    mgmtVlan: number | null
+    wanVlan: number | null
+    wifi: WifiCreds | null
+  } | null>(null)
 
   useEffect(() => {
     if (!open) return
@@ -131,11 +161,19 @@ export function NewServiceWizardModal({
     setMgmtVlanPick('')
     setWanVlanPick('')
     setTr069ProfilePick('')
+    setWifiSsid24('')
+    setWifiKey24('')
+    setWifiSsid5('')
+    setWifiKey5('')
+    setWifiSameKey(true)
+    setWifiSkip(false)
     setProgressOpen(false)
     setProgressSteps([])
     setProgressFailed(false)
     setProgressDone(false)
+    setDriverId(null)
     ctxRef.current = {}
+    finishArgsRef.current = null
     // eslint-disable-next-line react-hooks/exhaustive-deps -- solo resetear al abrir
   }, [open])
 
@@ -278,6 +316,16 @@ export function NewServiceWizardModal({
       if (mgmtVlanPick && tr069Profiles.length > 0 && !tr069ProfilePick)
         return 'Selecciona el perfil TR069.'
     }
+    if (current === 5) {
+      return validateWifiCredsInput({
+        skip: wifiSkip,
+        ssid24: wifiSsid24,
+        ssid5: wifiSsid5,
+        key24: wifiKey24,
+        key5: wifiKey5,
+        sameKey: wifiSameKey,
+      })
+    }
     return null
   }
 
@@ -288,7 +336,16 @@ export function NewServiceWizardModal({
       return
     }
     setError(null)
-    setStep((s) => Math.min(4, s + 1))
+    // Al entrar a Wi‑Fi, sugerir SSID desde el nombre del servicio.
+    if (step === 4 && !wifiSsid24.trim()) {
+      const base =
+        sanitizeSsid(name.trim()) ||
+        sanitizeSsid(clientName) ||
+        'WiFi'
+      setWifiSsid24(base)
+      if (!wifiSsid5.trim()) setWifiSsid5(`${base}-5G`.slice(0, 32))
+    }
+    setStep((s) => Math.min(LAST_STEP, s + 1))
   }
 
   function back() {
@@ -297,7 +354,7 @@ export function NewServiceWizardModal({
   }
 
   function finish() {
-    const err = validateStep(4)
+    const err = validateStep(LAST_STEP)
     if (err) {
       setError(err)
       return
@@ -308,6 +365,7 @@ export function NewServiceWizardModal({
     const mgmtVlan = mgmtVlanPick ? Number(mgmtVlanPick) : null
     const wanVlan = wanVlanPick ? Number(wanVlanPick) : null
     const hasNetwork = mgmtVlan != null || wanVlan != null
+    ctxRef.current.wanApplied = wanVlan != null
     const vlanBody: {
       mgmtVlanId?: number
       wanVlanId?: number
@@ -318,8 +376,36 @@ export function NewServiceWizardModal({
     if (mgmtVlan != null && tr069ProfilePick) {
       vlanBody.tr069ProfileId = tr069ProfilePick
     }
+    const wifi = buildWifiCredsOrNull({
+      skip: wifiSkip,
+      ssid24: wifiSsid24,
+      ssid5: wifiSsid5,
+      key24: wifiKey24,
+      key5: wifiKey5,
+      sameKey: wifiSameKey,
+    })
+    finishArgsRef.current = { hasNetwork, vlanBody, mgmtVlan, wanVlan, wifi }
+    setProgressOpen(true)
+    void executeFinish()
+  }
 
-    const steps: ProgressStep[] = [
+  async function executeFinish() {
+    const args = finishArgsRef.current
+    if (!orphan || !args) return
+    const { hasNetwork, vlanBody, mgmtVlan, wanVlan, wifi } = args
+
+    setProgressRunning(true)
+    setProgressFailed(false)
+    setProgressDone(false)
+    setDriverId(null)
+
+    const requireOnuDbId = () => {
+      const id = ctxRef.current.onuDbId
+      if (!id) throw new Error('No se obtuvo el ID de la ONU autorizada')
+      return id
+    }
+
+    const head: ProgressStep[] = [
       { id: 'authorize', label: 'Autorizando ONU en la OLT', status: 'pending' },
       {
         id: 'zone',
@@ -339,35 +425,18 @@ export function NewServiceWizardModal({
               label: 'Asignando IPs de los pools (mgmt / WAN)',
               status: 'pending',
             },
-            {
-              id: 'apply',
-              label: 'Aplicando configuración a la ONU',
-              status: 'pending',
-            },
-            {
-              id: 'verify',
-              label: 'Esperando ONU online y verificando configuración',
-              status: 'pending',
-            },
           ] satisfies ProgressStep[])
         : []),
     ]
+    setProgressSteps(head)
 
-    const requireOnuDbId = () => {
-      const id = ctxRef.current.onuDbId
-      if (!id) throw new Error('No se obtuvo el ID de la ONU autorizada')
-      return id
-    }
-
-    const runners: Record<string, () => Promise<string | void>> = {
+    const headResult = await runProgressSteps(head, setProgressSteps, {
       authorize: async () => {
         const r = await apiFetch<AuthorizeOnuResponse>('/app/onus/authorize', {
           method: 'POST',
           body: JSON.stringify({
             oltId: orphan.oltId,
             oltIf: orphan.oltIf,
-            // Sin índice: la OLT resuelve el primero libre al autorizar, que es
-            // más fiable que la sugerencia calculada al listar huérfanas.
             onuId: null,
             sn: orphan.sn,
             onuType: null,
@@ -437,76 +506,76 @@ export function NewServiceWizardModal({
         )
         return r.message || 'IPs asignadas'
       },
-      apply: async () => {
-        let lastErr: unknown = null
-        for (let attempt = 1; attempt <= 2; attempt++) {
-          try {
-            const r = await apiFetch<{ message?: string }>(
-              `/app/onus/${requireOnuDbId()}/network-vlans/apply`,
-              { method: 'POST', body: JSON.stringify(vlanBody) },
-            )
-            return `${r.message || 'ONU OK'}${attempt > 1 ? ` (intento ${attempt})` : ''}`
-          } catch (e) {
-            lastErr = e
-          }
-        }
-        throw new Error(
-          lastErr instanceof Error ? lastErr.message : String(lastErr),
-        )
-      },
-      verify: async () => {
-        const r = await apiFetch<{
-          ok: boolean
-          message?: string
-          mgmtVlanId?: number | null
-          wanVlanId?: number | null
-        }>(`/app/onus/${requireOnuDbId()}/network-vlans/verify`, {
-          method: 'POST',
-        })
-        if (mgmtVlan != null && r.mgmtVlanId !== mgmtVlan) {
-          throw new Error(
-            `Mgmt quedó en VLAN ${r.mgmtVlanId ?? '—'}, se esperaba ${mgmtVlan}`,
-          )
-        }
-        if (wanVlan != null && r.wanVlanId !== wanVlan) {
-          throw new Error(
-            `WAN quedó en VLAN ${r.wanVlanId ?? '—'}, se esperaba ${wanVlan}`,
-          )
-        }
-        return r.message || 'Configuración verificada'
-      },
+    })
+
+    if (!headResult.ok) {
+      setProgressRunning(false)
+      setProgressFailed(true)
+      return
     }
 
-    runnersRef.current = runners
-    setProgressSteps(steps)
-    setProgressOpen(true)
-    void executeProgress(steps)
-  }
+    void queryClient.invalidateQueries({
+      queryKey: ['app', 'clients', clientId],
+    })
+    void queryClient.invalidateQueries({ queryKey: ['app', 'dashboard'] })
+    void queryClient.invalidateQueries({ queryKey: ['app', 'onus'] })
+    void queryClient.invalidateQueries({ queryKey: ['app', 'zones'] })
 
-  async function executeProgress(steps: ProgressStep[]) {
-    setProgressRunning(true)
-    setProgressFailed(false)
-    setProgressDone(false)
-    const result = await runProgressSteps(
-      steps,
-      setProgressSteps,
-      runnersRef.current,
-    )
-    setProgressRunning(false)
-    if (result.ok) {
-      setProgressDone(true)
-      void queryClient.invalidateQueries({
-        queryKey: ['app', 'clients', clientId],
+    let stepsSoFar = headResult.steps
+
+    if (hasNetwork) {
+      const applyResult = await runOnuApplyAndVerify({
+        onuId: requireOnuDbId(),
+        body: vlanBody,
+        headSteps: headResult.steps,
+        setProgressSteps,
+        setDriverId,
+        expect: {
+          mgmtVlan,
+          wanVlan,
+          requireWanIp: wanVlan != null,
+        },
       })
-      void queryClient.invalidateQueries({ queryKey: ['app', 'dashboard'] })
-      void queryClient.invalidateQueries({ queryKey: ['app', 'onus'] })
-      void queryClient.invalidateQueries({ queryKey: ['app', 'zones'] })
       void queryClient.invalidateQueries({
         queryKey: ['app', 'settings', 'ip-pools'],
       })
-    } else {
-      setProgressFailed(true)
+      void queryClient.invalidateQueries({
+        queryKey: ['app', 'onus', requireOnuDbId(), 'tr069-config'],
+      })
+      if (!applyResult.ok) {
+        setProgressRunning(false)
+        setProgressFailed(true)
+        return
+      }
+      stepsSoFar = applyResult.steps
     }
+
+    // Wi‑Fi al final: cuando la ONU ya está provisionada y en ACS.
+    if (wifi) {
+      const wifiHead: ProgressStep[] = [
+        ...stepsSoFar.map((s) => ({ ...s, status: 'done' as const })),
+        {
+          id: 'wifi',
+          label: 'Aplicando Wi‑Fi (SSID y contraseña)',
+          status: 'pending',
+        },
+      ]
+      setProgressSteps(wifiHead)
+      const wifiResult = await runProgressSteps(wifiHead, setProgressSteps, {
+        wifi: async () =>
+          applyWifiAfterProvision(requireOnuDbId(), wifi),
+      })
+      void queryClient.invalidateQueries({
+        queryKey: ['app', 'onus', requireOnuDbId(), 'tr069-config'],
+      })
+      setProgressRunning(false)
+      if (wifiResult.ok) setProgressDone(true)
+      else setProgressFailed(true)
+      return
+    }
+
+    setProgressRunning(false)
+    setProgressDone(true)
   }
 
   if (!open) return null
@@ -1024,6 +1093,119 @@ export function NewServiceWizardModal({
               </div>
             )}
 
+            {step === 5 && (
+              <div className="space-y-3">
+                <p className="text-sm text-[var(--text-muted)]">
+                  Credenciales Wi‑Fi del domicilio. Se aplican{' '}
+                  <strong className="font-medium text-[var(--text)]">
+                    al final
+                  </strong>
+                  , cuando la ONU ya esté aprovisionada y en el ACS.
+                </p>
+
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={wifiSkip}
+                    onChange={(e) => setWifiSkip(e.target.checked)}
+                  />
+                  Omitir Wi‑Fi (configurar después en Configurar ONU)
+                </label>
+
+                {!wifiSkip && (
+                  <>
+                    <div className="rounded-lg border border-[var(--border)] p-3 space-y-3">
+                      <p className="text-xs font-medium text-[var(--text-muted)]">
+                        2.4 GHz
+                      </p>
+                      <label className="block text-sm">
+                        <span className="mb-1 block text-[var(--text-muted)]">
+                          SSID
+                        </span>
+                        <input
+                          className={inputClass}
+                          value={wifiSsid24}
+                          maxLength={32}
+                          placeholder="Ej. Familia-Lopez"
+                          onChange={(e) => {
+                            const v = e.target.value
+                            const prevSuggested = `${sanitizeSsid(wifiSsid24) || wifiSsid24.trim()}-5G`.slice(
+                              0,
+                              32,
+                            )
+                            setWifiSsid24(v)
+                            if (
+                              !wifiSsid5.trim() ||
+                              wifiSsid5 === prevSuggested ||
+                              wifiSsid5.endsWith('-5G')
+                            ) {
+                              const base = sanitizeSsid(v) || v.trim()
+                              if (base) setWifiSsid5(`${base}-5G`.slice(0, 32))
+                            }
+                          }}
+                        />
+                      </label>
+                      <label className="block text-sm">
+                        <span className="mb-1 block text-[var(--text-muted)]">
+                          Contraseña
+                        </span>
+                        <input
+                          className={inputClass}
+                          type="text"
+                          autoComplete="new-password"
+                          minLength={8}
+                          placeholder="Mínimo 8 caracteres"
+                          value={wifiKey24}
+                          onChange={(e) => setWifiKey24(e.target.value)}
+                        />
+                      </label>
+                    </div>
+
+                    <div className="rounded-lg border border-[var(--border)] p-3 space-y-3">
+                      <p className="text-xs font-medium text-[var(--text-muted)]">
+                        5 GHz
+                      </p>
+                      <label className="block text-sm">
+                        <span className="mb-1 block text-[var(--text-muted)]">
+                          SSID
+                        </span>
+                        <input
+                          className={inputClass}
+                          value={wifiSsid5}
+                          maxLength={32}
+                          placeholder="Ej. Familia-Lopez-5G"
+                          onChange={(e) => setWifiSsid5(e.target.value)}
+                        />
+                      </label>
+                      <label className="flex items-center gap-2 text-sm">
+                        <input
+                          type="checkbox"
+                          checked={wifiSameKey}
+                          onChange={(e) => setWifiSameKey(e.target.checked)}
+                        />
+                        Misma contraseña que 2.4 GHz
+                      </label>
+                      {!wifiSameKey && (
+                        <label className="block text-sm">
+                          <span className="mb-1 block text-[var(--text-muted)]">
+                            Contraseña 5 GHz
+                          </span>
+                          <input
+                            className={inputClass}
+                            type="text"
+                            autoComplete="new-password"
+                            minLength={8}
+                            value={wifiKey5}
+                            onChange={(e) => setWifiKey5(e.target.value)}
+                          />
+                        </label>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
             {error && (
               <p className="mt-3 text-sm text-[var(--danger)]">{error}</p>
             )}
@@ -1037,7 +1219,7 @@ export function NewServiceWizardModal({
             >
               {step === 1 ? 'Cancelar' : '← Atrás'}
             </button>
-            {step < 4 ? (
+            {step < LAST_STEP ? (
               <button
                 type="button"
                 onClick={next}
@@ -1065,13 +1247,32 @@ export function NewServiceWizardModal({
         running={progressRunning}
         failed={progressFailed}
         allDone={progressDone}
-        onRetry={() => void executeProgress(progressSteps)}
+        closeWhileRunning
+        closeLabel={
+          progressRunning
+            ? 'Seguir en segundo plano'
+            : progressDone
+              ? 'Listo'
+              : 'Cerrar'
+        }
+        doneLabel={
+          driverId
+            ? `ONU OK · driver ${driverId}`
+            : 'Servicio creado — aprovisionamiento verificado'
+        }
+        failedLabel="Hay errores — puedes reintentar"
+        onRetry={() => void executeFinish()}
         onClose={() => {
-          if (progressRunning) return
           setProgressOpen(false)
-          if (progressDone) onClose()
+          if (progressDone || !progressRunning) onClose()
         }}
-      />
+      >
+        {driverId ? (
+          <p className="mx-5 mb-1 text-xs text-[var(--text-muted)]">
+            Script: {driverId}
+          </p>
+        ) : null}
+      </OperationProgressModal>
     </>
   )
 }

@@ -21,7 +21,7 @@ export class PlatformCharge {
   tenantId: string;
 
   /**
-   * renewal | plan_change | module_one_time | module_prorate | initial
+   * renewal | plan_change | module_one_time | module_prorate | initial | service
    */
   @Column({ type: 'varchar', length: 40 })
   kind: string;

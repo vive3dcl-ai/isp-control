@@ -78,6 +78,9 @@ Sesión memoria MCP: `isp-control-olt-router-review`
 - **Qué:** Facade `oltCli()` / `oltSnmp()` castean Huawei al tipo ZTE.
 - **Riesgo:** Drift de firmas sin error de TypeScript; bugs silenciosos si APIs divergen.
 - **Acción:** Extraer interfaz común (`ManagedOltCliClient`, `ManagedOltSnmpClient`) e inyectar esa.
+  Plan completo de silos OLT (C3xx / Titan / Huawei) + biblioteca ONU:
+  [`drivers-migration.md`](./drivers-migration.md) (Fase 1 cierra este ítem sin
+  mover aún el monolito ZTE).
 
 ### P1.2 Probe CLI Huawei sin fail-streak
 - **Archivo:** `topology.service.ts` → `probeAndPersistHuaweiOlt`

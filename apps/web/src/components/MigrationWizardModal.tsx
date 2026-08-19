@@ -227,7 +227,19 @@ export function MigrationWizardModal({
     const runners: Record<string, () => Promise<string | void>> = {
       import: async () => {
         if (ctxRef.current.onuDbId) {
-          return "ONU ya estaba en Conectadas";
+          const oid = ctxRef.current.onuDbId;
+          try {
+            const sync = await apiFetch<{ message?: string }>(
+              `/app/onus/${oid}/model/sync-acs`,
+              { method: "POST" },
+            );
+            return (
+              sync.message ||
+              "ONU ya estaba en Conectadas (modelo ACS revisado)"
+            );
+          } catch {
+            return "ONU ya estaba en Conectadas";
+          }
         }
         const snap = {
           onuIf: migrationCandidate.onuIf,

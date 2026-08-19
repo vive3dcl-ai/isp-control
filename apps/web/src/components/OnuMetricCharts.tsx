@@ -44,6 +44,26 @@ function toPoints(samples: MetricSample[], since: number): Pt[] {
 }
 
 /**
+ * Contadores SNMP stale producen muestras 0 entre dos lecturas reales.
+ * Mientras el hueco sea corto, mantenemos la última tasa > 0 (más realista).
+ */
+function holdShortZeros(points: Pt[], maxHoldMs: number): Pt[] {
+  if (points.length < 2) return points
+  let lastNonZero: Pt | null = null
+  return points.map((p) => {
+    if (p.v > 0) {
+      lastNonZero = p
+      return p
+    }
+    if (lastNonZero && p.t - lastNonZero.t <= maxHoldMs) {
+      return { t: p.t, v: lastNonZero.v }
+    }
+    lastNonZero = null
+    return p
+  })
+}
+
+/**
  * Agrupa en cubos de tiempo, no por índice. Muestrear por índice mezcla tramos
  * de 1 min con tramos de 3 s y deforma el eje: los últimos minutos se comían
  * media gráfica y el resto quedaba aplastado.
@@ -313,12 +333,21 @@ export function TrafficChart({
     const from = to - metricWindowMs(windowKey)
     // Cada sentido va por su lado: cruzarlos por marca de tiempo obligaba a
     // rellenar con cero el que faltaba y dibujaba caídas que no ocurrieron.
-    const down = bucketize(toPoints(download, from), from, to, 240, 'max').map(
-      (p) => ({ t: p.t, v: bpsToMbps(p.v) }),
-    )
-    const up = bucketize(toPoints(upload, from), from, to, 240, 'max').map(
-      (p) => ({ t: p.t, v: bpsToMbps(p.v) }),
-    )
+    // Hold ~45s: coincide con el idle emit del backend ante contadores stale.
+    const down = bucketize(
+      holdShortZeros(toPoints(download, from), 45_000),
+      from,
+      to,
+      240,
+      'max',
+    ).map((p) => ({ t: p.t, v: bpsToMbps(p.v) }))
+    const up = bucketize(
+      holdShortZeros(toPoints(upload, from), 45_000),
+      from,
+      to,
+      240,
+      'max',
+    ).map((p) => ({ t: p.t, v: bpsToMbps(p.v) }))
     if (!down.length && !up.length) return null
     const max = Math.max(...down.map((p) => p.v), ...up.map((p) => p.v), 0.1)
     return { from, to, down, up, max }

@@ -321,6 +321,15 @@ export type UncfgOnu = {
   suggestedOnuId: number | null
   /** SN also present in Conectadas (possible stale inventory row). */
   inConnected?: boolean
+  /** Modelo ACS (ProductClass), p. ej. HG6143D. */
+  model?: string | null
+  modelSource?: 'acs' | 'sighting' | 'inventory' | null
+  /** Driver ONU resuelto (library/generic). */
+  driverId?: string | null
+  vendor?: string
+  /** Primera aparición en Huérfanas (ISO). */
+  firstSeenAt?: string | null
+  lastSeenAt?: string | null
 }
 
 export type UncfgResponse = {
@@ -329,9 +338,31 @@ export type UncfgResponse = {
   errors: Array<{ oltId: string; oltName: string; error: string }>
   total: number
   deniedCount?: number
+  suspendedCount?: number
   rawUncfg?: number
   alsoInConnected?: number
   probedAt: string
+}
+
+export type SuspendedOnu = {
+  id: string
+  sn: string | null
+  oltId: string
+  oltName: string
+  onuIf: string
+  ponType: string
+  board: string
+  port: string
+  onuId: string
+  adminState: string
+  online: boolean
+  status: string
+  name: string | null
+}
+
+export type SuspendedOnusResponse = {
+  suspended: SuspendedOnu[]
+  total: number
 }
 
 export type DeniedOnu = {
@@ -344,6 +375,8 @@ export type DeniedOnu = {
   port: string | null
   ponType: string | null
   note: string | null
+  manual?: boolean
+  inConnected?: boolean
   deniedAt: string
 }
 

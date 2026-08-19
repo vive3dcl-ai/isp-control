@@ -20,6 +20,7 @@ import {
   runProgressSteps,
   type ProgressStep,
 } from './OperationProgressModal'
+import { runOnuApplyAndVerify } from '../lib/onu-apply-verify-progress'
 import { ModalPortal } from './ModalPortal'
 
 const inputClass =
@@ -61,8 +62,19 @@ export function ChangeServiceOnuModal({
   const [progressRunning, setProgressRunning] = useState(false)
   const [progressFailed, setProgressFailed] = useState(false)
   const [progressDone, setProgressDone] = useState(false)
-  const runnersRef = useRef<Record<string, () => Promise<string | void>>>({})
-  const ctxRef = useRef<{ onuDbId?: string }>({})
+  const [driverId, setDriverId] = useState<string | null>(null)
+  const ctxRef = useRef<{ onuDbId?: string; wanApplied?: boolean }>({})
+  const swapArgsRef = useRef<{
+    hasNetwork: boolean
+    vlanBody: {
+      mgmtVlanId?: number
+      wanVlanId?: number
+      tr069ProfileId?: string
+    }
+    mgmtVlan: number | null
+    wanVlan: number | null
+    releaseTargets: ConnectedOnu[]
+  } | null>(null)
 
   useEffect(() => {
     if (!open) return
@@ -190,6 +202,7 @@ export function ChangeServiceOnuModal({
     const mgmtVlan = mgmtVlanPick ? Number(mgmtVlanPick) : null
     const wanVlan = wanVlanPick ? Number(wanVlanPick) : null
     const hasNetwork = mgmtVlan != null || wanVlan != null
+    ctxRef.current.wanApplied = wanVlan != null
     const vlanBody: {
       mgmtVlanId?: number
       wanVlanId?: number
@@ -200,9 +213,34 @@ export function ChangeServiceOnuModal({
     if (mgmtVlan != null && tr069ProfilePick) {
       vlanBody.tr069ProfileId = tr069ProfilePick
     }
+    swapArgsRef.current = {
+      hasNetwork,
+      vlanBody,
+      mgmtVlan,
+      wanVlan,
+      releaseTargets: [...toRelease],
+    }
+    setProgressOpen(true)
+    void executeSwap()
+  }
 
-    const releaseTargets = [...toRelease]
-    const steps: ProgressStep[] = [
+  async function executeSwap() {
+    const args = swapArgsRef.current
+    if (!orphan || !args) return
+    const { hasNetwork, vlanBody, mgmtVlan, wanVlan, releaseTargets } = args
+
+    setProgressRunning(true)
+    setProgressFailed(false)
+    setProgressDone(false)
+    setDriverId(null)
+
+    const requireOnuDbId = () => {
+      const id = ctxRef.current.onuDbId
+      if (!id) throw new Error('No se obtuvo el ID de la ONU autorizada')
+      return id
+    }
+
+    const head: ProgressStep[] = [
       ...(releaseTargets.length
         ? ([
             {
@@ -229,32 +267,12 @@ export function ChangeServiceOnuModal({
               label: 'Asignar IPs de los pools',
               status: 'pending',
             },
-            {
-              id: 'apply',
-              label: 'Aplicar configuración a la ONU',
-              status: 'pending',
-            },
-            {
-              id: 'verify',
-              label: 'Esperando ONU online y verificando configuración',
-              status: 'pending',
-            },
           ] satisfies ProgressStep[])
         : []),
-      {
-        id: 'link',
-        label: 'Enlazar ONU al servicio',
-        status: 'pending',
-      },
     ]
+    setProgressSteps(head)
 
-    const requireOnuDbId = () => {
-      const id = ctxRef.current.onuDbId
-      if (!id) throw new Error('No se obtuvo el ID de la ONU autorizada')
-      return id
-    }
-
-    const runners: Record<string, () => Promise<string | void>> = {
+    const headResult = await runProgressSteps(head, setProgressSteps, {
       release: async () => {
         const notes: string[] = []
         for (const o of releaseTargets) {
@@ -264,7 +282,6 @@ export function ChangeServiceOnuModal({
           })
           notes.push(`${o.sn || o.onuIf}`)
         }
-        // Desenlazar mientras tanto para no dejar un id huérfano en el servicio.
         await apiFetch(`/app/client-services/${service.id}`, {
           method: 'PATCH',
           body: JSON.stringify({ onuId: null }),
@@ -279,8 +296,6 @@ export function ChangeServiceOnuModal({
           body: JSON.stringify({
             oltId: orphan.oltId,
             oltIf: orphan.oltIf,
-            // Sin índice: la OLT resuelve el primero libre al autorizar, que es
-            // más fiable que la sugerencia calculada al listar huérfanas.
             onuId: null,
             sn: orphan.sn,
             onuType: null,
@@ -311,44 +326,42 @@ export function ChangeServiceOnuModal({
         )
         return r.message || 'IPs asignadas'
       },
-      apply: async () => {
-        let lastErr: unknown = null
-        for (let attempt = 1; attempt <= 2; attempt++) {
-          try {
-            const r = await apiFetch<{ message?: string }>(
-              `/app/onus/${requireOnuDbId()}/network-vlans/apply`,
-              { method: 'POST', body: JSON.stringify(vlanBody) },
-            )
-            return `${r.message || 'ONU OK'}${attempt > 1 ? ` (intento ${attempt})` : ''}`
-          } catch (e) {
-            lastErr = e
-          }
-        }
-        throw new Error(
-          lastErr instanceof Error ? lastErr.message : String(lastErr),
-        )
+    })
+
+    if (!headResult.ok) {
+      setProgressRunning(false)
+      setProgressFailed(true)
+      return
+    }
+
+    let stepsAfter = headResult.steps
+    if (hasNetwork) {
+      const applyResult = await runOnuApplyAndVerify({
+        onuId: requireOnuDbId(),
+        body: vlanBody,
+        headSteps: headResult.steps,
+        setProgressSteps,
+        setDriverId,
+        expect: { mgmtVlan, wanVlan, requireWanIp: wanVlan != null },
+      })
+      if (!applyResult.ok) {
+        setProgressRunning(false)
+        setProgressFailed(true)
+        return
+      }
+      stepsAfter = applyResult.steps
+    }
+
+    const linkHead: ProgressStep[] = [
+      ...stepsAfter.map((s) => ({ ...s, status: 'done' as const })),
+      {
+        id: 'link',
+        label: 'Enlazar ONU al servicio',
+        status: 'pending',
       },
-      verify: async () => {
-        const r = await apiFetch<{
-          ok: boolean
-          message?: string
-          mgmtVlanId?: number | null
-          wanVlanId?: number | null
-        }>(`/app/onus/${requireOnuDbId()}/network-vlans/verify`, {
-          method: 'POST',
-        })
-        if (mgmtVlan != null && r.mgmtVlanId !== mgmtVlan) {
-          throw new Error(
-            `Mgmt quedó en VLAN ${r.mgmtVlanId ?? '—'}, se esperaba ${mgmtVlan}`,
-          )
-        }
-        if (wanVlan != null && r.wanVlanId !== wanVlan) {
-          throw new Error(
-            `WAN quedó en VLAN ${r.wanVlanId ?? '—'}, se esperaba ${wanVlan}`,
-          )
-        }
-        return r.message || 'Verificado'
-      },
+    ]
+    setProgressSteps(linkHead)
+    const linkResult = await runProgressSteps(linkHead, setProgressSteps, {
       link: async () => {
         await apiFetch(`/app/client-services/${service.id}`, {
           method: 'PATCH',
@@ -356,33 +369,19 @@ export function ChangeServiceOnuModal({
         })
         return 'Servicio actualizado'
       },
-    }
+    })
 
-    runnersRef.current = runners
-    setProgressSteps(steps)
-    setProgressOpen(true)
-    void executeProgress(steps)
-  }
+    void queryClient.invalidateQueries({
+      queryKey: ['app', 'clients', clientId],
+    })
+    void queryClient.invalidateQueries({ queryKey: ['app', 'onus'] })
+    void queryClient.invalidateQueries({
+      queryKey: ['app', 'settings', 'ip-pools'],
+    })
 
-  async function executeProgress(steps: ProgressStep[]) {
-    setProgressRunning(true)
-    setProgressFailed(false)
-    setProgressDone(false)
-    const result = await runProgressSteps(
-      steps,
-      setProgressSteps,
-      runnersRef.current,
-    )
     setProgressRunning(false)
-    if (result.ok) {
+    if (linkResult.ok) {
       setProgressDone(true)
-      void queryClient.invalidateQueries({
-        queryKey: ['app', 'clients', clientId],
-      })
-      void queryClient.invalidateQueries({ queryKey: ['app', 'onus'] })
-      void queryClient.invalidateQueries({
-        queryKey: ['app', 'settings', 'ip-pools'],
-      })
     } else {
       setProgressFailed(true)
     }
@@ -503,8 +502,12 @@ export function ChangeServiceOnuModal({
                             </span>
                             <span className="block text-xs text-[var(--text-muted)]">
                               {o.oltName} · {o.oltIf}
+                              {o.model ? ` · ${o.model}` : ''}
                               {o.suggestedOnuId != null
                                 ? ` · índice ${o.suggestedOnuId}`
+                                : ''}
+                              {o.firstSeenAt
+                                ? ` · ${new Date(o.firstSeenAt).toLocaleString()}`
                                 : ''}
                             </span>
                           </span>
@@ -625,13 +628,31 @@ export function ChangeServiceOnuModal({
         running={progressRunning}
         failed={progressFailed}
         allDone={progressDone}
-        onRetry={() => void executeProgress(progressSteps)}
+        closeWhileRunning
+        closeLabel={
+          progressRunning
+            ? 'Seguir en segundo plano'
+            : progressDone
+              ? 'Listo'
+              : 'Cerrar'
+        }
+        doneLabel={
+          driverId
+            ? `ONU OK · driver ${driverId}`
+            : 'ONU cambiada — aprovisionamiento verificado'
+        }
+        onRetry={() => void executeSwap()}
         onClose={() => {
-          if (progressRunning) return
           setProgressOpen(false)
-          if (progressDone) onClose()
+          if (progressDone || !progressRunning) onClose()
         }}
-      />
+      >
+        {driverId ? (
+          <p className="mx-5 mb-1 text-xs text-[var(--text-muted)]">
+            Script: {driverId}
+          </p>
+        ) : null}
+      </OperationProgressModal>
     </>
   )
 }

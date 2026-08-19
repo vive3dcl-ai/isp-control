@@ -120,6 +120,8 @@ export function DeviceDetailModal({
   const [snmpPort, setSnmpPort] = useState('161')
   const [ponType, setPonType] = useState<OltPonType | ''>('')
   const [onuImportOpen, setOnuImportOpen] = useState(false)
+  /** Valor del select: "" | "port:ether1" | "vlan:ether1:100" */
+  const [egressSelect, setEgressSelect] = useState('')
 
   const deviceQuery = useQuery({
     queryKey: ['app', 'topology', 'device', deviceId],
@@ -189,6 +191,15 @@ export function DeviceDetailModal({
             (d.mgmtProtocol === 'rest_https' ? 443 : 8729),
         ),
       )
+    }
+    if (d.internetEgressPortName) {
+      setEgressSelect(
+        d.internetEgressVlanId != null
+          ? `vlan:${d.internetEgressPortName}:${d.internetEgressVlanId}`
+          : `port:${d.internetEgressPortName}`,
+      )
+    } else {
+      setEgressSelect('')
     }
   }, [deviceQuery.data])
 
@@ -273,6 +284,25 @@ export function DeviceDetailModal({
       }
       if (isMikrotikSwosDevice(deviceQuery.data?.type, deviceQuery.data?.subtype)) {
         body.mgmtProtocol = 'http'
+      }
+      if (
+        isMikrotikRouterOsDevice(
+          deviceQuery.data?.type,
+          deviceQuery.data?.subtype,
+        ) &&
+        deviceQuery.data?.type === 'router'
+      ) {
+        if (!egressSelect) {
+          body.internetEgressPortName = null
+          body.internetEgressVlanId = null
+        } else if (egressSelect.startsWith('vlan:')) {
+          const [, portName, vlanStr] = egressSelect.split(':')
+          body.internetEgressPortName = portName || null
+          body.internetEgressVlanId = Number(vlanStr) || null
+        } else if (egressSelect.startsWith('port:')) {
+          body.internetEgressPortName = egressSelect.slice(5) || null
+          body.internetEgressVlanId = null
+        }
       }
       return apiFetch(`/app/topology/devices/${deviceId}/connection`, {
         method: 'PATCH',
@@ -1406,6 +1436,48 @@ export function DeviceDetailModal({
                       </>
                     )}
                   </div>
+
+                  {isRouter &&
+                    isMikrotikRouterOsDevice(device.type, device.subtype) &&
+                    status === 'connected' && (
+                      <label className="block text-sm">
+                        <span className="mb-1 block text-[var(--text-muted)]">
+                          Puerto de salida a Internet
+                        </span>
+                        <select
+                          className={inputClass}
+                          value={egressSelect}
+                          onChange={(e) => setEgressSelect(e.target.value)}
+                          disabled={!canWrite}
+                        >
+                          <option value="">— Sin seleccionar —</option>
+                          {(device.ports ?? [])
+                            .filter((p) => p.isSynced !== false)
+                            .map((p) => (
+                              <optgroup key={p.id} label={p.name}>
+                                <option value={`port:${p.name}`}>
+                                  {p.name} (físico)
+                                </option>
+                                {(p.vlans ?? []).map((v) => (
+                                  <option
+                                    key={`${p.id}-${v.vlanId}`}
+                                    value={`vlan:${p.name}:${v.vlanId}`}
+                                  >
+                                    {p.name} · VLAN {v.vlanId}
+                                    {v.interfaceName
+                                      ? ` (${v.interfaceName})`
+                                      : ''}
+                                  </option>
+                                ))}
+                              </optgroup>
+                            ))}
+                        </select>
+                        <span className="mt-1 block text-xs text-[var(--text-muted)]">
+                          Se usa para el gráfico de tráfico subida/bajada 24 h en
+                          el dashboard de este router.
+                        </span>
+                      </label>
+                    )}
 
                   {(saveConnMutation.error || testConnMutation.error) && (
                     <p className="text-sm text-[var(--danger)]">

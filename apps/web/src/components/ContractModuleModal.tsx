@@ -22,7 +22,7 @@ export function ContractModuleModal({
   onClose: () => void
 }) {
   const queryClient = useQueryClient()
-  const [mode, setMode] = useState<'one_time' | 'recurring'>('one_time')
+  const [mode, setMode] = useState<'one_time' | 'recurring'>('recurring')
   const [msg, setMsg] = useState<string | null>(null)
 
   const quoteQuery = useQuery({
@@ -93,9 +93,27 @@ export function ContractModuleModal({
 
         <div className="space-y-3 px-5 py-4">
           <p className="text-sm text-[var(--text-muted)]">
-            Elige cómo activar el módulo. El cobro queda registrado (Checkout
-            Pro de plataforma se engancha después).
+            Puedes contratarlo en cualquier momento. Con «Agregar al plan», se
+            cobra el prorrateo desde hoy hasta el fin de tu ciclo y luego va en
+            la renovación.
           </p>
+
+          <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-[var(--border)] p-3">
+            <input
+              type="radio"
+              name="mode"
+              checked={mode === 'recurring'}
+              onChange={() => setMode('recurring')}
+              className="mt-1"
+            />
+            <span>
+              <span className="block text-sm font-medium">Agregar al plan</span>
+              <span className="text-xs text-[var(--text-muted)]">
+                Factura de servicio con prorrateo desde la fecha de
+                contratación; en renovaciones, el mes completo.
+              </span>
+            </span>
+          </label>
 
           <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-[var(--border)] p-3">
             <input
@@ -110,23 +128,6 @@ export function ContractModuleModal({
               <span className="text-xs text-[var(--text-muted)]">
                 Prepago de 1 mes, ciclo independiente de tu plan. Aviso al
                 admin 5 y 2 días antes de vencer.
-              </span>
-            </span>
-          </label>
-
-          <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-[var(--border)] p-3">
-            <input
-              type="radio"
-              name="mode"
-              checked={mode === 'recurring'}
-              onChange={() => setMode('recurring')}
-              className="mt-1"
-            />
-            <span>
-              <span className="block text-sm font-medium">Agregar al plan</span>
-              <span className="text-xs text-[var(--text-muted)]">
-                Se cobra ahora lo que falta hasta el fin de tu ciclo de
-                suscripción; en la renovación se suma al cobro del plan.
               </span>
             </span>
           </label>

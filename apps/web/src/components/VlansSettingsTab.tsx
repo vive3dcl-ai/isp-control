@@ -24,12 +24,15 @@ const inputClass =
   'w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 outline-none ring-[var(--accent)] focus:ring-2'
 
 type ServiceVlanPurpose = 'internet' | 'management' | 'tv'
+type IgmpWorkMode = 'snooping' | 'spr' | 'proxy' | 'router'
 
 type ServiceVlanRow = {
   id: string | null
   vlanId: number
   description: string | null
   purpose?: ServiceVlanPurpose
+  igmpWorkMode?: IgmpWorkMode | null
+  igmpHostIp?: string | null
   oltIds: string[]
   routerIds: string[]
   switchIds: string[]
@@ -46,6 +49,13 @@ const PURPOSE_LABELS: Record<ServiceVlanPurpose, string> = {
   internet: 'Internet',
   management: 'Mgmt',
   tv: 'TV',
+}
+
+const IGMP_MODE_LABELS: Record<IgmpWorkMode, string> = {
+  snooping: 'Snooping',
+  spr: 'SPR',
+  proxy: 'Proxy',
+  router: 'Router',
 }
 
 type ModalMode = 'create' | 'edit'
@@ -75,6 +85,9 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
   const [vlanId, setVlanId] = useState('')
   const [description, setDescription] = useState('')
   const [purpose, setPurpose] = useState<ServiceVlanPurpose>('internet')
+  const [igmpWorkMode, setIgmpWorkMode] =
+    useState<IgmpWorkMode>('snooping')
+  const [igmpHostIp, setIgmpHostIp] = useState('')
   /** routerId → parent physical port id (only needed when creating) */
   const [routerParentPort, setRouterParentPort] = useState<
     Record<string, string>
@@ -289,6 +302,8 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
     setVlanId('')
     setDescription('')
     setPurpose('internet')
+    setIgmpWorkMode('snooping')
+    setIgmpHostIp('')
     setRouterParentPort({})
     setSwitchBridge({})
     setSwitchNewBridge({})
@@ -303,6 +318,8 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
     setVlanId(String(v.vlanId))
     setDescription(v.description ?? '')
     setPurpose(v.purpose ?? 'internet')
+    setIgmpWorkMode(v.igmpWorkMode ?? 'snooping')
+    setIgmpHostIp(v.igmpHostIp ?? '')
     setRouterParentPort({})
     setSwitchBridge({})
     setSwitchNewBridge({})
@@ -420,6 +437,10 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
       setError('VLAN ID inválido (1–4094)')
       return
     }
+    if (purpose === 'tv' && igmpWorkMode === 'proxy' && !igmpHostIp.trim()) {
+      setError('Modo proxy requiere host-ip (IPv4)')
+      return
+    }
     try {
       const created = await apiFetch<ServiceVlanRow>('/app/settings/vlans', {
         method: 'POST',
@@ -427,6 +448,14 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
           vlanId: idNum,
           description: description.trim() || undefined,
           purpose,
+          ...(purpose === 'tv'
+            ? {
+                igmpWorkMode,
+                ...(igmpWorkMode === 'proxy'
+                  ? { igmpHostIp: igmpHostIp.trim() }
+                  : {}),
+              }
+            : {}),
         }),
       })
       setMsg(`VLAN ${idNum} añadida al catálogo`)
@@ -436,6 +465,14 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
       setEditing({
         ...created,
         purpose: created.purpose ?? purpose,
+        igmpWorkMode:
+          created.igmpWorkMode ??
+          (purpose === 'tv' ? igmpWorkMode : null),
+        igmpHostIp:
+          created.igmpHostIp ??
+          (purpose === 'tv' && igmpWorkMode === 'proxy'
+            ? igmpHostIp.trim()
+            : null),
         olts: created.olts ?? [],
         routers: created.routers ?? [],
         switches: created.switches ?? [],
@@ -456,12 +493,31 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
         body: JSON.stringify({
           description: description.trim() || null,
           purpose,
+          ...(purpose === 'tv'
+            ? {
+                igmpWorkMode,
+                igmpHostIp:
+                  igmpWorkMode === 'proxy' ? igmpHostIp.trim() || null : null,
+              }
+            : { igmpWorkMode: null, igmpHostIp: null }),
         }),
       },
     )
     setEditing((prev) =>
       prev
-        ? { ...prev, id: upserted.id, purpose: upserted.purpose ?? purpose }
+        ? {
+            ...prev,
+            id: upserted.id,
+            purpose: upserted.purpose ?? purpose,
+            igmpWorkMode:
+              upserted.igmpWorkMode ??
+              (purpose === 'tv' ? igmpWorkMode : null),
+            igmpHostIp:
+              upserted.igmpHostIp ??
+              (purpose === 'tv' && igmpWorkMode === 'proxy'
+                ? igmpHostIp.trim() || null
+                : null),
+          }
         : prev,
     )
     return upserted.id!
@@ -685,6 +741,11 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
                   </td>
                   <td className="px-3 py-2.5">
                     {PURPOSE_LABELS[v.purpose ?? 'internet']}
+                    {v.purpose === 'tv' && v.igmpWorkMode && (
+                      <span className="ml-1.5 text-[10px] uppercase tracking-wide text-[var(--text-muted)]">
+                        {IGMP_MODE_LABELS[v.igmpWorkMode]}
+                      </span>
+                    )}
                   </td>
                   <td className="px-3 py-2.5">{v.description || '—'}</td>
                   <td className="px-3 py-2.5 text-xs">{v.olt || '—'}</td>
@@ -746,15 +807,61 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
                 <select
                   className={inputClass}
                   value={purpose}
-                  onChange={(e) =>
-                    setPurpose(e.target.value as ServiceVlanPurpose)
-                  }
+                  onChange={(e) => {
+                    const next = e.target.value as ServiceVlanPurpose
+                    setPurpose(next)
+                    if (next === 'tv' && !igmpWorkMode) {
+                      setIgmpWorkMode('snooping')
+                    }
+                  }}
                 >
                   <option value="internet">Internet</option>
                   <option value="management">Mgmt</option>
                   <option value="tv">TV</option>
                 </select>
               </label>
+              {purpose === 'tv' && (
+                <label className="block text-sm">
+                  <span className="mb-1 block text-[var(--text-muted)]">
+                    Modo IGMP (MVLAN)
+                  </span>
+                  <select
+                    className={inputClass}
+                    value={igmpWorkMode}
+                    onChange={(e) =>
+                      setIgmpWorkMode(e.target.value as IgmpWorkMode)
+                    }
+                  >
+                    <option value="snooping">Snooping</option>
+                    <option value="spr">SPR (snooping + proxy-reporting)</option>
+                    <option value="proxy">Proxy (querier hacia ONUs)</option>
+                    <option value="router">Router</option>
+                  </select>
+                  <span className="mt-1 block text-xs text-[var(--text-muted)]">
+                    Se aplica en la OLT al crear/sincronizar esta VLAN TV.
+                    Proxy/Router requieren querier en la OLT; snooping/SPR
+                    esperan querier externo.
+                  </span>
+                </label>
+              )}
+              {purpose === 'tv' && igmpWorkMode === 'proxy' && (
+                <label className="block text-sm">
+                  <span className="mb-1 block text-[var(--text-muted)]">
+                    Host-IP (proxy)
+                  </span>
+                  <input
+                    className={inputClass}
+                    value={igmpHostIp}
+                    onChange={(e) => setIgmpHostIp(e.target.value)}
+                    placeholder="ej. 10.99.1.10"
+                    inputMode="decimal"
+                  />
+                  <span className="mt-1 block text-xs text-[var(--text-muted)]">
+                    IP con la que la OLT se presenta como host IGMP hacia el
+                    uplink. Obligatoria en modo proxy.
+                  </span>
+                </label>
+              )}
               <label className="block text-sm">
                 <span className="mb-1 block text-[var(--text-muted)]">
                   Descripción
@@ -1256,16 +1363,55 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
                   onClick={() => {
                     void (async () => {
                       try {
+                        if (
+                          purpose === 'tv' &&
+                          igmpWorkMode === 'proxy' &&
+                          !igmpHostIp.trim()
+                        ) {
+                          setError('Modo proxy requiere host-ip (IPv4)')
+                          return
+                        }
                         const id = await ensureCatalogId()
                         await apiFetch(`/app/settings/vlans/${id}`, {
                           method: 'PATCH',
                           body: JSON.stringify({
                             description: description.trim() || null,
                             purpose,
+                            ...(purpose === 'tv'
+                              ? {
+                                  igmpWorkMode,
+                                  igmpHostIp:
+                                    igmpWorkMode === 'proxy'
+                                      ? igmpHostIp.trim()
+                                      : null,
+                                }
+                              : {
+                                  igmpWorkMode: null,
+                                  igmpHostIp: null,
+                                }),
                           }),
                         })
-                        setMsg('VLAN guardada')
+                        setMsg(
+                          purpose === 'tv'
+                            ? 'VLAN TV guardada (modo IGMP aplicado en OLTs asignadas)'
+                            : 'VLAN guardada',
+                        )
                         invalidate()
+                        setEditing((prev) =>
+                          prev
+                            ? {
+                                ...prev,
+                                purpose,
+                                description: description.trim() || null,
+                                igmpWorkMode:
+                                  purpose === 'tv' ? igmpWorkMode : null,
+                                igmpHostIp:
+                                  purpose === 'tv' && igmpWorkMode === 'proxy'
+                                    ? igmpHostIp.trim()
+                                    : null,
+                              }
+                            : prev,
+                        )
                       } catch (e) {
                         setError(e instanceof Error ? e.message : String(e))
                       }

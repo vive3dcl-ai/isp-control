@@ -18,6 +18,7 @@ export class PlatformPlansPublicController {
           label: p.label,
           userLimit: p.userLimit,
           priceUsd: p.priceUsd,
+          isFree: !!p.isFree,
           sortOrder: p.sortOrder,
         })),
       extraBlockSize: admin.extraBlockSize ?? EXTRA_USER_BLOCK_SIZE,

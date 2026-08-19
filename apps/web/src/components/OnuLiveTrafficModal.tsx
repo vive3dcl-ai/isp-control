@@ -18,6 +18,8 @@ type Point = {
 
 const POLL_MS = 1_500
 const MAX_POINTS = 80
+/** La OLT a veces reporta 0 Bps entre ventanas de medición; mantener ~6s. */
+const HOLD_ZERO_MS = 6_000
 
 function fmtMbps(n: number): string {
   if (!Number.isFinite(n)) return '0'
@@ -56,8 +58,9 @@ export function OnuLiveTrafficModal({ oltId, onuIf, onClose }: Props) {
         if (abortRef.current) return
         setConnected(true)
         setError(null)
-        const point: Point = {
-          at: new Date(r.probedAt).getTime() || Date.now(),
+        const at = new Date(r.probedAt).getTime() || Date.now()
+        const raw: Point = {
+          at,
           uploadMbps: bpsToMbps(r.uploadBps ?? 0),
           downloadMbps: bpsToMbps(r.downloadBps ?? 0),
           uploadPps: r.uploadPps ?? 0,
@@ -65,7 +68,43 @@ export function OnuLiveTrafficModal({ oltId, onuIf, onClose }: Props) {
           uploadAvgSize: r.uploadAvgSize,
           downloadAvgSize: r.downloadAvgSize,
         }
-        setPoints((prev) => [...prev, point].slice(-MAX_POINTS))
+        setPoints((prev) => {
+          const last = prev.at(-1)
+          const hold =
+            last != null &&
+            at - last.at <= HOLD_ZERO_MS &&
+            (last.uploadMbps > 0 || last.downloadMbps > 0)
+          const point: Point = !hold
+            ? raw
+            : {
+                ...raw,
+                uploadMbps:
+                  raw.uploadMbps <= 0 && last.uploadMbps > 0
+                    ? last.uploadMbps
+                    : raw.uploadMbps,
+                downloadMbps:
+                  raw.downloadMbps <= 0 && last.downloadMbps > 0
+                    ? last.downloadMbps
+                    : raw.downloadMbps,
+                uploadPps:
+                  raw.uploadMbps <= 0 && last.uploadMbps > 0
+                    ? last.uploadPps
+                    : raw.uploadPps,
+                downloadPps:
+                  raw.downloadMbps <= 0 && last.downloadMbps > 0
+                    ? last.downloadPps
+                    : raw.downloadPps,
+                uploadAvgSize:
+                  raw.uploadMbps <= 0 && last.uploadMbps > 0
+                    ? last.uploadAvgSize
+                    : raw.uploadAvgSize,
+                downloadAvgSize:
+                  raw.downloadMbps <= 0 && last.downloadMbps > 0
+                    ? last.downloadAvgSize
+                    : raw.downloadAvgSize,
+              }
+          return [...prev, point].slice(-MAX_POINTS)
+        })
       } catch (e) {
         if (abortRef.current) return
         setError(e instanceof Error ? e.message : String(e))

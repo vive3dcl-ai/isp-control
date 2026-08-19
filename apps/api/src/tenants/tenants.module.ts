@@ -15,6 +15,7 @@ import { AuthModule } from '../auth/auth.module';
 import { CrmModule } from '../crm/crm.module';
 import { TopologyModule } from '../topology/topology.module';
 import { PlatformModule } from '../platform/platform.module';
+import { PlatformRegisterPublicController } from '../platform/platform-register.public.controller';
 
 @Module({
   imports: [
@@ -22,7 +23,7 @@ import { PlatformModule } from '../platform/platform.module';
     forwardRef(() => AuthModule),
     forwardRef(() => CrmModule),
     TopologyModule,
-    PlatformModule,
+    forwardRef(() => PlatformModule),
     TypeOrmModule.forFeature([Tenant, UserDirectory, PlatformAdmin]),
   ],
   controllers: [
@@ -30,6 +31,7 @@ import { PlatformModule } from '../platform/platform.module';
     TenantAppController,
     CompanySettingsController,
     TenantUsersController,
+    PlatformRegisterPublicController,
   ],
   providers: [TenantsService, TenantProvisioningService, TenantUsersService],
   exports: [TypeOrmModule, TenantsService, TenantProvisioningService],

@@ -25,6 +25,8 @@ interface MetricHistory {
   name: string
   boardName?: string | null
   hours: number
+  internetEgressPortName?: string | null
+  internetEgressVlanId?: number | null
   current: {
     cpuLoad?: number | null
     freeMemory?: string | null
@@ -39,6 +41,14 @@ interface MetricHistory {
     memoryUsedPct: number | null
     temperature: number | null
     uptimeSeconds: number | null
+    rxBps: number | null
+    txBps: number | null
+  }>
+  /** Resolución doble para el gráfico de velocidad (máx ~480 en 24 h). */
+  trafficSamples?: Array<{
+    at: string
+    rxBps: number | null
+    txBps: number | null
   }>
 }
 
@@ -55,6 +65,23 @@ function formatUptimeHours(seconds: number | null) {
   return Math.round((seconds / 3600) * 10) / 10
 }
 
+function formatBps(bps: number | null | undefined) {
+  if (bps == null || !Number.isFinite(bps)) return '—'
+  const units = ['bps', 'Kbps', 'Mbps', 'Gbps']
+  let v = bps
+  let i = 0
+  while (v >= 1000 && i < units.length - 1) {
+    v /= 1000
+    i++
+  }
+  return `${v.toFixed(i === 0 ? 0 : 1)} ${units[i]}`
+}
+
+function bpsToChartUnit(bps: number | null) {
+  if (bps == null || !Number.isFinite(bps)) return null
+  return Math.round((bps / 1_000_000) * 1000) / 1000
+}
+
 export function RouterMetricsModal({
   open,
   device,
@@ -64,14 +91,17 @@ export function RouterMetricsModal({
   device: TopologyDevice | null
   onClose: () => void
 }) {
+  const isRouter = device?.type === 'router'
   const historyQuery = useQuery({
-    queryKey: ['app', 'topology', 'metrics', device?.id],
+    queryKey: ['app', 'topology', 'metrics', device?.id, isRouter ? 24 : 6],
     queryFn: () =>
       apiFetch<MetricHistory>(
-        `/app/topology/devices/${device!.id}/metrics?hours=6`,
+        `/app/topology/devices/${device!.id}/metrics?hours=${isRouter ? 24 : 6}`,
       ),
     enabled: open && !!device?.id,
-    refetchInterval: open ? 20_000 : false,
+    refetchInterval: open ? 30_000 : false,
+    staleTime: 15_000,
+    placeholderData: (prev) => prev,
   })
 
   useEffect(() => {
@@ -95,6 +125,21 @@ export function RouterMetricsModal({
     }))
   }, [historyQuery.data?.samples])
 
+  const trafficChartData = useMemo(() => {
+    const traffic =
+      historyQuery.data?.trafficSamples ??
+      historyQuery.data?.samples ??
+      []
+    return traffic.map((s) => ({
+      t: formatClock(s.at),
+      at: s.at,
+      rxMbps: bpsToChartUnit(s.rxBps),
+      txMbps: bpsToChartUnit(s.txBps),
+      rxBps: s.rxBps,
+      txBps: s.txBps,
+    }))
+  }, [historyQuery.data?.trafficSamples, historyQuery.data?.samples])
+
   if (!open || !device) return null
 
   const board =
@@ -114,6 +159,24 @@ export function RouterMetricsModal({
       : 'https://raio.smartolt.com/content/img/ZTE-C320.png'
     : mikrotikFallbackImageUrl(isSwitch ? 'switch' : 'router')
   const cur = historyQuery.data?.current
+  const egressPort =
+    historyQuery.data?.internetEgressPortName ??
+    device.internetEgressPortName
+  const egressVlan =
+    historyQuery.data?.internetEgressVlanId ?? device.internetEgressVlanId
+  const egressLabel = egressPort
+    ? egressVlan != null
+      ? `${egressPort} · VLAN ${egressVlan}`
+      : egressPort
+    : null
+  const lastSample = (
+    historyQuery.data?.trafficSamples ?? historyQuery.data?.samples
+  )?.at(-1)
+  const hasTrafficSamples = (
+    historyQuery.data?.trafficSamples ??
+    historyQuery.data?.samples ??
+    []
+  ).some((s) => s.rxBps != null || s.txBps != null)
 
   return (
     <ModalPortal><div className="fixed inset-0 z-[110] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/60 sm:items-center sm:p-4">
@@ -188,7 +251,9 @@ export function RouterMetricsModal({
             </p>
           )}
 
-          {chartData.length === 0 && !historyQuery.isLoading ? (
+          {chartData.length === 0 &&
+          trafficChartData.length === 0 &&
+          !historyQuery.isLoading ? (
             <p className="text-sm text-[var(--text-muted)]">
               {needsSnmp
                 ? 'Sin community SNMP de solo lectura no se pueden tomar muestras. Configúrala en Topología para habilitar los gráficos.'
@@ -196,6 +261,68 @@ export function RouterMetricsModal({
             </p>
           ) : (
             <div className="space-y-6">
+              {isRouter && (
+                <div>
+                  <ChartBlock
+                    title={
+                      egressLabel
+                        ? `Tráfico 24 h — ${egressLabel} (Mbps)`
+                        : 'Tráfico 24 h (Mbps)'
+                    }
+                  >
+                    <LineChart data={trafficChartData}>
+                      <CartesianGrid
+                        strokeDasharray="3 3"
+                        stroke="var(--border)"
+                      />
+                      <XAxis dataKey="t" tick={{ fontSize: 11 }} />
+                      <YAxis tick={{ fontSize: 11 }} width={44} />
+                      <Tooltip
+                        formatter={(value) =>
+                          typeof value === 'number'
+                            ? `${value.toFixed(3)} Mbps`
+                            : String(value ?? '—')
+                        }
+                      />
+                      <Legend />
+                      <Line
+                        type="linear"
+                        dataKey="rxMbps"
+                        name="Bajada"
+                        stroke="#0ea5e9"
+                        dot={false}
+                        strokeWidth={2}
+                        connectNulls
+                      />
+                      <Line
+                        type="linear"
+                        dataKey="txMbps"
+                        name="Subida"
+                        stroke="#22c55e"
+                        dot={false}
+                        strokeWidth={2}
+                        connectNulls
+                      />
+                    </LineChart>
+                  </ChartBlock>
+                  {!egressLabel ? (
+                    <p className="mt-2 text-xs text-[var(--text-muted)]">
+                      Elige el puerto de salida a Internet en Topología →
+                      Ajustes → Conexión para graficar solo ese puerto.
+                    </p>
+                  ) : !hasTrafficSamples ? (
+                    <p className="mt-2 text-xs text-[var(--text-muted)]">
+                      Esperando muestras de tráfico del puerto seleccionado…
+                    </p>
+                  ) : (
+                    <p className="mt-2 text-xs text-[var(--text-muted)]">
+                      Último: bajada {formatBps(lastSample?.rxBps)} · subida{' '}
+                      {formatBps(lastSample?.txBps)}
+                    </p>
+                  )}
+                </div>
+              )}
+
               <ChartBlock title="CPU (%)">
                 <LineChart data={chartData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />

@@ -12,9 +12,9 @@ import { Repository } from 'typeorm';
 import type { AuthUser } from '../auth/auth.types';
 import { TenantConnectionService } from '../database/tenant-connection.service';
 import { TopologyService } from '../topology/topology.service';
-import { OnuConnectedService } from '../topology/onu-connected.service';
+import { OnuConnectedService } from '../topology/onus/onu-connected.service';
 import { SuspensionPortalService } from '../topology/suspension-portal.service';
-import { isManagedOltDevice } from '../topology/olt.constants';
+import { isManagedOltDevice } from '../topology/olts/olt.constants';
 import { Tenant } from '../tenants/entities/tenant.entity';
 import { CreateClientDto, UpdateClientDto } from './dto/client.dto';
 import {
@@ -39,8 +39,8 @@ import type { Zone } from './entities/zone.entity';
 import {
   sanitizeSpeedProfileName,
   toSystemOltProfileName,
-} from '../topology/zte-olt-speed.util';
-import { oltOnuName } from '../topology/olt-onu-name.util';
+} from '../drivers/olt/zte/shared/zte-olt-speed.util';
+import { oltOnuName } from '../topology/olts/olt-onu-name.util';
 import { BillingService } from '../billing/billing.service';
 import { InventoryService } from '../inventory/inventory.service';
 import { ClientPortalService } from '../client-portal/client-portal.service';

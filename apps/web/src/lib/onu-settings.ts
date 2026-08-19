@@ -35,6 +35,11 @@ export type OnuType = {
   allowCustomProfilesLabel: string
   defaultProfileId: string | null
   defaultProfileName: string | null
+  /** Driver TR-069 real (library/generic). */
+  provisionScriptId?: string
+  provisionScriptLabel?: string
+  provisionScriptKind?: 'library' | 'generic'
+  skipOmciServiceWan?: boolean
   capability: 'bridging' | 'bridging_routing' | string
   capabilityLabel: string
   useDefaultImage: boolean

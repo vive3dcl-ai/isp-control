@@ -37,6 +37,14 @@ import {
   runProgressSteps,
   type ProgressStep,
 } from '../components/OperationProgressModal'
+import { runOnuApplyAndVerify } from '../lib/onu-apply-verify-progress'
+import {
+  applyWifiAfterProvision,
+  buildWifiCredsOrNull,
+  sanitizeSsid,
+  validateWifiCredsInput,
+  type WifiCreds,
+} from '../lib/onu-wifi-apply'
 
 const field =
   'w-full rounded-xl border border-[var(--border)] bg-[var(--bg)] px-3 py-3 text-base outline-none ring-[var(--accent)] focus:ring-2'
@@ -49,7 +57,10 @@ const STEPS = [
   { n: 2, label: 'Servicio' },
   { n: 3, label: 'ONU' },
   { n: 4, label: 'Red' },
+  { n: 5, label: 'Wi‑Fi' },
 ] as const
+
+const LAST_STEP = 5
 
 export function MobileInstallWizard() {
   const navigate = useNavigate()
@@ -92,16 +103,38 @@ export function MobileInstallWizard() {
   const [wanVlanPick, setWanVlanPick] = useState('')
   const [tr069ProfilePick, setTr069ProfilePick] = useState('')
 
+  // Wi‑Fi (se aplica al final del aprovisionamiento)
+  const [wifiSsid24, setWifiSsid24] = useState('')
+  const [wifiKey24, setWifiKey24] = useState('')
+  const [wifiSsid5, setWifiSsid5] = useState('')
+  const [wifiKey5, setWifiKey5] = useState('')
+  const [wifiSameKey, setWifiSameKey] = useState(true)
+  const [wifiSkip, setWifiSkip] = useState(false)
+
   // Progress
   const [progressOpen, setProgressOpen] = useState(false)
   const [progressSteps, setProgressSteps] = useState<ProgressStep[]>([])
   const [progressRunning, setProgressRunning] = useState(false)
   const [progressFailed, setProgressFailed] = useState(false)
   const [progressDone, setProgressDone] = useState(false)
-  const runnersRef = useRef<Record<string, () => Promise<string | void>>>({})
-  const ctxRef = useRef<{ onuDbId?: string; serviceId?: string; clientId?: string }>(
-    {},
-  )
+  const [driverId, setDriverId] = useState<string | null>(null)
+  const ctxRef = useRef<{
+    onuDbId?: string
+    serviceId?: string
+    clientId?: string
+    wanApplied?: boolean
+  }>({})
+  const finishArgsRef = useRef<{
+    hasNetwork: boolean
+    vlanBody: {
+      mgmtVlanId?: number
+      wanVlanId?: number
+      tr069ProfileId?: string
+    }
+    mgmtVlan: number | null
+    wanVlan: number | null
+    wifi: WifiCreds | null
+  } | null>(null)
 
   const companyQuery = useQuery({
     queryKey: ['app', 'settings', 'company'],
@@ -298,6 +331,16 @@ export function MobileInstallWizard() {
       if (mgmtVlanPick && tr069Profiles.length > 0 && !tr069ProfilePick)
         return 'Selecciona perfil TR069.'
     }
+    if (current === 5) {
+      return validateWifiCredsInput({
+        skip: wifiSkip,
+        ssid24: wifiSsid24,
+        ssid5: wifiSsid5,
+        key24: wifiKey24,
+        key5: wifiKey5,
+        sameKey: wifiSameKey,
+      })
+    }
     return null
   }
 
@@ -316,7 +359,21 @@ export function MobileInstallWizard() {
     ) {
       setServiceName(`Servicio ${existingServices.length + 1}`)
     }
-    setStep((s) => Math.min(4, s + 1))
+    // Al entrar a Wi‑Fi, sugerir SSID desde el nombre del servicio / cliente.
+    if (step === 4 && !wifiSsid24.trim()) {
+      const base =
+        sanitizeSsid(serviceName.trim()) ||
+        sanitizeSsid(clientName) ||
+        sanitizeSsid(
+          isCompany && companyName.trim()
+            ? companyName.trim()
+            : [firstName, lastName].filter(Boolean).join(' '),
+        ) ||
+        'WiFi'
+      setWifiSsid24(base)
+      if (!wifiSsid5.trim()) setWifiSsid5(`${base}-5G`.slice(0, 32))
+    }
+    setStep((s) => Math.min(LAST_STEP, s + 1))
   }
 
   function back() {
@@ -332,33 +389,8 @@ export function MobileInstallWizard() {
     setStep((s) => Math.max(1, s - 1))
   }
 
-  async function executeProgress(steps: ProgressStep[]) {
-    setProgressRunning(true)
-    setProgressFailed(false)
-    setProgressDone(false)
-    const result = await runProgressSteps(
-      steps,
-      setProgressSteps,
-      runnersRef.current,
-    )
-    setProgressRunning(false)
-    if (result.ok) {
-      setProgressDone(true)
-      void queryClient.invalidateQueries({ queryKey: ['app', 'clients'] })
-      void queryClient.invalidateQueries({ queryKey: ['app', 'onus'] })
-      void queryClient.invalidateQueries({ queryKey: ['app', 'dashboard'] })
-      if (ctxRef.current.clientId) {
-        void queryClient.invalidateQueries({
-          queryKey: ['app', 'clients', ctxRef.current.clientId],
-        })
-      }
-    } else {
-      setProgressFailed(true)
-    }
-  }
-
   function finish() {
-    const err = validate(4)
+    const err = validate(LAST_STEP)
     if (err) {
       setError(err)
       return
@@ -379,11 +411,54 @@ export function MobileInstallWizard() {
     if (mgmtVlan != null && tr069ProfilePick) {
       vlanBody.tr069ProfileId = tr069ProfilePick
     }
+    const wifi = buildWifiCredsOrNull({
+      skip: wifiSkip,
+      ssid24: wifiSsid24,
+      ssid5: wifiSsid5,
+      key24: wifiKey24,
+      key5: wifiKey5,
+      sameKey: wifiSameKey,
+    })
 
-    ctxRef.current = { clientId: clientId ?? undefined }
+    ctxRef.current = {
+      clientId: clientId ?? undefined,
+      wanApplied: wanVlan != null,
+    }
+    finishArgsRef.current = { hasNetwork, vlanBody, mgmtVlan, wanVlan, wifi }
+    setProgressOpen(true)
+    void executeFinish()
+  }
+
+  async function executeFinish() {
+    const args = finishArgsRef.current
+    if (!orphan || !args) return
+    const { hasNetwork, vlanBody, mgmtVlan, wanVlan, wifi } = args
+
+    setProgressRunning(true)
+    setProgressFailed(false)
+    setProgressDone(false)
+    setDriverId(null)
 
     const isExisting = clientMode === 'existing' || !!clientId
-    const steps: ProgressStep[] = [
+    const requireOnuDbId = () => {
+      const id = ctxRef.current.onuDbId
+      if (!id) throw new Error('No se obtuvo el ID de la ONU autorizada')
+      return id
+    }
+    const requireClientId = () => {
+      const id = ctxRef.current.clientId
+      if (!id) throw new Error('No se obtuvo el ID del cliente')
+      return id
+    }
+
+    const displayName =
+      clientName ||
+      (isCompany && companyName.trim()
+        ? companyName.trim()
+        : [firstName, lastName].filter(Boolean).join(' ').trim())
+    const svcName = serviceName.trim()
+
+    const head: ProgressStep[] = [
       {
         id: 'client',
         label: isExisting ? 'Usando cliente existente' : 'Creando cliente',
@@ -408,39 +483,12 @@ export function MobileInstallWizard() {
               label: 'Asignando IPs (mgmt / WAN)',
               status: 'pending',
             },
-            {
-              id: 'apply',
-              label: 'Aplicando configuración a la ONU',
-              status: 'pending',
-            },
-            {
-              id: 'verify',
-              label: 'Verificando ONU online y VLANs',
-              status: 'pending',
-            },
           ] satisfies ProgressStep[])
         : []),
     ]
+    setProgressSteps(head)
 
-    const requireOnuDbId = () => {
-      const id = ctxRef.current.onuDbId
-      if (!id) throw new Error('No se obtuvo el ID de la ONU autorizada')
-      return id
-    }
-    const requireClientId = () => {
-      const id = ctxRef.current.clientId
-      if (!id) throw new Error('No se obtuvo el ID del cliente')
-      return id
-    }
-
-    const displayName =
-      clientName ||
-      (isCompany && companyName.trim()
-        ? companyName.trim()
-        : [firstName, lastName].filter(Boolean).join(' ').trim())
-    const svcName = serviceName.trim()
-
-    const runners: Record<string, () => Promise<string | void>> = {
+    const headResult = await runProgressSteps(head, setProgressSteps, {
       client: async () => {
         if (ctxRef.current.clientId) {
           return `Cliente «${clientName || displayName || 'existente'}»`
@@ -478,8 +526,6 @@ export function MobileInstallWizard() {
           body: JSON.stringify({
             oltId: orphan.oltId,
             oltIf: orphan.oltIf,
-            // Sin índice: la OLT resuelve el primero libre al autorizar, que es
-            // más fiable que la sugerencia calculada al listar huérfanas.
             onuId: null,
             sn: orphan.sn,
             onuType: null,
@@ -496,7 +542,6 @@ export function MobileInstallWizard() {
       zone: async () => {
         const cid = requireClientId()
         const nextZoneId = zoneId.trim() ? zoneId.trim() : null
-        // En cliente existente no pisamos zona vacía si ya tenía una.
         if (clientMode !== 'existing' || nextZoneId) {
           await apiFetch(`/app/clients/${cid}`, {
             method: 'PATCH',
@@ -543,50 +588,73 @@ export function MobileInstallWizard() {
         )
         return r.message || 'IPs asignadas'
       },
-      apply: async () => {
-        let lastErr: unknown = null
-        for (let attempt = 1; attempt <= 2; attempt++) {
-          try {
-            const r = await apiFetch<{ message?: string }>(
-              `/app/onus/${requireOnuDbId()}/network-vlans/apply`,
-              { method: 'POST', body: JSON.stringify(vlanBody) },
-            )
-            return r.message || 'ONU OK'
-          } catch (e) {
-            lastErr = e
-          }
-        }
-        throw new Error(
-          lastErr instanceof Error ? lastErr.message : String(lastErr),
-        )
-      },
-      verify: async () => {
-        const r = await apiFetch<{
-          ok: boolean
-          message?: string
-          mgmtVlanId?: number | null
-          wanVlanId?: number | null
-        }>(`/app/onus/${requireOnuDbId()}/network-vlans/verify`, {
-          method: 'POST',
-        })
-        if (mgmtVlan != null && r.mgmtVlanId !== mgmtVlan) {
-          throw new Error(
-            `Mgmt en VLAN ${r.mgmtVlanId ?? '—'}, se esperaba ${mgmtVlan}`,
-          )
-        }
-        if (wanVlan != null && r.wanVlanId !== wanVlan) {
-          throw new Error(
-            `WAN en VLAN ${r.wanVlanId ?? '—'}, se esperaba ${wanVlan}`,
-          )
-        }
-        return r.message || 'Verificación OK'
-      },
+    })
+
+    if (!headResult.ok) {
+      setProgressRunning(false)
+      setProgressFailed(true)
+      return
     }
 
-    runnersRef.current = runners
-    setProgressSteps(steps)
-    setProgressOpen(true)
-    void executeProgress(steps)
+    void queryClient.invalidateQueries({ queryKey: ['app', 'clients'] })
+    void queryClient.invalidateQueries({ queryKey: ['app', 'onus'] })
+    void queryClient.invalidateQueries({ queryKey: ['app', 'dashboard'] })
+    if (ctxRef.current.clientId) {
+      void queryClient.invalidateQueries({
+        queryKey: ['app', 'clients', ctxRef.current.clientId],
+      })
+    }
+
+    let stepsSoFar = headResult.steps
+
+    if (hasNetwork) {
+      const applyResult = await runOnuApplyAndVerify({
+        onuId: requireOnuDbId(),
+        body: vlanBody,
+        headSteps: headResult.steps,
+        setProgressSteps,
+        setDriverId,
+        expect: { mgmtVlan, wanVlan, requireWanIp: wanVlan != null },
+      })
+      void queryClient.invalidateQueries({
+        queryKey: ['app', 'settings', 'ip-pools'],
+      })
+      void queryClient.invalidateQueries({
+        queryKey: ['app', 'onus', requireOnuDbId(), 'tr069-config'],
+      })
+      if (!applyResult.ok) {
+        setProgressRunning(false)
+        setProgressFailed(true)
+        return
+      }
+      stepsSoFar = applyResult.steps
+    }
+
+    // Wi‑Fi al final (cliente nuevo o existente): tras provisionar / ACS.
+    if (wifi) {
+      const wifiHead: ProgressStep[] = [
+        ...stepsSoFar.map((s) => ({ ...s, status: 'done' as const })),
+        {
+          id: 'wifi',
+          label: 'Aplicando Wi‑Fi (SSID y contraseña)',
+          status: 'pending',
+        },
+      ]
+      setProgressSteps(wifiHead)
+      const wifiResult = await runProgressSteps(wifiHead, setProgressSteps, {
+        wifi: async () => applyWifiAfterProvision(requireOnuDbId(), wifi),
+      })
+      void queryClient.invalidateQueries({
+        queryKey: ['app', 'onus', requireOnuDbId(), 'tr069-config'],
+      })
+      setProgressRunning(false)
+      if (wifiResult.ok) setProgressDone(true)
+      else setProgressFailed(true)
+      return
+    }
+
+    setProgressRunning(false)
+    setProgressDone(true)
   }
 
   const selectedPlan = plans.find((p) => p.id === servicePlanId)
@@ -1096,9 +1164,13 @@ export function MobileInstallWizard() {
                       <p className="font-mono text-sm font-semibold">{o.sn}</p>
                       <p className="text-xs text-[var(--text-muted)]">
                         {o.oltName} · {o.oltIf}
+                        {o.model ? ` · ${o.model}` : ''}
                         {o.state ? ` · ${o.state}` : ''}
                         {o.suggestedOnuId != null
                           ? ` · índice ${o.suggestedOnuId}`
+                          : ''}
+                        {o.firstSeenAt
+                          ? ` · ${new Date(o.firstSeenAt).toLocaleString()}`
                           : ''}
                       </p>
                     </button>
@@ -1213,6 +1285,128 @@ export function MobileInstallWizard() {
             </div>
           </>
         )}
+
+        {step === 5 && (
+          <>
+            <p className="text-sm text-[var(--text-muted)]">
+              Credenciales Wi‑Fi del domicilio. Se aplican{' '}
+              <strong className="font-medium text-[var(--text)]">al final</strong>
+              , cuando la ONU ya esté aprovisionada y en el ACS.
+            </p>
+
+            <label className="flex items-center gap-3 rounded-xl border border-[var(--border)] px-3 py-3 text-sm">
+              <input
+                type="checkbox"
+                className="h-5 w-5"
+                checked={wifiSkip}
+                onChange={(e) => setWifiSkip(e.target.checked)}
+              />
+              Omitir Wi‑Fi (configurar después)
+            </label>
+
+            {!wifiSkip && (
+              <>
+                <div className="space-y-3 rounded-2xl border border-[var(--border)] p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">
+                    2.4 GHz
+                  </p>
+                  <label className="block text-sm">
+                    <span className="mb-1 block text-[var(--text-muted)]">
+                      SSID
+                    </span>
+                    <input
+                      className={field}
+                      value={wifiSsid24}
+                      maxLength={32}
+                      placeholder="Ej. Familia-Lopez"
+                      onChange={(e) => {
+                        const v = e.target.value
+                        const prevSuggested = `${sanitizeSsid(wifiSsid24) || wifiSsid24.trim()}-5G`.slice(
+                          0,
+                          32,
+                        )
+                        setWifiSsid24(v)
+                        if (
+                          !wifiSsid5.trim() ||
+                          wifiSsid5 === prevSuggested ||
+                          wifiSsid5.endsWith('-5G')
+                        ) {
+                          const base = sanitizeSsid(v) || v.trim()
+                          if (base) setWifiSsid5(`${base}-5G`.slice(0, 32))
+                        }
+                      }}
+                    />
+                  </label>
+                  <label className="block text-sm">
+                    <span className="mb-1 block text-[var(--text-muted)]">
+                      Contraseña
+                    </span>
+                    <input
+                      className={field}
+                      type="text"
+                      autoComplete="new-password"
+                      minLength={8}
+                      placeholder="Mínimo 8 caracteres"
+                      value={wifiKey24}
+                      onChange={(e) => setWifiKey24(e.target.value)}
+                    />
+                  </label>
+                </div>
+
+                <div className="space-y-3 rounded-2xl border border-[var(--border)] p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">
+                    5 GHz
+                  </p>
+                  <label className="block text-sm">
+                    <span className="mb-1 block text-[var(--text-muted)]">
+                      SSID
+                    </span>
+                    <input
+                      className={field}
+                      value={wifiSsid5}
+                      maxLength={32}
+                      placeholder="Ej. Familia-Lopez-5G"
+                      onChange={(e) => setWifiSsid5(e.target.value)}
+                    />
+                  </label>
+                  <label className="flex items-center gap-3 text-sm">
+                    <input
+                      type="checkbox"
+                      className="h-5 w-5"
+                      checked={wifiSameKey}
+                      onChange={(e) => setWifiSameKey(e.target.checked)}
+                    />
+                    Misma contraseña que 2.4 GHz
+                  </label>
+                  {!wifiSameKey && (
+                    <label className="block text-sm">
+                      <span className="mb-1 block text-[var(--text-muted)]">
+                        Contraseña 5 GHz
+                      </span>
+                      <input
+                        className={field}
+                        type="text"
+                        autoComplete="new-password"
+                        minLength={8}
+                        value={wifiKey5}
+                        onChange={(e) => setWifiKey5(e.target.value)}
+                      />
+                    </label>
+                  )}
+                </div>
+
+                <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-elevated)] p-4 text-sm text-[var(--text-muted)]">
+                  Cliente:{' '}
+                  {clientMode === 'existing'
+                    ? `${clientName || '—'} (existente)`
+                    : isCompany && companyName.trim()
+                      ? companyName.trim()
+                      : [firstName, lastName].filter(Boolean).join(' ') || '—'}
+                </div>
+              </>
+            )}
+          </>
+        )}
       </div>
 
       <div className="sticky bottom-0 -mx-4 mt-6 border-t border-[var(--border)] bg-[var(--bg)]/95 px-4 py-3 backdrop-blur">
@@ -1233,7 +1427,7 @@ export function MobileInstallWizard() {
               Atrás
             </button>
           ) : null}
-          {step > 0 && step < 4 ? (
+          {step > 0 && step < LAST_STEP ? (
             <button
               type="button"
               onClick={next}
@@ -1242,7 +1436,7 @@ export function MobileInstallWizard() {
               Siguiente
             </button>
           ) : null}
-          {step === 4 ? (
+          {step === LAST_STEP ? (
             <button
               type="button"
               onClick={finish}
@@ -1261,14 +1455,33 @@ export function MobileInstallWizard() {
         running={progressRunning}
         failed={progressFailed}
         allDone={progressDone}
-        onRetry={() => void executeProgress(progressSteps)}
+        closeWhileRunning
+        closeLabel={
+          progressRunning
+            ? 'Seguir en segundo plano'
+            : progressDone
+              ? 'Listo'
+              : 'Cerrar'
+        }
+        doneLabel={
+          driverId
+            ? `ONU OK · driver ${driverId}`
+            : 'Instalación verificada'
+        }
+        onRetry={() => void executeFinish()}
         onClose={() => {
           setProgressOpen(false)
-          if (progressDone) {
+          if (progressDone || !progressRunning) {
             navigate('/movil', { replace: true })
           }
         }}
-      />
+      >
+        {driverId ? (
+          <p className="mx-5 mb-1 text-xs text-[var(--text-muted)]">
+            Script: {driverId}
+          </p>
+        ) : null}
+      </OperationProgressModal>
     </div>
   )
 }

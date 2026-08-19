@@ -444,6 +444,7 @@ function SystemValuePanel() {
             code: p.code,
             priceUsd: Number(p.priceUsd),
             enabled: p.enabled,
+            isFree: !!p.isFree,
           })),
           extraBlockPriceUsd: Number(blockPrice),
         }),
@@ -463,9 +464,11 @@ function SystemValuePanel() {
   return (
     <div className="mt-5 max-w-2xl">
       <p className="mb-4 text-sm text-[var(--text-muted)]">
-        Planes mensuales por cupo de ONUs (usuarios). El primer mes y los
-        cambios se prorratean a mes calendario. Las empresas pueden contratar
-        bloques extra de {blockSize} usuarios.
+        Planes mensuales por cupo de ONUs (usuarios). Marca <strong>Gratis</strong>
+        para que la landing (y el cobro) lo muestren sin costo; el precio USD se
+        conserva para cuando lo desactives. El primer mes y los cambios se
+        prorratean a mes calendario. Las empresas pueden contratar bloques
+        extra de {blockSize} usuarios.
       </p>
 
       {query.isLoading && (
@@ -508,6 +511,24 @@ function SystemValuePanel() {
                   )
                 }}
               />
+            </label>
+            <label className="flex items-center gap-2 text-xs">
+              <input
+                type="checkbox"
+                checked={!!p.isFree}
+                disabled={mutation.isPending}
+                onChange={(e) => {
+                  setMsg(null)
+                  setDraft((prev) =>
+                    prev.map((x) =>
+                      x.code === p.code
+                        ? { ...x, isFree: e.target.checked }
+                        : x,
+                    ),
+                  )
+                }}
+              />
+              Gratis
             </label>
             <label className="ml-auto flex items-center gap-2 text-xs">
               <input

@@ -1,3 +1,7 @@
+import { ZteC3xxOltClient } from '../drivers/olt/zte/c3xx/cli';
+import { ZteC3xxOltSnmpClient } from '../drivers/olt/zte/c3xx/snmp';
+import { ZteTitanOltClient } from '../drivers/olt/zte/titan/cli';
+import { ZteTitanOltSnmpClient } from '../drivers/olt/zte/titan/snmp';
 import {
   BadRequestException,
   Injectable,
@@ -10,11 +14,11 @@ import type { AuthUser } from '../auth/auth.types';
 import { TenantConnectionService } from '../database/tenant-connection.service';
 import { Tenant } from '../tenants/entities/tenant.entity';
 import { SupportService } from '../support/support.service';
-import type { NetworkDeviceType } from './entities/network-device.entity';
+import type { NetworkDeviceType } from './shared/entities/network-device.entity';
 import {
   INTERNET_DEVICE_TYPE,
   INTERNET_LINKABLE_TYPES,
-} from './entities/network-device.entity';
+} from './shared/entities/network-device.entity';
 import {
   CreateNetworkDeviceDto,
   CreateNetworkLinkDto,
@@ -22,23 +26,27 @@ import {
   UpdateDeviceConnectionDto,
   UpdateNetworkDeviceDto,
   UpdateNetworkPortDto,
-} from './dto/topology.dto';
+} from './shared/dto/topology.dto';
 import {
   isManagedSwitch,
   isMikrotikRouterOsDevice,
   isMikrotikSwosDevice,
   isSwitchSubtype,
   DEFAULT_SWOS_MGMT_PORT,
-} from './switch.constants';
-import { saveDeviceIfPresent } from './device-persist.util';
-import { MikrotikClient } from './mikrotik.client';
-import { SwosClient } from './swos.client';
-import { ZteOltClient } from './zte-olt.client';
-import { ZteOltSnmpClient } from './zte-olt-snmp.client';
-import { HuaweiOltClient } from './huawei-olt.client';
-import { HuaweiOltSnmpClient } from './huawei-olt-snmp.client';
-import type { NetworkDevice } from './entities/network-device.entity';
-import { DeviceMetricSample } from './entities/device-metric-sample.entity';
+} from './routers/switch.constants';
+import { saveDeviceIfPresent } from './shared/device-persist.util';
+import { MikrotikClient } from './routers/mikrotik.client';
+import { SwosClient } from './routers/swos.client';
+import { HuaweiOltClient } from '../drivers/olt/huawei/huawei-olt.client';
+import { HuaweiOltSnmpClient } from '../drivers/olt/huawei/huawei-olt-snmp.client';
+import {
+  resolveOltCli,
+  resolveOltSnmp,
+  type ManagedOltCliClient,
+  type ManagedOltSnmpClient,
+} from '../drivers/olt';
+import type { NetworkDevice } from './shared/entities/network-device.entity';
+import { DeviceMetricSample } from './shared/entities/device-metric-sample.entity';
 import {
   DEFAULT_OLT_PORTS,
   detectFirmwareFamily,
@@ -51,16 +59,17 @@ import {
   isZteOltDevice,
   OLT_SELECTABLE_SUBTYPES,
   OLT_SUBTYPE_LABELS,
-} from './olt.constants';
-import { formatVlanList } from './zte-olt-uplink.util';
-import { OnuTypeOltSyncService } from './onu-type-olt-sync.service';
+} from './olts/olt.constants';
+import { formatVlanList } from '../drivers/olt/zte/shared/zte-olt-uplink.util';
+import { OnuTypeOltSyncService } from './onus/onu-type-olt-sync.service';
 import {
   OLT_INVENTORY_CONFIG_TTL_MS,
   type CachedOltPonPort,
   type CachedOltUplink,
   type CachedOltVlan,
   type OltInventoryCache,
-} from './olt-inventory-cache';
+} from './olts/olt-inventory-cache';
+import { VpnService } from './vpn.service';
 
 function formatUplinkVlans(vlans: number[]): string {
   return formatVlanList(vlans);
@@ -76,6 +85,8 @@ const MIKROTIK_PROBE_BUDGET_MS = 45_000;
 const PROBE_SLOT_MAX_AGE_MS = 120_000;
 /** Cómo máximo espera “Guardar conexión” al probe antes de responder. */
 const CONNECTION_SAVE_PROBE_WAIT_MS = 8_000;
+/** Gracia antes de marcar caído cuando el camino VPN está sin peers. */
+const VPN_DOWN_GRACE_MS = 45_000;
 
 /** Nadie escucha o no hay camino: reintentar solo alarga la espera. */
 function isDeadHostProbeError(error?: string): boolean {
@@ -112,12 +123,15 @@ export class TopologyService {
     private readonly tenantConnections: TenantConnectionService,
     private readonly mikrotik: MikrotikClient,
     private readonly swos: SwosClient,
-    private readonly zteOlt: ZteOltClient,
-    private readonly zteSnmp: ZteOltSnmpClient,
+    private readonly zteC3xxOlt: ZteC3xxOltClient,
+    private readonly zteTitanOlt: ZteTitanOltClient,
+    private readonly zteC3xxSnmp: ZteC3xxOltSnmpClient,
+    private readonly zteTitanSnmp: ZteTitanOltSnmpClient,
     private readonly huaweiOlt: HuaweiOltClient,
     private readonly huaweiSnmp: HuaweiOltSnmpClient,
     private readonly onuTypeSync: OnuTypeOltSyncService,
     private readonly support: SupportService,
+    private readonly vpn: VpnService,
     @InjectRepository(Tenant)
     private readonly tenants: Repository<Tenant>,
   ) {}
@@ -128,6 +142,8 @@ export class TopologyService {
   private readonly probeInFlight = new Map<string, number>();
   /** Coalesce concurrent CLI inventory refreshes. */
   private readonly inventoryCliInFlight = new Map<string, Promise<void>>();
+  /** Primera detección de VPN infra caído por tenant (gracia de alertas). */
+  private readonly vpnInfraDownSince = new Map<string, number>();
 
   /**
    * Take the per-device probe slot. Entries older than this are stolen so a
@@ -375,7 +391,11 @@ export class TopologyService {
         throw new BadRequestException('Cannot change type to Internet');
       }
       device.type = dto.type as NetworkDeviceType;
-      if (dto.type !== 'router' && dto.type !== 'olt' && dto.type !== 'switch') {
+      if (
+        dto.type !== 'router' &&
+        dto.type !== 'olt' &&
+        dto.type !== 'switch'
+      ) {
         device.subtype = null;
       }
     }
@@ -604,6 +624,18 @@ export class TopologyService {
     if (dto.snmpPort !== undefined) device.snmpPort = dto.snmpPort;
     if (dto.ponType !== undefined) {
       device.ponType = dto.ponType?.trim() || null;
+    }
+    if (dto.internetEgressPortName !== undefined) {
+      const name = dto.internetEgressPortName?.trim() || null;
+      device.internetEgressPortName = name;
+      if (!name) device.internetEgressVlanId = null;
+    }
+    if (dto.internetEgressVlanId !== undefined) {
+      device.internetEgressVlanId =
+        dto.internetEgressVlanId == null ||
+        Number.isNaN(Number(dto.internetEgressVlanId))
+          ? null
+          : Number(dto.internetEgressVlanId);
     }
 
     // Defaults for MikroTik RouterOS (router or switch)
@@ -850,16 +882,16 @@ export class TopologyService {
     };
   }
 
-  private oltCli(device: NetworkDevice): ZteOltClient {
-    return (isHuaweiOltDevice(device.type, device.subtype)
-      ? this.huaweiOlt
-      : this.zteOlt) as unknown as ZteOltClient;
+  private oltCli(device: NetworkDevice): ManagedOltCliClient {
+    return resolveOltCli(device, { zteC3xx: this.zteC3xxOlt, zteTitan: this.zteTitanOlt, huawei: this.huaweiOlt });
   }
 
-  private oltSnmp(device: NetworkDevice): ZteOltSnmpClient {
-    return (isHuaweiOltDevice(device.type, device.subtype)
-      ? this.huaweiSnmp
-      : this.zteSnmp) as unknown as ZteOltSnmpClient;
+  private oltSnmp(device: NetworkDevice): ManagedOltSnmpClient {
+    return resolveOltSnmp(device, {
+      zteC3xx: this.zteC3xxSnmp,
+      zteTitan: this.zteTitanSnmp,
+      huawei: this.huaweiSnmp,
+    });
   }
 
   private async requireManagedOlt(schema: string, id: string) {
@@ -2088,9 +2120,7 @@ export class TopologyService {
     const device = await devices.findOne({ where: { id } });
     if (!device) throw new NotFoundException('Device not found');
     if (!isMikrotikRouterOsDevice(device.type, device.subtype)) {
-      throw new BadRequestException(
-        'Device is not a MikroTik RouterOS device',
-      );
+      throw new BadRequestException('Device is not a MikroTik RouterOS device');
     }
     if (!device.mgmtHost || !device.mgmtUsername || !device.mgmtPassword) {
       throw new BadRequestException('Management credentials not configured');
@@ -2197,6 +2227,10 @@ export class TopologyService {
       username: device.mgmtUsername,
       password: device.mgmtPassword,
       protocol: device.mgmtProtocol ?? 'api_ssl',
+      egressInterfaceName: await this.resolveEgressInterfaceName(
+        schema,
+        device,
+      ),
     };
 
     // Always bounded: an unreachable or filtered host must surface as an error
@@ -2214,7 +2248,8 @@ export class TopologyService {
     // Reintentar cortes transitorios de la API RouterOS (“Connection closed”,
     // carreras de login) y un timeout aislado; nunca un host muerto.
     const deadline = Date.now() + MIKROTIK_PROBE_BUDGET_MS;
-    const maxAttempts = (error?: string) => (isTimeoutProbeError(error) ? 1 : 2);
+    const maxAttempts = (error?: string) =>
+      isTimeoutProbeError(error) ? 1 : 2;
     let result = await probeOnce();
     if (!result.ok && !isDeadHostProbeError(result.error)) {
       const retries = maxAttempts(result.error);
@@ -2267,24 +2302,7 @@ export class TopologyService {
         }
       }
     } else {
-      const streak = (this.probeFailStreak.get(device.id) ?? 0) + 1;
-      this.probeFailStreak.set(device.id, streak);
-      const errMsg = result.error ?? 'Connection failed';
-      // Need 3 consecutive failures before marking disconnected if we were live
-      const failThreshold = 3;
-      let becameDown = false;
-      if (device.connectionStatus === 'connected' && streak < failThreshold) {
-        device.lastError = `Inestable (${streak}/${failThreshold}): ${errMsg}`;
-        // Keep connected + last metrics so the dashboard doesn't flap
-      } else {
-        becameDown = device.connectionStatus === 'connected';
-        device.connectionStatus = 'disconnected';
-        device.lastError = errMsg;
-      }
-      await this.persistProbedDevice(devices, device);
-      if (becameDown) {
-        void this.notifyTenantAdminsDeviceDown(schema, device);
-      }
+      await this.applyProbeFailure(schema, devices, device, result.error);
     }
 
     return device;
@@ -2362,16 +2380,7 @@ export class TopologyService {
         }
       }
     } else {
-      const streak = (this.probeFailStreak.get(device.id) ?? 0) + 1;
-      this.probeFailStreak.set(device.id, streak);
-      const errMsg = result.error ?? 'Connection failed';
-      if (device.connectionStatus === 'connected' && streak < 3) {
-        device.lastError = `Inestable (${streak}/3): ${errMsg}`;
-      } else {
-        device.connectionStatus = 'disconnected';
-        device.lastError = errMsg;
-      }
-      await this.persistProbedDevice(devices, device);
+      await this.applyProbeFailure(schema, devices, device, result.error);
     }
     return device;
   }
@@ -2470,8 +2479,21 @@ export class TopologyService {
       this.probeFailStreak.set(device.id, streak);
       const errMsg = snmp.error ?? 'SNMP unreachable';
       const failThreshold = 3;
+      const vpnHold = await this.shouldHoldProbeFailureForVpn(schema, device);
       let becameDown = false;
-      if (device.connectionStatus === 'connected' && streak < failThreshold) {
+      if (vpnHold === 'hold') {
+        device.lastError = `VPN inestable (gracia): ${errMsg}`;
+        this.probeFailStreak.set(
+          device.id,
+          Math.min(streak, failThreshold - 1),
+        );
+      } else if (vpnHold === 'silent_down') {
+        device.connectionStatus = 'disconnected';
+        device.lastError = `VPN caído · SNMP: ${errMsg}`;
+      } else if (
+        device.connectionStatus === 'connected' &&
+        streak < failThreshold
+      ) {
         device.lastError = `SNMP inestable (${streak}/${failThreshold}): ${errMsg}`;
       } else {
         becameDown = device.connectionStatus === 'connected';
@@ -2513,9 +2535,7 @@ export class TopologyService {
     }));
     device.lastCheckedAt = new Date();
     if (!result.ok) {
-      device.connectionStatus = 'disconnected';
-      device.lastError = result.error ?? 'Connection failed';
-      await this.persistProbedDevice(devices, device);
+      await this.applyProbeFailure(schema, devices, device, result.error);
       return device;
     }
     this.probeFailStreak.delete(device.id);
@@ -2589,7 +2609,7 @@ export class TopologyService {
 
     const probeOnce = () =>
       this.withTimeout(
-        this.zteOlt.probe({
+        this.oltCli(device).probe({
           host: device.mgmtHost!,
           port,
           protocol,
@@ -2678,7 +2698,7 @@ export class TopologyService {
       const community = device.snmpCommunity?.trim();
       let snmpMonitor: { ok: boolean; error?: string } | null = null;
       if (community && device.mgmtHost) {
-        const snmp = await this.zteSnmp.probeSnmp({
+        const snmp = await this.oltSnmp(device).probeSnmp({
           host: device.mgmtHost,
           snmpPort: device.snmpPort,
           snmpCommunity: community,
@@ -2748,24 +2768,108 @@ export class TopologyService {
         device as NetworkDevice & { snmpMonitor?: typeof snmpMonitor }
       ).snmpMonitor = snmpMonitor;
     } else {
-      const streak = (this.probeFailStreak.get(device.id) ?? 0) + 1;
-      this.probeFailStreak.set(device.id, streak);
-      const errMsg = result.error ?? 'Connection failed';
-      const failThreshold = 3;
-      let becameDown = false;
-      if (device.connectionStatus === 'connected' && streak < failThreshold) {
-        device.lastError = `Inestable (${streak}/${failThreshold}): ${errMsg}`;
-      } else {
-        becameDown = device.connectionStatus === 'connected';
-        device.connectionStatus = 'disconnected';
-        device.lastError = errMsg;
-      }
-      await this.persistProbedDevice(devices, device);
-      if (becameDown) {
-        void this.notifyTenantAdminsDeviceDown(schema, device);
-      }
+      await this.applyProbeFailure(schema, devices, device, result.error);
     }
     return device;
+  }
+
+  /**
+   * Marca fallo de probe con umbral anti-flap. Si el camino VPN del tenant
+   * está caído y el equipo parece usarlo, no reporta “Caída” (gracia).
+   */
+  private async applyProbeFailure(
+    schema: string,
+    devices: Repository<NetworkDevice>,
+    device: NetworkDevice,
+    error?: string,
+  ) {
+    const streak = (this.probeFailStreak.get(device.id) ?? 0) + 1;
+    this.probeFailStreak.set(device.id, streak);
+    const errMsg = error ?? 'Connection failed';
+    const failThreshold = 3;
+    const vpnHold = await this.shouldHoldProbeFailureForVpn(schema, device);
+    let becameDown = false;
+    if (vpnHold === 'hold') {
+      device.lastError = `VPN inestable (gracia): ${errMsg}`;
+      this.probeFailStreak.set(device.id, Math.min(streak, failThreshold - 1));
+    } else if (vpnHold === 'silent_down') {
+      // VPN sigue caído tras la gracia: UI refleja desconectado, sin alerta.
+      device.connectionStatus = 'disconnected';
+      device.lastError = `VPN caído: ${errMsg}`;
+    } else if (
+      device.connectionStatus === 'connected' &&
+      streak < failThreshold
+    ) {
+      device.lastError = `Inestable (${streak}/${failThreshold}): ${errMsg}`;
+    } else {
+      becameDown = device.connectionStatus === 'connected';
+      device.connectionStatus = 'disconnected';
+      device.lastError = errMsg;
+    }
+    await this.persistProbedDevice(devices, device);
+    if (becameDown) {
+      void this.notifyTenantAdminsDeviceDown(schema, device);
+    }
+  }
+
+  /** Equipos alcanzados por IP privada / modo secure suelen depender del VPN. */
+  private deviceLikelyUsesVpnPath(device: NetworkDevice): boolean {
+    if (device.mgmtConnectionMode === 'secure') return true;
+    const host = device.mgmtHost?.trim() ?? '';
+    if (!host) return false;
+    return /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[0-1])\.)/.test(host);
+  }
+
+  /**
+   * Mientras el concentrador no ve peers y el equipo usa camino VPN,
+   * no reportar caída masiva. Durante la gracia (~45s) se mantiene
+   * “connected”; después puede pasar a disconnected sin notificación.
+   */
+  private async shouldHoldProbeFailureForVpn(
+    schema: string,
+    device: NetworkDevice,
+  ): Promise<'hold' | 'silent_down' | false> {
+    if (!this.deviceLikelyUsesVpnPath(device)) {
+      this.vpnInfraDownSince.delete(schema);
+      return false;
+    }
+    const vpnDown = await this.vpn.isVpnInfrastructureDown(schema);
+    if (!vpnDown) {
+      this.vpnInfraDownSince.delete(schema);
+      return false;
+    }
+    const now = Date.now();
+    if (!this.vpnInfraDownSince.has(schema)) {
+      this.vpnInfraDownSince.set(schema, now);
+    }
+    const since = this.vpnInfraDownSince.get(schema)!;
+    if (now - since < VPN_DOWN_GRACE_MS) return 'hold';
+    return 'silent_down';
+  }
+
+  /** Nombre RouterOS a monitorear: VLAN L3 si hay, si no el puerto físico. */
+  private async resolveEgressInterfaceName(
+    schema: string,
+    device: NetworkDevice,
+  ): Promise<string | null> {
+    const port = device.internetEgressPortName?.trim();
+    if (!port) return null;
+    const vlan = device.internetEgressVlanId;
+    if (vlan != null && Number.isFinite(vlan) && vlan > 0) {
+      try {
+        const ports =
+          await this.tenantConnections.getNetworkPortRepository(schema);
+        const row = await ports.findOne({
+          where: { deviceId: device.id, name: port },
+        });
+        const match = (row?.vlans ?? []).find((v) => v.vlanId === vlan);
+        if (match?.interfaceName?.trim()) return match.interfaceName.trim();
+      } catch {
+        /* fall through */
+      }
+      return `vlan_${vlan}`;
+    }
+    return port;
   }
 
   /** Avisa a owner/admin del tenant cuando un equipo pasa de conectado → caído. */
@@ -2865,6 +2969,8 @@ export class TopologyService {
       uptime?: string;
       /** Used when the source reports a percentage instead of free/total. */
       memoryUsedPct?: number;
+      egressRxBytes?: number;
+      egressTxBytes?: number;
     },
   ) {
     const samples =
@@ -2887,6 +2993,39 @@ export class TopologyService {
       memoryUsedPct = Math.round(result.memoryUsedPct * 10) / 10;
     }
     const uptimeSeconds = this.parseUptimeSeconds(result.uptime);
+
+    let rxBps: number | null = null;
+    let txBps: number | null = null;
+    const rxBytes =
+      result.egressRxBytes != null && Number.isFinite(result.egressRxBytes)
+        ? result.egressRxBytes
+        : null;
+    const txBytes =
+      result.egressTxBytes != null && Number.isFinite(result.egressTxBytes)
+        ? result.egressTxBytes
+        : null;
+    if (rxBytes != null || txBytes != null) {
+      const prev = await samples.findOne({
+        where: { deviceId: device.id },
+        order: { sampledAt: 'DESC' },
+      });
+      if (prev?.sampledAt) {
+        const dtSec = (Date.now() - new Date(prev.sampledAt).getTime()) / 1000;
+        if (dtSec > 0.5 && dtSec < 600) {
+          const prevRx =
+            prev.rxBytes != null ? Number(prev.rxBytes) : Number.NaN;
+          const prevTx =
+            prev.txBytes != null ? Number(prev.txBytes) : Number.NaN;
+          if (rxBytes != null && Number.isFinite(prevRx) && rxBytes >= prevRx) {
+            rxBps = ((rxBytes - prevRx) * 8) / dtSec;
+          }
+          if (txBytes != null && Number.isFinite(prevTx) && txBytes >= prevTx) {
+            txBps = ((txBytes - prevTx) * 8) / dtSec;
+          }
+        }
+      }
+    }
+
     await samples.save(
       samples.create({
         deviceId: device.id,
@@ -2898,6 +3037,10 @@ export class TopologyService {
             ? result.temperature
             : null,
         uptimeSeconds: uptimeSeconds != null ? String(uptimeSeconds) : null,
+        rxBytes: rxBytes != null ? String(Math.trunc(rxBytes)) : null,
+        txBytes: txBytes != null ? String(Math.trunc(txBytes)) : null,
+        rxBps,
+        txBps,
       }),
     );
 
@@ -2953,7 +3096,11 @@ export class TopologyService {
 
   async getDeviceMetricHistory(user: AuthUser, deviceId: string, hours = 6) {
     const schema = this.requireSchema(user);
-    await this.refreshDeviceIfStale(schema, deviceId);
+    // No bloquear el gráfico esperando un probe MikroTik (puede tardar varios
+    // segundos por VPN). El poller ya refresca; refresh en background.
+    void this.refreshDeviceIfStale(schema, deviceId, 60_000).catch(
+      () => undefined,
+    );
 
     const devices =
       await this.tenantConnections.getNetworkDeviceRepository(schema);
@@ -2971,11 +3118,19 @@ export class TopologyService {
       .orderBy('s.sampledAt', 'ASC')
       .getMany();
 
+    // Tráfico 24h: ~480 pts (~3 min). CPU/RAM/temp/uptime: máx 240 (~6 min).
+    const trafficMax = clampedHours >= 12 ? 480 : clampedHours >= 6 ? 180 : 120;
+    const systemMax = clampedHours >= 12 ? 240 : clampedHours >= 6 ? 180 : 120;
+    const trafficDown = this.downsampleMetricSamples(filtered, trafficMax);
+    const systemDown = this.downsampleMetricSamples(filtered, systemMax);
+
     return {
       deviceId: device.id,
       name: device.name,
       boardName: device.metricBoardName,
       hours: clampedHours,
+      internetEgressPortName: device.internetEgressPortName,
+      internetEgressVlanId: device.internetEgressVlanId,
       current: {
         cpuLoad: device.metricCpuLoad,
         freeMemory: device.metricFreeMemory,
@@ -2984,14 +3139,69 @@ export class TopologyService {
         temperature: device.metricTemperature,
         connectionStatus: device.connectionStatus,
       },
-      samples: filtered.map((r) => ({
+      samples: systemDown.map((r) => ({
         at: r.sampledAt.toISOString(),
         cpuLoad: r.cpuLoad,
         memoryUsedPct: r.memoryUsedPct,
         temperature: r.temperature,
         uptimeSeconds: r.uptimeSeconds != null ? Number(r.uptimeSeconds) : null,
+        rxBps: r.rxBps,
+        txBps: r.txBps,
+      })),
+      trafficSamples: trafficDown.map((r) => ({
+        at: r.sampledAt.toISOString(),
+        rxBps: r.rxBps,
+        txBps: r.txBps,
       })),
     };
+  }
+
+  /** Reduce muestras para charts: media por bucket + siempre el último punto. */
+  private downsampleMetricSamples(
+    rows: DeviceMetricSample[],
+    maxPoints: number,
+  ): DeviceMetricSample[] {
+    if (rows.length <= maxPoints) return rows;
+    const bucketSize = Math.ceil(rows.length / maxPoints);
+    const out: DeviceMetricSample[] = [];
+    for (let i = 0; i < rows.length; i += bucketSize) {
+      const chunk = rows.slice(i, i + bucketSize);
+      if (chunk.length === 0) continue;
+      if (chunk.length === 1) {
+        out.push(chunk[0]);
+        continue;
+      }
+      const avg = (pick: (r: DeviceMetricSample) => number | null) => {
+        let sum = 0;
+        let n = 0;
+        for (const r of chunk) {
+          const v = pick(r);
+          if (v != null && Number.isFinite(v)) {
+            sum += v;
+            n += 1;
+          }
+        }
+        return n > 0 ? Math.round((sum / n) * 1000) / 1000 : null;
+      };
+      const last = chunk[chunk.length - 1];
+      out.push({
+        ...last,
+        cpuLoad: (() => {
+          const v = avg((r) => (r.cpuLoad != null ? Number(r.cpuLoad) : null));
+          return v != null ? Math.round(v) : null;
+        })(),
+        memoryUsedPct: avg((r) => r.memoryUsedPct),
+        temperature: avg((r) => r.temperature),
+        rxBps: avg((r) => r.rxBps),
+        txBps: avg((r) => r.txBps),
+      });
+    }
+    const final = rows[rows.length - 1];
+    if (out.length === 0 || out[out.length - 1].id !== final.id) {
+      if (out.length >= maxPoints) out[out.length - 1] = final;
+      else out.push(final);
+    }
+    return out;
   }
 
   /**
@@ -3788,11 +3998,7 @@ export class TopologyService {
     return result;
   }
 
-  async ensureDeviceBridge(
-    user: AuthUser,
-    id: string,
-    dto: { name?: string },
-  ) {
+  async ensureDeviceBridge(user: AuthUser, id: string, dto: { name?: string }) {
     const schema = this.requireSchema(user);
     const devices =
       await this.tenantConnections.getNetworkDeviceRepository(schema);

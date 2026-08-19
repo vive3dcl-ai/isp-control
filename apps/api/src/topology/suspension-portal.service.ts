@@ -11,8 +11,8 @@ import type { AuthUser } from '../auth/auth.types';
 import { TenantConnectionService } from '../database/tenant-connection.service';
 import { Tenant } from '../tenants/entities/tenant.entity';
 import type { ClientService } from '../crm/entities/client-service.entity';
-import { NetworkDevice } from './entities/network-device.entity';
-import { MikrotikClient } from './mikrotik.client';
+import { NetworkDevice } from './shared/entities/network-device.entity';
+import { MikrotikClient } from './routers/mikrotik.client';
 import {
   DEFAULT_SUSPENSION_PORTAL_TEMPLATE,
   renderSuspensionPortalTemplate,

@@ -311,7 +311,8 @@ export function SuscripcionSettingsPanel({ canWrite }: { canWrite: boolean }) {
               <option value="">Selecciona un plan…</option>
               {(sub?.plans ?? []).map((p) => (
                 <option key={p.code} value={p.code}>
-                  {p.label} · {formatUsd(p.priceUsd)}/mes
+                  {p.label} ·{' '}
+                  {p.isFree ? 'Gratis' : `${formatUsd(p.priceUsd)}/mes`}
                 </option>
               ))}
             </select>

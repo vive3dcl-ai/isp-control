@@ -4,6 +4,7 @@ import { apiFetch } from '../lib/api'
 import type { UncfgOnu, UncfgResponse } from '../lib/onu-connected'
 import { OnuAuthorizeModal } from './OnuAuthorizeModal'
 import { OnuDeniedModal } from './OnuDeniedModal'
+import { OnuSuspendedModal } from './OnuSuspendedModal'
 import { useNotify } from './NotifyProvider'
 
 const selectClass =
@@ -16,6 +17,7 @@ export function OnuOrphansPanel({ canWrite }: { canWrite: boolean }) {
   const [msg, setMsg] = useState<string | null>(null)
   const [selected, setSelected] = useState<UncfgOnu | null>(null)
   const [showDenied, setShowDenied] = useState(false)
+  const [showSuspended, setShowSuspended] = useState(false)
 
   const uncfgQuery = useQuery({
     queryKey: ['app', 'onus', 'uncfg', oltId || 'all'],
@@ -71,6 +73,7 @@ export function OnuOrphansPanel({ canWrite }: { canWrite: boolean }) {
   const olts = data?.olts ?? []
   const errors = data?.errors ?? []
   const deniedCount = data?.deniedCount ?? 0
+  const suspendedCount = data?.suspendedCount ?? 0
   const loading = uncfgQuery.isLoading || refreshMutation.isPending
 
   return (
@@ -106,25 +109,40 @@ export function OnuOrphansPanel({ canWrite }: { canWrite: boolean }) {
             {loading ? 'Consultando…' : 'Refrescar'}
           </button>
         </div>
-        <button
-          type="button"
-          onClick={() => setShowDenied(true)}
-          className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm font-medium hover:bg-[var(--bg)]"
-        >
-          Bloqueadas
-          {deniedCount > 0 ? (
-            <span className="ml-1.5 rounded bg-red-600/20 px-1.5 text-xs text-red-400">
-              {deniedCount}
-            </span>
-          ) : null}
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => setShowSuspended(true)}
+            className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm font-medium hover:bg-[var(--bg)]"
+          >
+            Suspendidas
+            {suspendedCount > 0 ? (
+              <span className="ml-1.5 rounded bg-amber-600/20 px-1.5 text-xs text-amber-400">
+                {suspendedCount}
+              </span>
+            ) : null}
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowDenied(true)}
+            className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm font-medium hover:bg-[var(--bg)]"
+          >
+            Bloqueadas
+            {deniedCount > 0 ? (
+              <span className="ml-1.5 rounded bg-red-600/20 px-1.5 text-xs text-red-400">
+                {deniedCount}
+              </span>
+            ) : null}
+          </button>
+        </div>
       </div>
 
       <p className="text-sm text-[var(--text-muted)]">
         ONUs en la OLT pendientes de autorización (
-        <span className="font-mono text-xs">show … onu uncfg</span>). Denegar
-        las oculta aquí (Bloqueadas). Si el SN aún aparece en Conectadas,
-        se marca como registro posible obsoleto.
+        <span className="font-mono text-xs">show … onu uncfg</span>). El modelo
+        sale del ACS cuando la ONU ya Informó (ProductClass). Orden: más
+        reciente → más antigua. Denegar las oculta en Bloqueadas. Las
+        suspendidas (admin disable) van a Suspendidas, no aquí.
       </p>
 
       {msg && (
@@ -155,13 +173,15 @@ export function OnuOrphansPanel({ canWrite }: { canWrite: boolean }) {
       )}
 
       <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
-        <table className="w-full min-w-[720px] text-left text-sm">
+        <table className="w-full min-w-[900px] text-left text-sm">
           <thead className="border-b border-[var(--border)] bg-[var(--bg)] text-xs text-[var(--text-muted)]">
             <tr>
+              <th className="px-3 py-2 font-medium">Conexión</th>
               <th className="px-3 py-2 font-medium">OLT</th>
               <th className="px-3 py-2 font-medium">Puerto PON</th>
-              <th className="px-3 py-2 font-medium">Board/Port</th>
               <th className="px-3 py-2 font-medium">SN</th>
+              <th className="px-3 py-2 font-medium">Modelo</th>
+              <th className="px-3 py-2 font-medium">Script</th>
               <th className="px-3 py-2 font-medium">Estado</th>
               <th className="px-3 py-2 font-medium">ONU ID sug.</th>
               <th className="px-3 py-2 font-medium">Acción</th>
@@ -171,7 +191,7 @@ export function OnuOrphansPanel({ canWrite }: { canWrite: boolean }) {
             {loading && onus.length === 0 ? (
               <tr>
                 <td
-                  colSpan={7}
+                  colSpan={9}
                   className="px-3 py-8 text-center text-[var(--text-muted)]"
                 >
                   Consultando OLT…
@@ -180,7 +200,7 @@ export function OnuOrphansPanel({ canWrite }: { canWrite: boolean }) {
             ) : onus.length === 0 ? (
               <tr>
                 <td
-                  colSpan={7}
+                  colSpan={9}
                   className="px-3 py-8 text-center text-[var(--text-muted)]"
                 >
                   No hay ONUs huérfanas. Pulsa Refrescar para consultar la OLT.
@@ -192,12 +212,41 @@ export function OnuOrphansPanel({ canWrite }: { canWrite: boolean }) {
                   key={`${o.oltId}:${o.oltIf}:${o.sn}`}
                   className="border-t border-[var(--border)]"
                 >
+                  <td className="px-3 py-2 whitespace-nowrap text-xs text-[var(--text-muted)]">
+                    {o.firstSeenAt
+                      ? new Date(o.firstSeenAt).toLocaleString()
+                      : '—'}
+                  </td>
                   <td className="px-3 py-2">{o.oltName}</td>
                   <td className="px-3 py-2 font-mono text-xs">{o.oltIf}</td>
-                  <td className="px-3 py-2 text-[var(--text-muted)]">
-                    {o.board}/{o.port}
-                  </td>
                   <td className="px-3 py-2 font-mono text-xs">{o.sn}</td>
+                  <td className="px-3 py-2">
+                    {o.model ? (
+                      <span
+                        className="font-medium"
+                        title={
+                          o.modelSource === 'acs'
+                            ? 'Modelo desde ACS'
+                            : o.modelSource === 'sighting'
+                              ? 'Modelo recordado de un Inform previo'
+                              : o.modelSource === 'inventory'
+                                ? 'Modelo del inventario (Conectadas)'
+                                : undefined
+                        }
+                      >
+                        {o.model}
+                      </span>
+                    ) : (
+                      <span className="text-[var(--text-muted)]">
+                        {o.vendor && o.vendor !== 'unknown'
+                          ? `${o.vendor} (sin ACS)`
+                          : '—'}
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2 font-mono text-[10px] text-[var(--text-muted)]">
+                    {o.driverId ?? '—'}
+                  </td>
                   <td className="px-3 py-2">
                     {o.state ?? '—'}
                     {o.inConnected ? (
@@ -275,6 +324,9 @@ export function OnuOrphansPanel({ canWrite }: { canWrite: boolean }) {
 
       {showDenied && (
         <OnuDeniedModal onClose={() => setShowDenied(false)} />
+      )}
+      {showSuspended && (
+        <OnuSuspendedModal onClose={() => setShowSuspended(false)} />
       )}
     </div>
   )

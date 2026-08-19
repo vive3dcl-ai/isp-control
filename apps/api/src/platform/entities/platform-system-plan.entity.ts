@@ -36,9 +36,13 @@ export class PlatformSystemPlan {
   @Column({ name: 'sort_order', type: 'int', default: 0 })
   sortOrder: number;
 
-  /** Precio USD mensual. */
+  /** Precio USD mensual (catálogo; si isFree, el cobro efectivo es 0). */
   @Column({ name: 'price_usd', type: 'numeric', precision: 12, scale: 2 })
   priceUsd: string;
+
+  /** Si true, el plan se muestra y cobra como gratis (landing + suscripción). */
+  @Column({ name: 'is_free', type: 'boolean', default: false })
+  isFree: boolean;
 
   @Column({ type: 'boolean', default: true })
   enabled: boolean;

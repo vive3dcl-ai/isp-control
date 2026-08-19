@@ -28,7 +28,7 @@ import {
   SetNetworkNodeDevicesDto,
   UpdateNetworkNodeDto,
   UpdateNodeHeaderDto,
-} from './dto/network-node.dto';
+} from './shared/dto/network-node.dto';
 
 @Controller('app/network-nodes')
 @UseGuards(JwtAuthGuard, RolesGuard, TenantRolesGuard)

@@ -30,7 +30,7 @@ import {
   UpdateVpnTunnelClientDto,
   UpdateVpnTunnelDto,
   VpnSetupDto,
-} from './dto/vpn.dto';
+} from './shared/dto/vpn.dto';
 
 @Controller('app/topology/vpn')
 @UseGuards(JwtAuthGuard, RolesGuard, TenantRolesGuard)

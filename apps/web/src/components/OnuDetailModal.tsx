@@ -30,6 +30,7 @@ import {
   runProgressSteps,
   type ProgressStep,
 } from './OperationProgressModal'
+import { OnuProvisionProgressModal } from './OnuProvisionProgressModal'
 import type { Tr069OnuConfig } from '../lib/onu-tr069-config'
 import type { Tr069ProfilesResponse } from '../lib/tr069'
 import type { Zone } from './ZonasSettingsTab'
@@ -56,7 +57,7 @@ function isUuid(id: string | undefined): id is string {
 function verifyTooltip(detail: Record<string, unknown> | undefined): string {
   if (!detail || typeof detail !== 'object') return ''
   const parts: string[] = []
-  for (const key of ['arp', 'connreq', 'wan', 'dns', 'uplinkVlan', 'traffic'] as const) {
+  for (const key of ['arp', 'connreq', 'wan', 'dns', 'route', 'uplinkVlan', 'traffic'] as const) {
     const c = detail[key] as { ok?: boolean; message?: string } | undefined
     if (!c?.message) continue
     parts.push(`${key}: ${c.ok ? 'ok' : 'fail'} (${c.message})`)
@@ -71,11 +72,26 @@ function verifyTooltip(detail: Record<string, unknown> | undefined): string {
 function VerifyStatusPill({
   status,
   detail,
+  showIdle,
+  onOpenProgress,
 }: {
   status: 'idle' | 'test' | 'ok' | 'fail' | undefined
   detail?: Record<string, unknown>
+  /** Si la ONU ya está en ACS pero nunca arrancó el chequeo. */
+  showIdle?: boolean
+  onOpenProgress?: () => void
 }) {
-  if (!status || status === 'idle') return null
+  if (!status || status === 'idle') {
+    if (!showIdle) return null
+    return (
+      <span
+        title="En ACS — el chequeo se arma solo; refresca si no pasa a test"
+        className="rounded-full bg-[var(--border)]/60 px-2 py-0.5 text-[10px] font-medium text-[var(--text-muted)]"
+      >
+        pendiente
+      </span>
+    )
+  }
   const title = verifyTooltip(detail) || undefined
   if (status === 'ok') {
     return (
@@ -89,12 +105,14 @@ function VerifyStatusPill({
   }
   if (status === 'test') {
     return (
-      <span
-        title={title || 'Chequeo silencioso en curso'}
-        className="rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-medium text-amber-300"
+      <button
+        type="button"
+        title={title || 'Ver avance del aprovisionamiento'}
+        onClick={onOpenProgress}
+        className="rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-medium text-amber-300 hover:bg-amber-500/30"
       >
         test
-      </span>
+      </button>
     )
   }
   return (
@@ -153,10 +171,7 @@ export function OnuDetailModal({
     Record<string, () => Promise<string | void>>
   >({})
   const [checkOpen, setCheckOpen] = useState(false)
-  const [checkSteps, setCheckSteps] = useState<ProgressStep[]>([])
-  const [checkRunning, setCheckRunning] = useState(false)
-  const [checkFailed, setCheckFailed] = useState(false)
-  const [checkDone, setCheckDone] = useState(false)
+  const [checkRunOnOpen, setCheckRunOnOpen] = useState(false)
 
   const detailQuery = useQuery({
     queryKey: ['app', 'onus', 'detail', oltId, onuIf],
@@ -240,6 +255,9 @@ export function OnuDetailModal({
       !!(detailQuery.data?.onu?.tr069Enabled || detailQuery.data?.onu?.mgmtIp),
     refetchInterval: 20_000,
   })
+
+  // (El avance del script se abre con Check ONU / VLANs; no auto-abrir
+  // aquí para no duplicar la modal cuando apply pone verifyStatus=test.)
 
   const oltProfiles = useMemo(() => {
     const oltIdForOnu = detailQuery.data?.onu?.oltId
@@ -588,6 +606,11 @@ export function OnuDetailModal({
 
     const steps: ProgressStep[] = [
       {
+        id: 'model',
+        label: 'Detectando modelo real en ACS (ProductClass)',
+        status: 'pending',
+      },
+      {
         id: 'olt',
         label: 'Reaplicando VLANs en la OLT (service-port)',
         status: 'pending',
@@ -616,6 +639,16 @@ export function OnuDetailModal({
     ]
 
     const runners: Record<string, () => Promise<string | void>> = {
+      model: async () => {
+        const r = await apiFetch<{
+          ok?: boolean
+          changed?: boolean
+          previous?: string | null
+          model?: string | null
+          message?: string
+        }>(`/app/onus/${onuDbId}/model/sync-acs`, { method: 'POST' })
+        return r.message || 'Modelo ACS OK'
+      },
       olt: async () => {
         const r = await apiFetch<{ message?: string }>(
           `/app/onus/${onuDbId}/network-vlans/olt`,
@@ -672,163 +705,10 @@ export function OnuDetailModal({
     void executeResync(steps, runners)
   }
 
-  async function executeCheck(
-    steps: ProgressStep[],
-    runners: Record<string, () => Promise<string | void>>,
-  ) {
-    setCheckRunning(true)
-    setCheckFailed(false)
-    setCheckDone(false)
-    const result = await runProgressSteps(steps, setCheckSteps, runners)
-    setCheckRunning(false)
-    if (result.ok) {
-      setCheckDone(true)
-      void queryClient.invalidateQueries({
-        queryKey: ['app', 'onus', 'detail', oltId, onuIf],
-      })
-    } else {
-      setCheckFailed(true)
-      void queryClient.invalidateQueries({
-        queryKey: ['app', 'onus', 'detail', oltId, onuIf],
-      })
-    }
-  }
-
   function startCheckOnu() {
     if (!isUuid(onuDbId)) return
-
-    const pause = (ms: number) =>
-      new Promise<void>((resolve) => setTimeout(resolve, ms))
-
-    const steps: ProgressStep[] = [
-      {
-        id: 'run',
-        label:
-          'Credenciales ACS primero, luego router/WAN/DNS (hasta 3 intentos)',
-        status: 'pending',
-      },
-      {
-        id: 'connreq',
-        label: 'Credenciales de petición de conexión (nuestras)',
-        status: 'pending',
-      },
-      {
-        id: 'arp',
-        label: 'ARP en el router del gateway',
-        status: 'pending',
-      },
-      {
-        id: 'wan',
-        label: 'WAN TR-069 (IP, máscara, gateway, VLAN y NAT)',
-        status: 'pending',
-      },
-      {
-        id: 'dns',
-        label: 'DNS de la WAN',
-        status: 'pending',
-      },
-      {
-        id: 'uplinkVlan',
-        label: 'VLAN WAN en uplink de la OLT',
-        status: 'pending',
-      },
-      {
-        id: 'traffic',
-        label: 'Tráfico / conexiones activas',
-        status: 'pending',
-      },
-      {
-        id: 'result',
-        label: 'Resultado final',
-        status: 'pending',
-      },
-    ]
-
-    let detail: Record<string, unknown> = {}
-    let status = 'fail'
-    let healedNote = ''
-
-    const checkOf = (key: string) =>
-      detail[key] as { ok?: boolean; message?: string } | undefined
-
-    const runners: Record<string, () => Promise<string | void>> = {
-      run: async () => {
-        const r = await apiFetch<{
-          ok: boolean
-          verifyStatus: string
-          verifyDetail: Record<string, unknown>
-          message?: string
-        }>(`/app/onus/${onuDbId}/verify/run`, { method: 'POST' })
-        detail = r.verifyDetail ?? {}
-        status = r.verifyStatus
-        const healed = detail.healed
-        if (Array.isArray(healed) && healed.length) {
-          healedNote = healed.join('; ')
-        }
-        return healedNote
-          ? `Pruebas hechas · curado: ${healedNote}`
-          : 'Pruebas hechas'
-      },
-      arp: async () => {
-        await pause(350)
-        const c = checkOf('arp')
-        if (!c?.ok) throw new Error(c?.message || 'ARP falló')
-        return c.message || 'ARP OK'
-      },
-      connreq: async () => {
-        await pause(350)
-        const c = checkOf('connreq')
-        if (!c?.ok) throw new Error(c?.message || 'Credenciales fallaron')
-        return c.message || 'Credenciales OK'
-      },
-      wan: async () => {
-        await pause(350)
-        const c = checkOf('wan')
-        if (!c?.ok) throw new Error(c?.message || 'WAN falló')
-        return c.message || 'WAN OK'
-      },
-      dns: async () => {
-        await pause(350)
-        const c = checkOf('dns')
-        if (!c?.ok) throw new Error(c?.message || 'DNS no aplicado')
-        return c.message || 'DNS OK'
-      },
-      uplinkVlan: async () => {
-        await pause(350)
-        const c = checkOf('uplinkVlan')
-        if (!c?.ok) {
-          throw new Error(
-            c?.message || 'VLAN no actualizada en uplink — actualizar',
-          )
-        }
-        return c.message || 'VLAN en uplink'
-      },
-      traffic: async () => {
-        await pause(350)
-        const c = checkOf('traffic')
-        // Sin tráfico no tumba el chequeo si lo esencial pasó (cliente idle).
-        if (status === 'ok') {
-          return c?.ok
-            ? c.message || 'Tráfico OK'
-            : c?.message || 'Sin tráfico (cliente idle)'
-        }
-        if (!c?.ok) throw new Error(c?.message || 'Sin tráfico')
-        return c.message || 'Tráfico OK'
-      },
-      result: async () => {
-        await pause(200)
-        if (status !== 'ok') {
-          throw new Error(
-            verifyTooltip(detail) || 'La ONU no pasó el chequeo',
-          )
-        }
-        return 'Todo OK'
-      },
-    }
-
-    setCheckSteps(steps)
+    setCheckRunOnOpen(true)
     setCheckOpen(true)
-    void executeCheck(steps, runners)
   }
 
   const imageSrc =
@@ -1124,6 +1004,15 @@ export function OnuDetailModal({
                         <VerifyStatusPill
                           status={o.verifyStatus}
                           detail={o.verifyDetail}
+                          showIdle={
+                            !!tr069AcsQuery.data?.inAcs &&
+                            !!o.wanIp &&
+                            o.provisionMode !== 'manual'
+                          }
+                          onOpenProgress={() => {
+                            setCheckRunOnOpen(false)
+                            setCheckOpen(true)
+                          }}
                         />
                       </p>
                       {(() => {
@@ -1563,7 +1452,7 @@ export function OnuDetailModal({
                 o?.verifyStatus === 'fail' ? (
                   <button
                     type="button"
-                    disabled={resyncRunning || checkRunning || actionBusy}
+                    disabled={resyncRunning || checkOpen || actionBusy}
                     onClick={() => startResync()}
                     title={
                       verifyTooltip(o.verifyDetail) ||
@@ -1579,12 +1468,12 @@ export function OnuDetailModal({
                 {canWrite && isUuid(onuDbId) ? (
                   <button
                     type="button"
-                    disabled={checkRunning || resyncRunning || actionBusy}
+                    disabled={checkOpen || resyncRunning || actionBusy}
                     onClick={() => startCheckOnu()}
-                    title="Correr ahora ARP, WAN, credenciales y tráfico"
+                    title="Correr ahora el plan de verify del modelo"
                     className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm font-medium hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:opacity-50"
                   >
-                    {checkRunning ? 'Checking…' : 'Check ONU'}
+                    {checkOpen ? 'Checking…' : 'Check ONU'}
                   </button>
                 ) : (
                   pendingBtn('Check ONU')
@@ -1611,29 +1500,24 @@ export function OnuDetailModal({
         }}
       />
 
-      <OperationProgressModal
-        open={checkOpen}
-        title="Check ONU"
-        steps={checkSteps}
-        running={checkRunning}
-        failed={checkFailed}
-        allDone={checkDone}
-        doneLabel="Todo OK"
-        failedLabel="Hay fallos — puedes reintentar el chequeo"
-        onRetry={() => startCheckOnu()}
+      <OnuProvisionProgressModal
+        open={checkOpen && isUuid(onuDbId)}
+        onuId={onuDbId ?? ''}
+        title="Aprovisionamiento / Check ONU"
+        runCheckOnOpen={checkRunOnOpen}
         onClose={() => {
           setCheckOpen(false)
+          setCheckRunOnOpen(false)
           void queryClient.invalidateQueries({
             queryKey: ['app', 'onus', 'detail', oltId, onuIf],
           })
         }}
-      >
-        {checkDone ? (
-          <div className="mx-5 mb-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">
-            Todo OK — la ONU pasó ARP, credenciales, WAN y tráfico.
-          </div>
-        ) : null}
-      </OperationProgressModal>
+        onFinished={() => {
+          void queryClient.invalidateQueries({
+            queryKey: ['app', 'onus', 'detail', oltId, onuIf],
+          })
+        }}
+      />
 
       {cliModal && (
         <OnuCliReportModal

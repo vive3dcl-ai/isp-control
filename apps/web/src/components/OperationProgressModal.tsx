@@ -71,6 +71,8 @@ export function OperationProgressModal({
   children,
   doneLabel = 'Todo listo',
   failedLabel = 'Hay errores — puedes reintentar solo lo pendiente',
+  closeWhileRunning = false,
+  closeLabel,
 }: {
   open: boolean
   title: string
@@ -84,10 +86,14 @@ export function OperationProgressModal({
   /** Texto bajo el título cuando terminó bien. */
   doneLabel?: string
   failedLabel?: string
+  /** Permite cerrar aunque haya un paso en curso (p. ej. verify en background). */
+  closeWhileRunning?: boolean
+  closeLabel?: string
 }) {
   if (!open) return null
 
   const doneCount = steps.filter((s) => s.status === 'done').length
+  const canClose = closeWhileRunning || !running
 
   return (
     <ModalPortal><div className="fixed inset-0 z-[120] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/60 sm:items-center sm:p-4">
@@ -155,17 +161,23 @@ export function OperationProgressModal({
           )}
           <button
             type="button"
-            disabled={running}
+            disabled={!canClose}
             onClick={onClose}
             className={[
               'rounded-lg px-3 py-2 text-sm font-medium',
               allDone
                 ? 'bg-emerald-600 text-white hover:bg-emerald-500'
                 : 'border border-[var(--border)]',
-              running ? 'opacity-50' : '',
+              !canClose ? 'opacity-50' : '',
             ].join(' ')}
           >
-            {allDone ? 'Listo' : running ? 'Trabajando…' : 'Cerrar'}
+            {closeLabel
+              ? closeLabel
+              : allDone
+                ? 'Listo'
+                : running
+                  ? 'Trabajando…'
+                  : 'Cerrar'}
           </button>
         </div>
       </div>

@@ -24,7 +24,7 @@ export interface ProvisionTenantResult {
 }
 
 /**
- * Shared tenant provisioning used by admin UI and (later) public registration.
+ * Shared tenant provisioning used by admin UI and public registration.
  */
 @Injectable()
 export class TenantProvisioningService {

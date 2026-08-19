@@ -10,15 +10,15 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import type { AuthUser } from '../auth/auth.types';
 import { TenantConnectionService } from '../database/tenant-connection.service';
-import { MikrotikClient } from './mikrotik.client';
-import type { VpnTunnel } from './entities/vpn-tunnel.entity';
-import type { VpnTunnelClient } from './entities/vpn-tunnel-client.entity';
+import { MikrotikClient } from './routers/mikrotik.client';
+import type { VpnTunnel } from './shared/entities/vpn-tunnel.entity';
+import type { VpnTunnelClient } from './shared/entities/vpn-tunnel-client.entity';
 import {
   CreateVpnTunnelClientDto,
   CreateVpnTunnelDto,
   UpdateVpnTunnelClientDto,
   UpdateVpnTunnelDto,
-} from './dto/vpn.dto';
+} from './shared/dto/vpn.dto';
 import {
   DEFAULT_VPN_PORTS,
   DEFAULT_VPN_TUNNEL_ROUTES,
@@ -51,7 +51,7 @@ import {
   type OpenVpnConcentratorUserInput,
   type WireguardConcentratorPeerInput,
 } from './vpn-script.util';
-import { isMikrotikRouterOsDevice } from './switch.constants';
+import { isMikrotikRouterOsDevice } from './routers/switch.constants';
 import { PlatformPublicUrlsService } from '../platform/platform-public-urls.service';
 
 const ACS_HINT_PORT = 14501;
@@ -221,7 +221,7 @@ export class VpnService {
   ): Promise<VpnTunnelClient[]> {
     const repo =
       await this.tenantConnections.getVpnTunnelClientRepository(schema);
-    let clients = await repo.find({
+    const clients = await repo.find({
       where: { tunnelId: tunnel.id },
       order: { clientAddress: 'ASC' },
     });
@@ -376,6 +376,46 @@ export class VpnService {
     return { openvpn, openvpnIps, wireguardIps };
   }
 
+  /**
+   * Snapshot de peers vivos en el concentrador (OpenVPN + WireGuard).
+   * Usado por el poller de topología para no reportar “caídas” masivas
+   * cuando el camino VPN está caído.
+   */
+  async getLiveVpnPeerSnapshot(): Promise<{
+    openvpn: Set<string>;
+    openvpnIps: Set<string>;
+    wireguardIps: Set<string>;
+    anyLive: boolean;
+  }> {
+    const live = await this.readLiveVpnPeers();
+    return {
+      ...live,
+      anyLive:
+        live.openvpn.size > 0 ||
+        live.openvpnIps.size > 0 ||
+        live.wireguardIps.size > 0,
+    };
+  }
+
+  /**
+   * True cuando el tenant tiene túneles VPN pero el concentrador no ve
+   * ningún peer vivo → camino VPN probablemente caído (reinicio, etc.).
+   */
+  async isVpnInfrastructureDown(schema: string): Promise<boolean> {
+    try {
+      const tunnels =
+        await this.tenantConnections.getVpnTunnelRepository(schema);
+      const count = await tunnels.count();
+      if (count === 0) return false;
+      const live = await this.getLiveVpnPeerSnapshot();
+      return !live.anyLive;
+    } catch {
+      // Si no podemos leer el runtime VPN, asumir camino degradado
+      // (mejor no spamear alertas de equipos).
+      return true;
+    }
+  }
+
   private deriveLiveStatus(
     tunnel: VpnTunnel,
     live: {
@@ -396,8 +436,7 @@ export class VpnService {
       }
     } else if (
       list.some(
-        (c) =>
-          live.openvpn.has(c.name) || live.openvpnIps.has(c.clientAddress),
+        (c) => live.openvpn.has(c.name) || live.openvpnIps.has(c.clientAddress),
       ) ||
       live.openvpn.has(tunnel.name) ||
       live.openvpnIps.has(tunnel.clientAddress)
@@ -1234,7 +1273,8 @@ export class VpnService {
                     .filter(Boolean)
                 : [];
               if (
-                (c.protocol === 'openvpn_tcp' || c.protocol === 'openvpn_udp') &&
+                (c.protocol === 'openvpn_tcp' ||
+                  c.protocol === 'openvpn_udp') &&
                 c.password
               ) {
                 openvpnUsers.push({
@@ -1645,7 +1685,10 @@ export class VpnService {
           script,
           detail: `Script completo: ${results.length - failed.length}/${results.length} OK`,
           note: `Primera importación: script completo del cliente «${client.name}».`,
-          tunnel: this.sanitize(tunnel, await this.loadClients(schema, tunnel.id)),
+          tunnel: this.sanitize(
+            tunnel,
+            await this.loadClients(schema, tunnel.id),
+          ),
           client: this.sanitizeClient(client),
         };
       }

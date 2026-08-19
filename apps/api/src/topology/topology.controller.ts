@@ -36,7 +36,7 @@ import {
   CreatePortVlanDto,
   UpdatePortAddressesDto,
   UpdatePortCommentDto,
-} from './dto/topology.dto';
+} from './shared/dto/topology.dto';
 
 @Controller('app/topology')
 @UseGuards(JwtAuthGuard, RolesGuard, TenantRolesGuard)

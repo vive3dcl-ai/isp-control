@@ -14,6 +14,8 @@ export type SystemPlan = {
   months: number
   label: string
   priceUsd: number
+  /** Si true, landing y cobro tratan el plan como gratis. */
+  isFree?: boolean
   enabled: boolean
   sortOrder?: number
 }
@@ -149,6 +151,8 @@ export function chargeKindLabel(kind: string): string {
       return 'Alta'
     case 'plan_change':
       return 'Cambio de plan'
+    case 'service':
+      return 'Factura de servicio'
     case 'extra_blocks_add':
       return 'Usuarios extra (+)'
     case 'extra_blocks_remove':

@@ -8,7 +8,7 @@ RUN chmod +x /docker-entrypoint.d/40-panel-url.sh \
   && PANEL_URL=https://panel.ispcontrol.ai \
      API_PUBLIC_URL=/api \
      CONTACT_EMAIL=hola@ispcontrol.ai \
-     REGISTER_URL=https://panel.ispcontrol.ai/login \
+     REGISTER_URL=/register.html \
      envsubst '${PANEL_URL} ${API_PUBLIC_URL} ${CONTACT_EMAIL} ${REGISTER_URL}' \
     < /usr/share/nginx/html/config.js.template \
     > /usr/share/nginx/html/config.js

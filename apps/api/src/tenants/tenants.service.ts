@@ -8,6 +8,7 @@ import { Repository } from 'typeorm';
 import { Tenant, TenantStatus } from './entities/tenant.entity';
 import { UserDirectory } from './entities/user-directory.entity';
 import { CreateTenantDto } from './dto/create-tenant.dto';
+import { PublicRegisterDto } from './dto/public-register.dto';
 import { UpdateTenantDto } from './dto/update-tenant.dto';
 import { UpdateCompanyDto } from './dto/update-company.dto';
 import { TenantProvisioningService } from './tenant-provisioning.service';
@@ -22,6 +23,25 @@ import {
   parsePortalUrl,
 } from '../topology/suspension-portal-url';
 import { PlatformPublicUrlsService } from '../platform/platform-public-urls.service';
+import { PlatformPlansService } from '../platform/platform-plans.service';
+import { PlatformSubscriptionService } from '../platform/platform-subscription.service';
+import { isUserPlanCode } from '../platform/billing-cycles';
+
+const RESERVED_TENANT_SLUGS = new Set([
+  'admin',
+  'api',
+  'app',
+  'www',
+  'mail',
+  'root',
+  'system',
+  'platform',
+  'public',
+  'login',
+  'register',
+  'support',
+  'demo',
+]);
 
 @Injectable()
 export class TenantsService {
@@ -33,6 +53,8 @@ export class TenantsService {
     private readonly provisioning: TenantProvisioningService,
     private readonly tenantConnections: TenantConnectionService,
     private readonly publicUrls: PlatformPublicUrlsService,
+    private readonly plans: PlatformPlansService,
+    private readonly subscriptions: PlatformSubscriptionService,
   ) {}
 
   list() {
@@ -55,6 +77,60 @@ export class TenantsService {
 
   create(dto: CreateTenantDto) {
     return this.provisioning.provision(dto);
+  }
+
+  /**
+   * Registro público (landing): provisiona empresa + owner y activa el plan elegido.
+   */
+  async registerPublic(dto: PublicRegisterDto) {
+    if (!isUserPlanCode(dto.planCode)) {
+      throw new BadRequestException('Plan inválido');
+    }
+    const plan = await this.plans.getByCode(dto.planCode);
+    if (!plan || !plan.enabled) {
+      throw new BadRequestException('Plan no disponible');
+    }
+
+    const slug = this.provisioning.normalizeSlug(
+      dto.slug ?? this.provisioning.slugify(dto.name.trim()),
+    );
+    if (!slug || RESERVED_TENANT_SLUGS.has(slug)) {
+      throw new BadRequestException(
+        'Identificador de empresa no permitido. Elige otro slug.',
+      );
+    }
+
+    const provisioned = await this.provisioning.provision({
+      name: dto.name,
+      legalName: dto.legalName,
+      phone: dto.phone,
+      address: dto.address,
+      slug,
+      ownerName: dto.ownerName,
+      ownerEmail: dto.ownerEmail,
+      ownerPassword: dto.ownerPassword,
+    });
+
+    const planResult = await this.subscriptions.changePlan(
+      provisioned.tenant.id,
+      dto.planCode,
+    );
+
+    return {
+      ok: true as const,
+      tenant: {
+        name: provisioned.tenant.name,
+        slug: provisioned.tenant.slug,
+      },
+      owner: {
+        email: provisioned.owner.email,
+        name: provisioned.owner.name,
+      },
+      plan: {
+        code: planResult.code,
+        label: planResult.label,
+      },
+    };
   }
 
   async update(id: string, dto: UpdateTenantDto) {

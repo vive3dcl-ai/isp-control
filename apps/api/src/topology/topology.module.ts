@@ -6,38 +6,40 @@ import { Tenant } from '../tenants/entities/tenant.entity';
 import { TenantRolesGuard } from '../auth/guards/tenant-roles.guard';
 import { TopologyController } from './topology.controller';
 import { TopologyService } from './topology.service';
-import { MikrotikClient } from './mikrotik.client';
-import { SwosClient } from './swos.client';
-import { ZteOltClient } from './zte-olt.client';
-import { ZteOltSnmpClient } from './zte-olt-snmp.client';
-import { HuaweiOltClient } from './huawei-olt.client';
-import { HuaweiOltSnmpClient } from './huawei-olt-snmp.client';
-import { MikrotikPollService } from './mikrotik-poll.service';
-import { OnuMetricsPollService } from './onu-metrics-poll.service';
-import { OnuPostProvisionVerifyService } from './onu-post-provision-verify.service';
-import { OnuPostProvisionVerifyPollService } from './onu-post-provision-verify-poll.service';
-import { OltInventoryPollService } from './olt-inventory-poll.service';
+import { MikrotikClient } from './routers/mikrotik.client';
+import { SwosClient } from './routers/swos.client';
+import { ZteC3xxOltClient } from '../drivers/olt/zte/c3xx/cli';
+import { ZteC3xxOltSnmpClient } from '../drivers/olt/zte/c3xx/snmp';
+import { ZteTitanOltClient } from '../drivers/olt/zte/titan/cli';
+import { ZteTitanOltSnmpClient } from '../drivers/olt/zte/titan/snmp';
+import { HuaweiOltClient } from '../drivers/olt/huawei/huawei-olt.client';
+import { HuaweiOltSnmpClient } from '../drivers/olt/huawei/huawei-olt-snmp.client';
+import { MikrotikPollService } from './routers/mikrotik-poll.service';
+import { OnuMetricsPollService } from './onus/onu-metrics-poll.service';
+import { OnuPostProvisionVerifyService } from './onus/onu-post-provision-verify.service';
+import { OnuPostProvisionVerifyPollService } from './onus/onu-post-provision-verify-poll.service';
+import { OltInventoryPollService } from './olts/olt-inventory-poll.service';
 import { VpnService } from './vpn.service';
 import { VpnController, VpnPublicController } from './vpn.controller';
 import { VpnAdminController } from './vpn.admin.controller';
 import { VpnInternalController } from './vpn.internal.controller';
-import { Tr069Service } from './tr069.service';
-import { Tr069Controller } from './tr069.controller';
-import { OnuSettingsService } from './onu-settings.service';
-import { OnuSettingsController } from './onu-settings.controller';
-import { OnuCatalogAdminService } from './onu-catalog-admin.service';
-import { OnuCatalogAdminController } from './onu-catalog-admin.controller';
-import { OnuCatalogItem } from './entities/onu-catalog.entity';
-import { OnuConnectedService } from './onu-connected.service';
-import { OnuConnectedController } from './onu-connected.controller';
-import { OnuMigrationService } from './onu-migration.service';
-import { OnuMigrationController } from './onu-migration.controller';
-import { OnuTypeOltSyncService } from './onu-type-olt-sync.service';
-import { IpPoolService } from './ip-pool.service';
-import { IpPoolController } from './ip-pool.controller';
-import { OnuTr069ConfigService } from './onu-tr069-config.service';
-import { ServiceVlanService } from './service-vlan.service';
-import { ServiceVlanController } from './service-vlan.controller';
+import { Tr069Service } from './onus/tr069.service';
+import { Tr069Controller } from './onus/tr069.controller';
+import { OnuSettingsService } from './onus/onu-settings.service';
+import { OnuSettingsController } from './onus/onu-settings.controller';
+import { OnuCatalogAdminService } from './onus/onu-catalog-admin.service';
+import { OnuCatalogAdminController } from './onus/onu-catalog-admin.controller';
+import { OnuCatalogItem } from './shared/entities/onu-catalog.entity';
+import { OnuConnectedService } from './onus/onu-connected.service';
+import { OnuConnectedController } from './onus/onu-connected.controller';
+import { OnuMigrationService } from './onus/onu-migration.service';
+import { OnuMigrationController } from './onus/onu-migration.controller';
+import { OnuTypeOltSyncService } from './onus/onu-type-olt-sync.service';
+import { IpPoolService } from './routers/ip-pool.service';
+import { IpPoolController } from './routers/ip-pool.controller';
+import { OnuTr069ConfigService } from './onus/onu-tr069-config.service';
+import { ServiceVlanService } from './olts/service-vlan.service';
+import { ServiceVlanController } from './olts/service-vlan.controller';
 import { NetworkNodeService } from './network-node.service';
 import { NetworkNodeController } from './network-node.controller';
 import { SuspensionPortalService } from './suspension-portal.service';
@@ -77,8 +79,10 @@ import { SupportModule } from '../support/support.module';
     TopologyService,
     MikrotikClient,
     SwosClient,
-    ZteOltClient,
-    ZteOltSnmpClient,
+    ZteC3xxOltClient,
+    ZteC3xxOltSnmpClient,
+    ZteTitanOltClient,
+    ZteTitanOltSnmpClient,
     HuaweiOltClient,
     HuaweiOltSnmpClient,
     MikrotikPollService,

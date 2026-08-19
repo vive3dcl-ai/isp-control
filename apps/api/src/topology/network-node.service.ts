@@ -11,10 +11,10 @@ import {
   NodeHeaderPortDto,
   UpdateNetworkNodeDto,
   UpdateNodeHeaderDto,
-} from './dto/network-node.dto';
-import type { NetworkDevice } from './entities/network-device.entity';
-import type { NetworkNode } from './entities/network-node.entity';
-import type { NodeHeader, NodeHeaderPort } from './entities/node-header.entity';
+} from './shared/dto/network-node.dto';
+import type { NetworkDevice } from './shared/entities/network-device.entity';
+import type { NetworkNode } from './shared/entities/network-node.entity';
+import type { NodeHeader, NodeHeaderPort } from './shared/entities/node-header.entity';
 
 export type NodeAssetStatus = 'online' | 'offline' | 'unknown';
 export type NodeHealth = 'ok' | 'degraded' | 'down' | 'unknown';

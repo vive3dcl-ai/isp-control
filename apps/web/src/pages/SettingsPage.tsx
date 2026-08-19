@@ -8,6 +8,7 @@ import { Tr069SettingsTab } from '../components/Tr069SettingsTab'
 import { OnuSettingsTab } from '../components/OnuSettingsTab'
 import { IpPoolsSettingsTab } from '../components/IpPoolsSettingsTab'
 import { VlansSettingsTab } from '../components/VlansSettingsTab'
+import { TvSettingsTab } from '../components/TvSettingsTab'
 import { ServicePlansSettingsTab } from '../components/ServicePlansSettingsTab'
 import { FacturacionSettingsTab } from '../components/FacturacionSettingsTab'
 import { ProductosSettingsTab } from '../components/ProductosSettingsTab'
@@ -25,6 +26,7 @@ type SettingsTab =
   | 'empresa'
   | 'tr069'
   | 'vlans'
+  | 'tv'
   | 'ip_pools'
   | 'onus'
   | 'nodos'
@@ -40,6 +42,7 @@ const BASE_TABS: { id: SettingsTab; label: string }[] = [
   { id: 'empresa', label: 'Empresa' },
   { id: 'tr069', label: 'TR069' },
   { id: 'vlans', label: 'VLANs' },
+  { id: 'tv', label: 'TV' },
   { id: 'ip_pools', label: 'IP Pools' },
   { id: 'onus', label: 'ONUs' },
   { id: 'migracion', label: 'Migración' },
@@ -64,6 +67,7 @@ function parseTab(
     raw === 'productos' ||
     raw === 'tr069' ||
     raw === 'vlans' ||
+    raw === 'tv' ||
     raw === 'ip_pools' ||
     raw === 'onus' ||
     raw === 'migracion' ||
@@ -108,6 +112,7 @@ export function SettingsPage() {
     body = <EmpresaSettingsTab canWrite={canWriteCrmFields} />
   if (tab === 'tr069') body = <Tr069SettingsTab canWrite={canWriteNet} />
   if (tab === 'vlans') body = <VlansSettingsTab canWrite={canWriteNet} />
+  if (tab === 'tv') body = <TvSettingsTab canWrite={canWriteNet} />
   if (tab === 'ip_pools') body = <IpPoolsSettingsTab canWrite={canWriteNet} />
   if (tab === 'onus') body = <OnuSettingsTab canWrite={canWriteNet} />
   if (tab === 'migracion')

@@ -35,6 +35,15 @@ export class PlatformPlansService implements OnModuleInit {
         ADD COLUMN IF NOT EXISTS "user_limit" int NOT NULL DEFAULT 0;
       ALTER TABLE public.platform_system_plans
         ADD COLUMN IF NOT EXISTS "sort_order" int NOT NULL DEFAULT 0;
+      ALTER TABLE public.platform_system_plans
+        ADD COLUMN IF NOT EXISTS "is_free" boolean;
+      UPDATE public.platform_system_plans
+        SET "is_free" = (cycle = 'users_15')
+        WHERE "is_free" IS NULL;
+      ALTER TABLE public.platform_system_plans
+        ALTER COLUMN "is_free" SET DEFAULT false;
+      ALTER TABLE public.platform_system_plans
+        ALTER COLUMN "is_free" SET NOT NULL;
       ALTER TABLE public.tenants
         ADD COLUMN IF NOT EXISTS "extra_user_blocks" int NOT NULL DEFAULT 0;
       CREATE TABLE IF NOT EXISTS public.platform_billing_settings (
@@ -73,6 +82,7 @@ export class PlatformPlansService implements OnModuleInit {
           userLimit: t.userLimit,
           sortOrder: t.sortOrder,
           priceUsd: DEFAULT_USER_PLAN_PRICES[t.code].toFixed(2),
+          isFree: t.code === 'users_15',
           enabled: true,
         }),
       );
@@ -129,6 +139,9 @@ export class PlatformPlansService implements OnModuleInit {
       if (!row) continue;
       row.priceUsd = Number(item.priceUsd).toFixed(2);
       row.enabled = item.enabled;
+      if (item.isFree != null) {
+        row.isFree = !!item.isFree;
+      }
       await this.plans.save(row);
     }
     if (dto.extraBlockPriceUsd != null) {
@@ -152,6 +165,12 @@ export class PlatformPlansService implements OnModuleInit {
     };
   }
 
+  /** Precio cobrable del plan (0 si está marcado gratis). */
+  effectivePriceUsd(plan: PlatformSystemPlan | null | undefined): number {
+    if (!plan) return 0;
+    return plan.isFree ? 0 : Number(plan.priceUsd);
+  }
+
   private serialize(r: PlatformSystemPlan) {
     return {
       id: r.id,
@@ -161,6 +180,7 @@ export class PlatformPlansService implements OnModuleInit {
       months: 1,
       label: r.label,
       priceUsd: Number(r.priceUsd),
+      isFree: !!r.isFree,
       enabled: r.enabled,
       sortOrder: r.sortOrder,
     };

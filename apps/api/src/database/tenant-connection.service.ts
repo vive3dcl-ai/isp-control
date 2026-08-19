@@ -7,24 +7,25 @@ import { ServicePlan } from '../crm/entities/service-plan.entity';
 import { SpeedProfile } from '../crm/entities/speed-profile.entity';
 import { ClientService } from '../crm/entities/client-service.entity';
 import { Zone } from '../crm/entities/zone.entity';
-import { NetworkDevice } from '../topology/entities/network-device.entity';
-import { NetworkPort } from '../topology/entities/network-port.entity';
-import { NetworkLink } from '../topology/entities/network-link.entity';
-import { NetworkNode } from '../topology/entities/network-node.entity';
-import { NodeHeader } from '../topology/entities/node-header.entity';
-import { DeviceMetricSample } from '../topology/entities/device-metric-sample.entity';
-import { VpnTunnel } from '../topology/entities/vpn-tunnel.entity';
-import { VpnTunnelClient } from '../topology/entities/vpn-tunnel-client.entity';
-import { Tr069Profile } from '../topology/entities/tr069-profile.entity';
-import { Tr069ProfileOlt } from '../topology/entities/tr069-profile-olt.entity';
-import { OnuProfile } from '../topology/entities/onu-profile.entity';
-import { OnuType } from '../topology/entities/onu-type.entity';
-import { Onu } from '../topology/entities/onu.entity';
-import { OnuMetricSample } from '../topology/entities/onu-metric-sample.entity';
-import { OnuDenied } from '../topology/entities/onu-denied.entity';
-import { IpPool } from '../topology/entities/ip-pool.entity';
-import { IpPoolAllocation } from '../topology/entities/ip-pool-allocation.entity';
-import { ServiceVlan } from '../topology/entities/service-vlan.entity';
+import { NetworkDevice } from '../topology/shared/entities/network-device.entity';
+import { NetworkPort } from '../topology/shared/entities/network-port.entity';
+import { NetworkLink } from '../topology/shared/entities/network-link.entity';
+import { NetworkNode } from '../topology/shared/entities/network-node.entity';
+import { NodeHeader } from '../topology/shared/entities/node-header.entity';
+import { DeviceMetricSample } from '../topology/shared/entities/device-metric-sample.entity';
+import { VpnTunnel } from '../topology/shared/entities/vpn-tunnel.entity';
+import { VpnTunnelClient } from '../topology/shared/entities/vpn-tunnel-client.entity';
+import { Tr069Profile } from '../topology/shared/entities/tr069-profile.entity';
+import { Tr069ProfileOlt } from '../topology/shared/entities/tr069-profile-olt.entity';
+import { OnuProfile } from '../topology/shared/entities/onu-profile.entity';
+import { OnuType } from '../topology/shared/entities/onu-type.entity';
+import { Onu } from '../topology/shared/entities/onu.entity';
+import { OnuMetricSample } from '../topology/shared/entities/onu-metric-sample.entity';
+import { OnuDenied } from '../topology/shared/entities/onu-denied.entity';
+import { OnuOrphanSighting } from '../topology/shared/entities/onu-orphan-sighting.entity';
+import { IpPool } from '../topology/shared/entities/ip-pool.entity';
+import { IpPoolAllocation } from '../topology/shared/entities/ip-pool-allocation.entity';
+import { ServiceVlan } from '../topology/shared/entities/service-vlan.entity';
 import { BillingSettings } from '../billing/entities/billing-settings.entity';
 import { InvoiceTemplate } from '../billing/entities/invoice-template.entity';
 import { Invoice } from '../billing/entities/invoice.entity';
@@ -33,6 +34,7 @@ import { BillingProduct } from '../billing/entities/billing-product.entity';
 import { ModuleConfig } from '../modules/entities/module-config.entity';
 import { CalendarEvent } from '../calendar/entities/calendar-event.entity';
 import { InventoryItem } from '../inventory/entities/inventory-item.entity';
+import { TvServer } from '../tv/entities/tv-server.entity';
 
 const CRM_DDL = (schema: string) => `
   CREATE TABLE IF NOT EXISTS "${schema}"."clients" (
@@ -386,6 +388,10 @@ const TOPOLOGY_ALTER = (schema: string) => `
     ADD COLUMN IF NOT EXISTS "olt_inventory_cache" jsonb NULL;
   ALTER TABLE "${schema}"."network_devices"
     ADD COLUMN IF NOT EXISTS "onus_import_prompted_at" TIMESTAMPTZ NULL;
+  ALTER TABLE "${schema}"."network_devices"
+    ADD COLUMN IF NOT EXISTS "internet_egress_port_name" varchar(80) NULL;
+  ALTER TABLE "${schema}"."network_devices"
+    ADD COLUMN IF NOT EXISTS "internet_egress_vlan_id" int NULL;
 
   CREATE TABLE IF NOT EXISTS "${schema}"."device_metric_samples" (
     "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -395,8 +401,20 @@ const TOPOLOGY_ALTER = (schema: string) => `
     "memory_used_pct" double precision NULL,
     "temperature" double precision NULL,
     "uptime_seconds" bigint NULL,
+    "rx_bytes" bigint NULL,
+    "tx_bytes" bigint NULL,
+    "rx_bps" double precision NULL,
+    "tx_bps" double precision NULL,
     "created_at" TIMESTAMPTZ NOT NULL DEFAULT now()
   );
+  ALTER TABLE "${schema}"."device_metric_samples"
+    ADD COLUMN IF NOT EXISTS "rx_bytes" bigint NULL;
+  ALTER TABLE "${schema}"."device_metric_samples"
+    ADD COLUMN IF NOT EXISTS "tx_bytes" bigint NULL;
+  ALTER TABLE "${schema}"."device_metric_samples"
+    ADD COLUMN IF NOT EXISTS "rx_bps" double precision NULL;
+  ALTER TABLE "${schema}"."device_metric_samples"
+    ADD COLUMN IF NOT EXISTS "tx_bps" double precision NULL;
   CREATE INDEX IF NOT EXISTS "idx_device_metric_samples_device_time"
     ON "${schema}"."device_metric_samples" ("device_id", "sampled_at");
 
@@ -607,6 +625,7 @@ const TOPOLOGY_ALTER = (schema: string) => `
     "port" varchar(20) NULL,
     "pon_type" varchar(20) NULL,
     "note" text NULL,
+    "manual" boolean NOT NULL DEFAULT true,
     "denied_at" TIMESTAMPTZ NOT NULL DEFAULT now(),
     "created_at" TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT "uq_onu_denied_sn" UNIQUE ("sn")
@@ -816,6 +835,18 @@ const TOPOLOGY_ALTER = (schema: string) => `
   CREATE INDEX IF NOT EXISTS "idx_service_vlans_purpose"
     ON "${schema}"."service_vlans" ("purpose");
 
+  -- v50: modo IGMP MVLAN por VLAN TV (snooping|spr|proxy|router)
+  ALTER TABLE "${schema}"."service_vlans"
+    ADD COLUMN IF NOT EXISTS "igmp_work_mode" varchar(20) NULL;
+
+  -- v51: host-ip IGMP proxy (solo modo proxy)
+  ALTER TABLE "${schema}"."service_vlans"
+    ADD COLUMN IF NOT EXISTS "igmp_host_ip" varchar(45) NULL;
+
+  -- v52: source-port IGMP por OLT (mapa oltId → ifNames[])
+  ALTER TABLE "${schema}"."service_vlans"
+    ADD COLUMN IF NOT EXISTS "igmp_source_ports" jsonb NOT NULL DEFAULT '{}';
+
   -- v49: inventario ONU/deco + TV en planes / snapshot en servicios
   CREATE TABLE IF NOT EXISTS "${schema}"."inventory_items" (
     "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -881,10 +912,69 @@ const TOPOLOGY_ALTER = (schema: string) => `
   ) AS sub
   WHERE c."id" = sub."client_id"
     AND c."migrated_at" IS NULL;
+
+  -- v51: bloqueo de huérfanas hecho por el operador (no lo borran las limpiezas)
+  ALTER TABLE "${schema}"."onu_denied"
+    ADD COLUMN IF NOT EXISTS "manual" boolean NOT NULL DEFAULT true;
+
+  -- v52: avistamientos de huérfanas (modelo ACS + fecha primera conexión)
+  CREATE TABLE IF NOT EXISTS "${schema}"."onu_orphan_sightings" (
+    "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    "sn" varchar(40) NOT NULL,
+    "olt_id" uuid NULL,
+    "olt_if" varchar(80) NULL,
+    "olt_name" varchar(120) NULL,
+    "board" varchar(20) NULL,
+    "port" varchar(20) NULL,
+    "pon_type" varchar(20) NULL,
+    "model" varchar(80) NULL,
+    "model_source" varchar(20) NULL,
+    "driver_id" varchar(64) NULL,
+    "first_seen_at" TIMESTAMPTZ NOT NULL DEFAULT now(),
+    "last_seen_at" TIMESTAMPTZ NOT NULL DEFAULT now(),
+    "created_at" TIMESTAMPTZ NOT NULL DEFAULT now(),
+    "updated_at" TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT "uq_onu_orphan_sightings_sn" UNIQUE ("sn")
+  );
+  CREATE INDEX IF NOT EXISTS "idx_onu_orphan_sightings_first_seen"
+    ON "${schema}"."onu_orphan_sightings" ("first_seen_at" DESC);
+
+  -- v53: bindings eth OMCI → VLAN (IPTV) para listar ONUs por VLAN TV
+  ALTER TABLE "${schema}"."onus"
+    ADD COLUMN IF NOT EXISTS "eth_omci_vlans" jsonb NOT NULL DEFAULT '{}';
+
+  -- v54: servidores TV (agente Go) ligados a activo topología tipo server
+  CREATE TABLE IF NOT EXISTS "${schema}"."tv_servers" (
+    "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    "device_id" uuid NOT NULL,
+    "name" varchar(120) NOT NULL,
+    "ssh_host" varchar(255) NOT NULL,
+    "ssh_port" int NOT NULL DEFAULT 22,
+    "ssh_username" varchar(120) NOT NULL,
+    "ssh_password" text NULL,
+    "api_base_url" varchar(512) NULL,
+    "api_token" text NULL,
+    "api_listen" varchar(64) NOT NULL DEFAULT ':8099',
+    "agent_version" varchar(40) NULL,
+    "status" varchar(20) NOT NULL DEFAULT 'pending',
+    "last_error" text NULL,
+    "created_at" TIMESTAMPTZ NOT NULL DEFAULT now(),
+    "updated_at" TIMESTAMPTZ NOT NULL DEFAULT now()
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS "uq_tv_servers_device_id"
+    ON "${schema}"."tv_servers" ("device_id");
+  CREATE INDEX IF NOT EXISTS "idx_tv_servers_status"
+    ON "${schema}"."tv_servers" ("status");
+
+  -- v55: segmento multicast para salidas de canales (IP incremental, mismo puerto)
+  ALTER TABLE "${schema}"."tv_servers"
+    ADD COLUMN IF NOT EXISTS "multicast_cidr" varchar(64) NULL;
+  ALTER TABLE "${schema}"."tv_servers"
+    ADD COLUMN IF NOT EXISTS "multicast_port" int NOT NULL DEFAULT 5000;
 `;
 
 /** Bump when tenant DDL adds new tables/columns so existing processes re-apply. */
-const TENANT_SCHEMA_VERSION = 50;
+const TENANT_SCHEMA_VERSION = 55;
 
 @Injectable()
 export class TenantConnectionService implements OnModuleDestroy {
@@ -940,6 +1030,7 @@ export class TenantConnectionService implements OnModuleDestroy {
         Onu,
         OnuMetricSample,
         OnuDenied,
+        OnuOrphanSighting,
         IpPool,
         IpPoolAllocation,
         ServiceVlan,
@@ -951,6 +1042,7 @@ export class TenantConnectionService implements OnModuleDestroy {
         ModuleConfig,
         CalendarEvent,
         InventoryItem,
+        TvServer,
       ],
       synchronize: false,
     });
@@ -1117,6 +1209,14 @@ export class TenantConnectionService implements OnModuleDestroy {
     return ds.getRepository(OnuDenied);
   }
 
+  async getOnuOrphanSightingRepository(
+    schemaName: string,
+  ): Promise<Repository<OnuOrphanSighting>> {
+    await this.ensureTenantSchema(schemaName);
+    const ds = await this.getDataSource(schemaName);
+    return ds.getRepository(OnuOrphanSighting);
+  }
+
   async getIpPoolRepository(schemaName: string): Promise<Repository<IpPool>> {
     await this.ensureTenantSchema(schemaName);
     const ds = await this.getDataSource(schemaName);
@@ -1191,6 +1291,14 @@ export class TenantConnectionService implements OnModuleDestroy {
     await this.ensureTenantSchema(schemaName);
     const ds = await this.getDataSource(schemaName);
     return ds.getRepository(InventoryItem);
+  }
+
+  async getTvServerRepository(
+    schemaName: string,
+  ): Promise<Repository<TvServer>> {
+    await this.ensureTenantSchema(schemaName);
+    const ds = await this.getDataSource(schemaName);
+    return ds.getRepository(TvServer);
   }
 
   async getCalendarEventRepository(

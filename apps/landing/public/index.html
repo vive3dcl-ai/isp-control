@@ -5,11 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       name="description"
-      content="ISP Control — opera CRM, topología OLT/ONU, mapa de red, facturación y campo en un solo panel multi-tenant."
+      content="ISP Control — el panel para vender, instalar, operar y cobrar tu red de fibra. CRM, OLT, mapa, facturación y campo."
     />
     <meta name="theme-color" content="#070d18" />
     <title>ISP Control</title>
-    <link rel="icon" href="/branding/isp-control-logo.png" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -22,33 +25,8 @@
   </head>
   <body>
     <div class="atmosphere" aria-hidden="true">
-      <svg class="mesh" viewBox="0 0 1440 900" preserveAspectRatio="xMidYMid slice">
-        <defs>
-          <linearGradient id="fiber" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stop-color="#2f9cff" stop-opacity="0.5" />
-            <stop offset="55%" stop-color="#38bdf8" stop-opacity="0.2" />
-            <stop offset="100%" stop-color="#0ea5e9" stop-opacity="0.06" />
-          </linearGradient>
-        </defs>
-        <path
-          class="path-a"
-          d="M-40 620 C 220 480, 380 740, 620 520 S 980 280, 1180 420 S 1480 640, 1520 520"
-          fill="none"
-          stroke="url(#fiber)"
-          stroke-width="1.6"
-        />
-        <path
-          class="path-b"
-          d="M-20 210 C 260 360, 420 120, 680 260 S 1020 520, 1280 340 S 1500 180, 1560 260"
-          fill="none"
-          stroke="url(#fiber)"
-          stroke-width="1.2"
-        />
-        <circle class="node n1" cx="620" cy="520" r="4" />
-        <circle class="node n2" cx="980" cy="280" r="3.5" />
-        <circle class="node n3" cx="680" cy="260" r="3.5" />
-        <circle class="node n4" cx="1280" cy="340" r="4" />
-      </svg>
+      <div class="atmosphere-grid"></div>
+      <div class="atmosphere-fade"></div>
     </div>
 
     <header class="top">
@@ -62,7 +40,6 @@
       </a>
       <nav class="nav">
         <a href="#producto">Producto</a>
-        <a href="#mapa">Mapa</a>
         <a href="#planes">Planes</a>
         <a class="nav-ghost" id="nav-login" href="#">Entrar</a>
         <a class="nav-cta" id="nav-register" href="#planes">Registrarse</a>
@@ -79,220 +56,544 @@
             width="320"
             height="81"
           />
-          <h1>Opera tu ISP<br />de punta a punta</h1>
+          <h1>Vende, instala<br />y cobra más rápido</h1>
           <p class="lede">
-            CRM, OLT/ONU, mapa de red, facturación y técnicos en campo —
-            un solo panel multi-tenant.
+            El software que tu ISP necesita para crecer: clientes, red, cobros y
+            técnicos — sin hojas de cálculo ni herramientas sueltas.
           </p>
           <div class="cta-row">
             <a class="btn primary" id="cta-register" href="#planes"
-              >Ver planes</a
+              >Empezar ahora</a
             >
-            <a class="btn ghost" id="cta-login" href="#">Iniciar sesión</a>
+            <a class="btn ghost" id="cta-login" href="#">Ya tengo cuenta</a>
           </div>
         </div>
-        <figure class="hero-visual" aria-hidden="true">
-          <svg
-            class="map-art"
-            viewBox="0 0 640 420"
-            role="img"
-            aria-label="Ilustración del mapa de red"
-          >
-            <defs>
-              <linearGradient id="mapGlow" x1="0" y1="0" x2="1" y2="1">
-                <stop offset="0%" stop-color="#2f9cff" stop-opacity="0.35" />
-                <stop offset="100%" stop-color="#0ea5e9" stop-opacity="0.05" />
-              </linearGradient>
-              <filter id="soft">
-                <feGaussianBlur stdDeviation="8" />
-              </filter>
-            </defs>
-            <rect
-              x="24"
-              y="24"
-              width="592"
-              height="372"
-              rx="28"
-              fill="#0a1424"
-              stroke="#243047"
-            />
-            <ellipse
-              cx="320"
-              cy="210"
-              rx="210"
-              ry="120"
-              fill="url(#mapGlow)"
-              filter="url(#soft)"
-              opacity="0.55"
-            />
-            <!-- cables -->
-            <path
-              class="cable c1"
-              d="M110 300 C 180 220, 240 250, 300 180 S 420 90, 520 140"
-              fill="none"
-              stroke="#2f9cff"
-              stroke-width="2.2"
-              stroke-linecap="round"
-            />
-            <path
-              class="cable c2"
-              d="M140 120 C 220 160, 260 240, 340 260 S 460 300, 540 250"
-              fill="none"
-              stroke="#67e8f9"
-              stroke-width="1.6"
-              stroke-linecap="round"
-              opacity="0.7"
-            />
-            <path
-              class="cable c3"
-              d="M90 200 C 170 190, 210 140, 280 150 S 390 210, 470 190"
-              fill="none"
-              stroke="#38bdf8"
-              stroke-width="1.4"
-              stroke-linecap="round"
-              opacity="0.55"
-            />
-            <!-- OLT -->
-            <g class="pin p-olt" transform="translate(300 170)">
-              <rect x="-22" y="-14" width="44" height="28" rx="6" fill="#123152" stroke="#2f9cff" />
-              <text x="0" y="5" text-anchor="middle" fill="#e8eef6" font-size="10" font-family="Sora,sans-serif">OLT</text>
-            </g>
-            <!-- NAP -->
-            <g class="pin p-nap" transform="translate(520 140)">
-              <circle r="16" fill="#0f2744" stroke="#67e8f9" />
-              <text y="4" text-anchor="middle" fill="#e8eef6" font-size="9" font-family="Sora,sans-serif">NAP</text>
-            </g>
-            <g class="pin p-nap2" transform="translate(140 120)">
-              <circle r="14" fill="#0f2744" stroke="#38bdf8" />
-              <text y="4" text-anchor="middle" fill="#e8eef6" font-size="8" font-family="Sora,sans-serif">NAP</text>
-            </g>
-            <!-- poste / mufa -->
-            <g class="pin p-post" transform="translate(110 300)">
-              <rect x="-5" y="-18" width="10" height="36" rx="2" fill="#1e3a5f" />
-              <circle cy="-22" r="7" fill="#2f9cff" />
-            </g>
-            <g class="pin p-mufa" transform="translate(540 250)">
-              <rect x="-18" y="-10" width="36" height="20" rx="4" fill="#123152" stroke="#94a3b8" />
-              <text y="4" text-anchor="middle" fill="#cbd5e1" font-size="8" font-family="Sora,sans-serif">MUFA</text>
-            </g>
-            <g class="pin p-onu" transform="translate(340 260)">
-              <circle r="11" fill="#082032" stroke="#22d3ee" />
-              <text y="3.5" text-anchor="middle" fill="#e0f2fe" font-size="7" font-family="Sora,sans-serif">ONU</text>
-            </g>
-            <text
-              x="48"
-              y="56"
-              fill="#8b9cb3"
-              font-size="11"
-              font-family="Sora,sans-serif"
-              letter-spacing="0.12em"
-            >
-              MAPA DE RED
-            </text>
-          </svg>
+        <figure class="hero-visual" aria-label="Vista del panel operativo">
+          <div class="panel-chrome">
+            <div class="panel-bar">
+              <span class="dot"></span><span class="dot"></span
+              ><span class="dot"></span>
+                  <span class="panel-bar-label">Tu ISP hoy</span>
+            </div>
+            <div class="panel-body">
+              <div class="stat-row">
+                <div class="stat">
+                  <span class="stat-k">Clientes activos</span>
+                  <strong class="stat-v count-up" data-to="204">0</strong>
+                </div>
+                <div class="stat">
+                  <span class="stat-k">Instalaciones</span>
+                  <strong class="stat-v count-up" data-to="11">0</strong>
+                </div>
+                <div class="stat">
+                  <span class="stat-k">Cobradas hoy</span>
+                  <strong class="stat-v count-up" data-to="38">0</strong>
+                </div>
+              </div>
+              <ul class="feed">
+                <li class="feed-item">
+                  <span class="feed-tag ok">Venta</span> Nuevo cliente · Plan 100
+                  Mbps
+                </li>
+                <li class="feed-item">
+                  <span class="feed-tag warn">Campo</span> Instalación lista ·
+                  Zona Norte
+                </li>
+                <li class="feed-item">
+                  <span class="feed-tag info">Cobro</span> Pago recibido · $42
+                </li>
+              </ul>
+              <div class="pulse-line" aria-hidden="true"></div>
+            </div>
+          </div>
         </figure>
       </section>
 
-      <section class="band" id="producto">
-        <h2>Todo el ciclo del servicio</h2>
+      <section class="band reveal" id="producto">
+        <h2>Todo lo que tu ISP necesita</h2>
         <p class="section-lede">
-          Desde el lead hasta la ONU autorizada, el IPTV bridged y la factura
-          cobrada.
+          Un solo producto para vender, desplegar fibra, atender y cobrar.
+          Mira cada módulo:
         </p>
-        <ul class="capabilities">
-          <li>
-            <strong>CRM y clientes</strong>
-            <span>Leads, servicios, zonas e instalaciones guiadas.</span>
-          </li>
-          <li>
-            <strong>Red y OLT</strong>
-            <span
-              >Topología ZTE, Titan y Huawei · ONUs, VLANs, TR-069 e IPTV.</span
+
+        <div class="feature-shell">
+          <div
+            class="feature-tabs"
+            role="tablist"
+            aria-label="Funciones del producto"
+            id="feature-tabs"
+          >
+            <button
+              type="button"
+              class="feature-tab is-active"
+              role="tab"
+              id="tab-crm"
+              aria-selected="true"
+              aria-controls="panel-crm"
+              data-tab="crm"
             >
-          </li>
-          <li>
-            <strong>Mapa de red</strong>
-            <span>NAP, mufas, postes, cables y capas para oficina y campo.</span>
-          </li>
-          <li>
-            <strong>Facturación</strong>
-            <span>Facturas, portal de clientes y cobros en línea.</span>
-          </li>
-          <li>
-            <strong>Calendario y soporte</strong>
-            <span>Agendas, tickets y notificaciones al equipo.</span>
-          </li>
-          <li>
-            <strong>Móvil en campo</strong>
-            <span>Instalar, NAP cercanas y postes con GPS.</span>
-          </li>
-        </ul>
-      </section>
-
-      <section class="ops" id="mapa">
-        <h2>Mapa pensado para fibra</h2>
-        <p class="section-lede">
-          Visualiza la planta externa y la topología en el mismo sistema que
-          autoriza la ONU.
-        </p>
-        <div class="ops-split">
-          <div>
-            <p class="ops-kicker">Escritorio</p>
-            <p>
-              Capas de red, NAP/mufas, cableado y topología OLT ↔ ONU con
-              control total.
-            </p>
+              CRM
+            </button>
+            <button
+              type="button"
+              class="feature-tab"
+              role="tab"
+              id="tab-olt"
+              aria-selected="false"
+              aria-controls="panel-olt"
+              data-tab="olt"
+              tabindex="-1"
+            >
+              Topología OLT
+            </button>
+            <button
+              type="button"
+              class="feature-tab"
+              role="tab"
+              id="tab-mapa"
+              aria-selected="false"
+              aria-controls="panel-mapa"
+              data-tab="mapa"
+              tabindex="-1"
+            >
+              Mapa de red
+            </button>
+            <button
+              type="button"
+              class="feature-tab"
+              role="tab"
+              id="tab-billing"
+              aria-selected="false"
+              aria-controls="panel-billing"
+              data-tab="billing"
+              tabindex="-1"
+            >
+              Facturación
+            </button>
+            <button
+              type="button"
+              class="feature-tab"
+              role="tab"
+              id="tab-support"
+              aria-selected="false"
+              aria-controls="panel-support"
+              data-tab="support"
+              tabindex="-1"
+            >
+              Soporte
+            </button>
+            <button
+              type="button"
+              class="feature-tab"
+              role="tab"
+              id="tab-campo"
+              aria-selected="false"
+              aria-controls="panel-campo"
+              data-tab="campo"
+              tabindex="-1"
+            >
+              Campo
+            </button>
+            <span class="feature-tab-ink" id="feature-tab-ink" aria-hidden="true"></span>
           </div>
-          <div>
-            <p class="ops-kicker">Campo</p>
-            <p>
-              El técnico ve lo cercano, completa la instalación y deja el mapa
-              al día.
-            </p>
+
+          <div class="feature-panels">
+            <article
+              class="feature-panel is-active"
+              role="tabpanel"
+              id="panel-crm"
+              aria-labelledby="tab-crm"
+              data-panel="crm"
+            >
+              <div class="feature-copy">
+                <h3>CRM que cierra ventas</h3>
+                <p>
+                  Captura leads, agenda instalaciones y convierte prospectos en
+                  abonados con servicios y zonas listos. Menos fricción, más
+                  altas al mes.
+                </p>
+                <ul class="feature-bullets">
+                  <li>Pipeline comercial claro</li>
+                  <li>Instalaciones guiadas</li>
+                  <li>Cliente y servicio en un lugar</li>
+                </ul>
+              </div>
+              <div class="feature-preview preview-crm" aria-hidden="true">
+                <div class="crm-row">
+                  <div>
+                    <strong>María López</strong>
+                    <span>Lead · Zona Norte</span>
+                  </div>
+                  <em class="st lead">Nuevo</em>
+                </div>
+                <div class="crm-row is-hl">
+                  <div>
+                    <strong>Carlos Ruiz</strong>
+                    <span>Instalación hoy · 100 Mbps</span>
+                  </div>
+                  <em class="st install">Agendada</em>
+                </div>
+                <div class="crm-row">
+                  <div>
+                    <strong>Ana Torres</strong>
+                    <span>Servicio activo · Pagado</span>
+                  </div>
+                  <em class="st ok">Activo</em>
+                </div>
+                <div class="crm-row">
+                  <div>
+                    <strong>Jorge Méndez</strong>
+                    <span>Renovación · Plan 200</span>
+                  </div>
+                  <em class="st warn">Seguimiento</em>
+                </div>
+              </div>
+            </article>
+
+            <article
+              class="feature-panel"
+              role="tabpanel"
+              id="panel-olt"
+              aria-labelledby="tab-olt"
+              data-panel="olt"
+            >
+              <div class="feature-copy">
+                <h3>OLT bajo control</h3>
+                <p>
+                  Autoriza ONUs, configura VLANs, TR-069 e IPTV en ZTE, Titan y
+                  Huawei sin entrar a la CLI a ciegas. Menos errores, altas más
+                  rápidas.
+                </p>
+                <ul class="feature-bullets">
+                  <li>Multi-vendor en un panel</li>
+                  <li>Provisionado confiable</li>
+                  <li>Menos tiempo en soporte L2</li>
+                </ul>
+              </div>
+              <div class="feature-preview preview-olt" aria-hidden="true">
+                <div class="olt-node">OLT</div>
+                <div class="olt-links">
+                  <span></span><span></span><span></span>
+                </div>
+                <div class="olt-leafs">
+                  <span>ONU</span><span>ONU</span><span>ONU</span>
+                </div>
+              </div>
+            </article>
+
+            <article
+              class="feature-panel"
+              role="tabpanel"
+              id="panel-mapa"
+              aria-labelledby="tab-mapa"
+              data-panel="mapa"
+            >
+              <div class="feature-copy">
+                <h3>Mapa de red que ordena tu planta</h3>
+                <p>
+                  Visualiza clientes, ONUs, nodos, NAP, mufas, postes, cables y
+                  drops. Tu equipo deja de “adivinar” la fibra: diseña, audita y
+                  opera sobre el mapa real.
+                </p>
+                <ul class="feature-bullets">
+                  <li>Planta externa visible</li>
+                  <li>Capas para oficina y campo</li>
+                  <li>Menos visitas en falso</li>
+                </ul>
+              </div>
+              <div class="feature-preview preview-mapa">
+                <div class="map-chrome">
+                  <div class="map-toolbar" aria-hidden="true">
+                    <span class="map-layer is-crm is-on">Clientes</span>
+                    <span class="map-layer is-crm is-on">ONUs</span>
+                    <span class="map-layer is-crm is-on">Nodos</span>
+                    <span class="map-sep"></span>
+                    <span class="map-layer is-on">NAP</span>
+                    <span class="map-layer is-on">Poste</span>
+                    <span class="map-layer is-on">Mufa</span>
+                    <span class="map-layer is-on">Cable</span>
+                    <span class="map-layer is-on">Drop</span>
+                    <span class="map-layer is-on">Zona</span>
+                  </div>
+                  <svg
+                    class="map-art"
+                    viewBox="0 0 640 320"
+                    role="img"
+                    aria-hidden="true"
+                  >
+                    <defs>
+                      <pattern
+                        id="streets"
+                        width="48"
+                        height="48"
+                        patternUnits="userSpaceOnUse"
+                      >
+                        <path
+                          d="M0 24 H48 M24 0 V48"
+                          fill="none"
+                          stroke="#1a2436"
+                          stroke-width="1"
+                        />
+                      </pattern>
+                    </defs>
+                    <rect width="640" height="320" fill="#0c121c" />
+                    <rect
+                      width="640"
+                      height="320"
+                      fill="url(#streets)"
+                      opacity="0.5"
+                    />
+                    <path
+                      class="map-anim zone"
+                      d="M78 72 L210 52 L268 98 L252 170 L140 188 L70 130 Z"
+                      fill="#3b82f6"
+                      fill-opacity="0.14"
+                      stroke="#3b82f6"
+                      stroke-width="1.4"
+                      stroke-opacity="0.55"
+                    />
+                    <g fill="none" stroke="#222d3f" stroke-width="8">
+                      <path d="M0 110 H640" />
+                      <path d="M0 210 H640" />
+                      <path d="M280 0 V320" />
+                      <path d="M440 0 V320" />
+                    </g>
+                    <path
+                      class="map-anim fiber"
+                      d="M118 140 L168 140 L168 110 L280 110 L280 170 L360 170 L360 140 L440 140 L440 90 L520 90"
+                      fill="none"
+                      stroke="#0f172a"
+                      stroke-width="3"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    />
+                    <path
+                      class="map-anim fiber"
+                      d="M280 170 L280 210 L340 210 L340 260"
+                      fill="none"
+                      stroke="#0f172a"
+                      stroke-width="2.4"
+                      stroke-linecap="round"
+                    />
+                    <path
+                      class="map-anim drop"
+                      d="M200 100 L236 140 M520 90 L556 120 M340 260 L372 290 M500 260 L548 290"
+                      fill="none"
+                      stroke="#94a3b8"
+                      stroke-width="1.6"
+                      stroke-linecap="round"
+                    />
+                    <g class="map-anim node" transform="translate(118 140)">
+                      <circle r="12" fill="#22c55e" opacity="0.22" />
+                      <circle
+                        r="6"
+                        fill="#22c55e"
+                        stroke="#14532d"
+                        stroke-width="1.2"
+                      />
+                    </g>
+                    <g
+                      class="map-anim pole"
+                      stroke="#65a30d"
+                      stroke-width="2"
+                      fill="none"
+                    >
+                      <path d="M168 100 v20 M161 105 h14" />
+                      <path d="M280 100 v20 M273 105 h14" />
+                      <path d="M440 130 v20 M433 135 h14" />
+                    </g>
+                    <g class="map-anim mufa" transform="translate(280 170)">
+                      <path
+                        d="M-7 -3c0-4 2.8-7 7-7s7 3 7 7v8H-7V-3z"
+                        fill="#1e293b"
+                        stroke="#334155"
+                      />
+                    </g>
+                    <g class="map-anim nap" fill="#1e293b" stroke="#7c3aed">
+                      <rect
+                        x="177"
+                        y="88"
+                        width="20"
+                        height="18"
+                        rx="2"
+                        stroke-width="1.4"
+                      />
+                      <rect
+                        x="498"
+                        y="78"
+                        width="20"
+                        height="18"
+                        rx="2"
+                        stroke-width="1.4"
+                      />
+                      <rect
+                        x="318"
+                        y="248"
+                        width="20"
+                        height="18"
+                        rx="2"
+                        stroke-width="1.4"
+                      />
+                    </g>
+                    <g class="map-anim pin" fill="#2563eb">
+                      <circle cx="236" cy="132" r="5" />
+                      <circle cx="372" cy="282" r="5" />
+                      <circle cx="556" cy="112" r="5" />
+                    </g>
+                    <g class="map-anim pin onu" fill="#d97706">
+                      <circle cx="548" cy="282" r="5" />
+                      <circle cx="200" cy="180" r="5" />
+                    </g>
+                  </svg>
+                </div>
+              </div>
+            </article>
+
+            <article
+              class="feature-panel"
+              role="tabpanel"
+              id="panel-billing"
+              aria-labelledby="tab-billing"
+              data-panel="billing"
+            >
+              <div class="feature-copy">
+                <h3>Facturación que cobra sola</h3>
+                <p>
+                  Emite, recuerda y cobra: portal del cliente y pagos en línea
+                  para reducir la morosidad y recuperar horas de tu equipo
+                  administrativo.
+                </p>
+                <ul class="feature-bullets">
+                  <li>Facturas al día</li>
+                  <li>Portal de autoservicio</li>
+                  <li>Menos cartera vencida</li>
+                </ul>
+              </div>
+              <div class="feature-preview preview-billing" aria-hidden="true">
+                <div class="bill-card">
+                  <span>Factura #4821</span>
+                  <strong>$42</strong>
+                  <em class="paid">Pagada</em>
+                </div>
+                <div class="bill-card dim">
+                  <span>Factura #4822</span>
+                  <strong>$42</strong>
+                  <em>Pendiente</em>
+                </div>
+              </div>
+            </article>
+
+            <article
+              class="feature-panel"
+              role="tabpanel"
+              id="panel-support"
+              aria-labelledby="tab-support"
+              data-panel="support"
+            >
+              <div class="feature-copy">
+                <h3>Soporte que responde a tiempo</h3>
+                <p>
+                  Tickets, agenda y alertas con el contexto del cliente y la
+                  red. Tu mesa de ayuda deja de saltar entre sistemas.
+                </p>
+                <ul class="feature-bullets">
+                  <li>Cola de tickets clara</li>
+                  <li>Agenda del técnico</li>
+                  <li>Menos tiempo por incidencia</li>
+                </ul>
+              </div>
+              <div class="feature-preview preview-support" aria-hidden="true">
+                <div class="ticket">
+                  <span class="prio">Alta</span> Sin internet · ONU offline
+                </div>
+                <div class="ticket">
+                  <span class="prio mid">Media</span> Cambio de plan
+                </div>
+                <div class="ticket">
+                  <span class="prio low">Baja</span> Consulta de factura
+                </div>
+              </div>
+            </article>
+
+            <article
+              class="feature-panel"
+              role="tabpanel"
+              id="panel-campo"
+              aria-labelledby="tab-campo"
+              data-panel="campo"
+            >
+              <div class="feature-copy">
+                <h3>Campo productivo desde el móvil</h3>
+                <p>
+                  El técnico instala, ubica NAP cercanas y marca postes con GPS.
+                  Cada visita deja la red documentada — y a tu cliente
+                  conectado.
+                </p>
+                <ul class="feature-bullets">
+                  <li>App lista para la calle</li>
+                  <li>GPS en planta</li>
+                  <li>Más instalaciones por día</li>
+                </ul>
+              </div>
+              <div class="feature-preview preview-campo" aria-hidden="true">
+                <div class="phone">
+                  <div class="phone-screen">
+                    <span class="gps-dot"></span>
+                    <span class="phone-line"></span>
+                    <span class="phone-line short"></span>
+                  </div>
+                </div>
+              </div>
+            </article>
           </div>
         </div>
       </section>
 
-      <section class="pricing" id="planes">
-        <h2>Planes por cupo de ONUs</h2>
+      <section class="pricing reveal" id="planes">
+        <h2>Planes claros. Creces sin sorpresas.</h2>
         <p class="section-lede">
-          Facturación mensual. El precio se actualiza desde el panel. Si creces,
-          sumas bloques extra sin cambiar de plan base.
+          Empieza gratis con 15 ONUs. Cuando crezcas, elige el cupo que encaje
+          con tu red — sin renegociar de cero.
         </p>
-
-        <div class="block-callout" id="block-explain">
-          <p class="ops-kicker">Bloques extra</p>
-          <p id="block-copy">
-            Cada bloque suma más ONUs al cupo. El valor del bloque se define en
-            el panel.
-          </p>
-        </div>
 
         <div id="plans-status" class="plans-status" hidden></div>
         <ul class="plans" id="plans-list" aria-live="polite">
-          <li class="plan skeleton"><span></span><span></span></li>
-          <li class="plan skeleton"><span></span><span></span></li>
-          <li class="plan skeleton"><span></span><span></span></li>
+          <li class="plan skeleton"><span></span><span></span><span></span></li>
+          <li class="plan skeleton"><span></span><span></span><span></span></li>
+          <li class="plan skeleton"><span></span><span></span><span></span></li>
+          <li class="plan skeleton"><span></span><span></span><span></span></li>
+          <li class="plan skeleton"><span></span><span></span><span></span></li>
         </ul>
 
+        <div class="block-explain" id="block-explain">
+          <p class="ops-kicker">Plan a tu medida</p>
+          <h3 class="block-title">Solo pagas los usuarios que necesitas</h3>
+          <p id="block-copy">
+            Cuando superes el cupo de tu plan, compra bloques de 50 ONUs. Así
+            creces por zona o urbanismo sin contratar un plan más grande de lo
+            que usas — y no gastas de más.
+          </p>
+          <p class="block-meta" id="block-meta" hidden></p>
+        </div>
+
         <div class="cta-row pricing-cta">
-          <a class="btn primary" id="cta-start" href="#">Crear cuenta / Entrar</a>
+          <a class="btn primary" id="cta-start" href="#planes">Empezar gratis</a>
           <a class="btn ghost" id="cta-contact" href="mailto:hola@ispcontrol.ai"
-            >Hablar con nosotros</a
+            >Hablar con ventas</a
           >
         </div>
       </section>
 
-      <section class="close">
-        <h2>Listo para operar</h2>
+      <section class="close reveal">
+        <h2>Tu ISP merece un panel a la altura</h2>
         <p class="section-lede">
-          El panel vive en
-          <span id="panel-host">panel.ispcontrol.ai</span>. Esta página es tu
-          puerta de entrada.
+          Entra a
+          <span id="panel-host">panel.ispcontrol.ai</span>
+          y empieza a operar con CRM, red, cobros y campo juntos.
         </p>
         <div class="cta-row">
-          <a class="btn primary" id="cta-bottom-login" href="#">Iniciar sesión</a>
-          <a class="btn ghost" href="#planes">Elegir plan</a>
+          <a class="btn primary" id="cta-bottom-login" href="#">Entrar al panel</a>
+          <a class="btn ghost" href="#planes">Ver precios</a>
         </div>
       </section>
     </main>

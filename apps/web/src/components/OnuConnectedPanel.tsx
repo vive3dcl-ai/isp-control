@@ -96,7 +96,14 @@ function SignalCell({ dbm }: { dbm: number | null }) {
   return <span className={color}>{formatSignal(dbm)}</span>
 }
 
-export function OnuConnectedPanel({ canWrite }: { canWrite: boolean }) {
+export function OnuConnectedPanel({
+  canWrite,
+  initialOnuType = '',
+}: {
+  canWrite: boolean
+  /** Prefill «Tipo ONU» (p. ej. al clickear un modelo en Tipos). */
+  initialOnuType?: string
+}) {
   const queryClient = useQueryClient()
   const [searchParams] = useSearchParams()
   const qFromUrl = searchParams.get('q')?.trim() ?? ''
@@ -104,7 +111,7 @@ export function OnuConnectedPanel({ canWrite }: { canWrite: boolean }) {
   const [oltId, setOltId] = useState('')
   const [board, setBoard] = useState('')
   const [port, setPort] = useState('')
-  const [onuType, setOnuType] = useState('')
+  const [onuType, setOnuType] = useState(initialOnuType)
   const [ponType, setPonType] = useState('')
   const [statusFilter, setStatusFilter] = useState<
     '' | 'online' | 'offline' | 'los'
@@ -125,6 +132,12 @@ export function OnuConnectedPanel({ canWrite }: { canWrite: boolean }) {
     setSearch(qFromUrl)
     setPage(0)
   }, [qFromUrl])
+
+  useEffect(() => {
+    if (!initialOnuType) return
+    setOnuType(initialOnuType)
+    setPage(0)
+  }, [initialOnuType])
 
   const listQuery = useQuery({
     queryKey: ['app', 'onus', 'connected'],

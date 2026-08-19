@@ -77,7 +77,11 @@ export class PlatformSubscriptionService {
       0,
     );
 
-    const planMonthly = currentPlan ? Number(currentPlan.priceUsd) : 0;
+    const planMonthly = currentPlan
+      ? currentPlan.isFree
+        ? 0
+        : Number(currentPlan.priceUsd)
+      : 0;
     const blocksMonthly = extraBlocks * blockPrice;
     const baseMonthly = currentPlan
       ? monthlyRecurringUsd(planMonthly, extraBlocks, blockPrice)
@@ -184,7 +188,7 @@ export class PlatformSubscriptionService {
     const now = new Date();
     const periodEnd = endOfUtcMonth(now);
     const newMonthly = monthlyRecurringUsd(
-      Number(plan.priceUsd),
+      this.plans.effectivePriceUsd(plan),
       extraBlocks,
       blockPrice,
     );
@@ -207,9 +211,10 @@ export class PlatformSubscriptionService {
 
     const proratedNew = prorateUntilMonthEnd(newMonthly, now);
     const chargeUsd = roundMoney(Math.max(0, proratedNew - credit));
+    const freePlan = !!plan.isFree && this.plans.effectivePriceUsd(plan) === 0;
 
     return {
-      code: code as UserPlanCode,
+      code: code,
       label: plan.label,
       userLimit: plan.userLimit,
       extraBlocks,
@@ -220,7 +225,9 @@ export class PlatformSubscriptionService {
       chargeUsd,
       periodStart: now,
       periodEnd,
-      note: 'El primer cobro (o cambio) se prorratea hasta fin de mes calendario. El próximo mes se cobra el valor completo.',
+      note: freePlan
+        ? 'Plan gratis: el sistema queda activo con el cupo del plan. No se genera cobro pendiente (queda registro en $0).'
+        : 'El primer cobro (o cambio) se prorratea hasta fin de mes calendario. El próximo mes se cobra el valor completo.',
     };
   }
 
@@ -228,28 +235,32 @@ export class PlatformSubscriptionService {
     const quote = await this.quotePlanChange(tenantId, code);
     const tenant = await this.requireTenant(tenantId);
     const now = new Date();
-    if (quote.chargeUsd > 0) {
-      await this.charges.save(
-        this.charges.create({
-          tenantId,
-          kind: tenant.billingCycle ? 'plan_change' : 'initial',
-          description: tenant.billingCycle
-            ? `Cambio a plan ${quote.label}`
+    const isFreeActivation = quote.chargeUsd <= 0;
+    await this.charges.save(
+      this.charges.create({
+        tenantId,
+        kind: tenant.billingCycle ? 'plan_change' : 'initial',
+        description: tenant.billingCycle
+          ? isFreeActivation
+            ? `Cambio a plan ${quote.label} (gratis)`
+            : `Cambio a plan ${quote.label}`
+          : isFreeActivation
+            ? `Alta plan ${quote.label} (gratis)`
             : `Alta plan ${quote.label}`,
-          amountUsd: quote.chargeUsd.toFixed(2),
-          status: 'paid',
-          coversFrom: quote.periodStart,
-          coversTo: quote.periodEnd,
-          paidAt: now,
-          meta: {
-            code: quote.code,
-            creditUsd: quote.creditUsd,
-            newMonthlyUsd: quote.newMonthlyUsd,
-            extraBlocks: quote.extraBlocks,
-          },
-        }),
-      );
-    }
+        amountUsd: Math.max(0, quote.chargeUsd).toFixed(2),
+        status: 'paid',
+        coversFrom: quote.periodStart,
+        coversTo: quote.periodEnd,
+        paidAt: now,
+        meta: {
+          code: quote.code,
+          creditUsd: quote.creditUsd,
+          newMonthlyUsd: quote.newMonthlyUsd,
+          extraBlocks: quote.extraBlocks,
+          isFree: isFreeActivation,
+        },
+      }),
+    );
     tenant.billingCycle = quote.code;
     tenant.subscriptionStatus = 'active';
     tenant.subscriptionPeriodStart = quote.periodStart;
@@ -312,7 +323,7 @@ export class PlatformSubscriptionService {
     }
 
     const newMonthly = monthlyRecurringUsd(
-      Number(plan.priceUsd),
+      this.plans.effectivePriceUsd(plan),
       blocks,
       blockPrice,
     );
@@ -450,28 +461,123 @@ export class PlatformSubscriptionService {
         tenant.subscriptionStatus !== 'past_due')
     ) {
       throw new BadRequestException(
-        'Debes tener un plan de suscripción activo para agregar el módulo al plan. Ve a Empresa → Suscripción.',
+        'Debes tener un plan de suscripción activo para agregar el módulo a la factura de servicio. Ve a Empresa → Suscripción.',
       );
     }
     const now = new Date();
-    const chargeUsd = prorateToPeriodEnd(
-      monthly,
-      tenant.subscriptionPeriodStart,
-      tenant.subscriptionPeriodEnd,
-      now,
-    );
-    const daysLeft = daysBetweenUtc(now, tenant.subscriptionPeriodEnd);
+    // Contratación en cualquier momento del ciclo: prorrateo desde hoy
+    // hasta el fin del período de servicio actual (o fin de mes si ya venció).
+    let periodStart = tenant.subscriptionPeriodStart;
+    let periodEnd = tenant.subscriptionPeriodEnd;
+    let chargeUsd: number;
+    if (periodEnd <= now) {
+      periodStart = now;
+      periodEnd = endOfUtcMonth(now);
+      chargeUsd = prorateUntilMonthEnd(monthly, now);
+    } else {
+      chargeUsd = prorateToPeriodEnd(monthly, periodStart, periodEnd, now);
+    }
+    const daysLeft = Math.max(1, daysBetweenUtc(now, periodEnd));
     return {
       mode,
       moduleId,
       name: def.name,
       monthlyPriceUsd: monthly,
       chargeUsd,
-      chargeLabel: 'Prorrateo hasta fin de mes calendario',
+      chargeLabel: 'Factura de servicio · prorrateo desde hoy',
       startsAt: now,
-      expiresAt: tenant.subscriptionPeriodEnd,
-      note: `Se cobra ahora lo que falta hasta el ${tenant.subscriptionPeriodEnd.toISOString().slice(0, 10)} (${daysLeft} día${daysLeft === 1 ? '' : 's'}). En el próximo mes se suma al cobro de renovación.`,
+      expiresAt: periodEnd,
+      note: `Puedes contratarlo en cualquier momento. Se suma a la factura de servicio el prorrateo desde hoy hasta el ${periodEnd.toISOString().slice(0, 10)} (${daysLeft} día${daysLeft === 1 ? '' : 's'}). En la próxima renovación del plan se cobra el mes completo del módulo.`,
     };
+  }
+
+  /**
+   * Suma el prorrateo del módulo a una factura de servicio pendiente del mismo
+   * período (varias contrataciones el mismo ciclo), o crea una nueva.
+   * No mezcla con renovaciones del ciclo siguiente.
+   */
+  private async addModuleToServiceInvoice(
+    tenantId: string,
+    quote: {
+      moduleId: string;
+      name: string;
+      chargeUsd: number;
+      monthlyPriceUsd: number;
+      expiresAt: Date | string | null | undefined;
+    },
+  ) {
+    const now = new Date();
+    const coversTo =
+      quote.expiresAt instanceof Date
+        ? quote.expiresAt
+        : quote.expiresAt
+          ? new Date(quote.expiresAt)
+          : endOfUtcMonth(now);
+    const coversToKey = coversTo.toISOString().slice(0, 10);
+
+    const candidates = await this.charges.find({
+      where: [
+        { tenantId, status: 'pending', kind: 'service' },
+        { tenantId, status: 'pending', kind: 'initial' },
+        { tenantId, status: 'pending', kind: 'plan_change' },
+      ],
+      order: { createdAt: 'DESC' },
+    });
+
+    const pending = candidates.find((c) => {
+      if (!c.coversTo) return c.kind === 'service';
+      return c.coversTo.toISOString().slice(0, 10) === coversToKey;
+    });
+
+    const line = {
+      moduleId: quote.moduleId,
+      name: quote.name,
+      prorateUsd: quote.chargeUsd,
+      monthlyPriceUsd: quote.monthlyPriceUsd,
+      contractedAt: now.toISOString(),
+    };
+
+    if (pending) {
+      const nextAmount = roundMoney(
+        Number(pending.amountUsd) + quote.chargeUsd,
+      );
+      pending.amountUsd = nextAmount.toFixed(2);
+      const modules = Array.isArray(pending.meta?.modules)
+        ? [...(pending.meta.modules as unknown[])]
+        : [];
+      modules.push(line);
+      pending.meta = {
+        ...pending.meta,
+        modules,
+        isServiceInvoice: true,
+      };
+      if (!/factura de servicio/i.test(pending.description)) {
+        pending.description = `Factura de servicio · ${pending.description}`;
+      }
+      pending.description = `${pending.description} + ${quote.name}`;
+      if (!pending.coversTo) pending.coversTo = coversTo;
+      if (!pending.coversFrom) pending.coversFrom = now;
+      return this.charges.save(pending);
+    }
+
+    const amount = Math.max(0, quote.chargeUsd);
+    return this.charges.save(
+      this.charges.create({
+        tenantId,
+        kind: 'service',
+        description: `Factura de servicio · ${quote.name} (prorrateo)`,
+        amountUsd: amount.toFixed(2),
+        status: amount > 0 ? 'pending' : 'paid',
+        paidAt: amount > 0 ? null : now,
+        coversFrom: now,
+        coversTo,
+        dueAt: coversTo,
+        meta: {
+          isServiceInvoice: true,
+          modules: [line],
+        },
+      }),
+    );
   }
 
   async contractModule(
@@ -483,27 +589,34 @@ export class PlatformSubscriptionService {
     const tenant = await this.requireTenant(tenantId);
     const now = new Date();
 
-    await this.charges.save(
-      this.charges.create({
-        tenantId,
-        kind: mode === 'one_time' ? 'module_one_time' : 'module_prorate',
-        description: `Contrato ${quote.name} (${mode})`,
-        amountUsd: quote.chargeUsd.toFixed(2),
-        status: 'paid',
-        paidAt: now,
-        coversFrom: now,
-        coversTo:
-          mode === 'one_time'
-            ? quote.expiresAt
-            : (quote.expiresAt ?? tenant.subscriptionPeriodEnd),
-        meta: {
-          moduleId,
-          mode,
-          monthlyPriceUsd: quote.monthlyPriceUsd,
-          planCode: tenant.billingCycle,
-        },
-      }),
-    );
+    if (mode === 'one_time') {
+      await this.charges.save(
+        this.charges.create({
+          tenantId,
+          kind: 'module_one_time',
+          description: `Contrato ${quote.name} (pago único)`,
+          amountUsd: quote.chargeUsd.toFixed(2),
+          status: quote.chargeUsd > 0 ? 'pending' : 'paid',
+          paidAt: quote.chargeUsd > 0 ? null : now,
+          coversFrom: now,
+          coversTo: quote.expiresAt ?? null,
+          dueAt: quote.expiresAt ?? null,
+          meta: {
+            moduleId,
+            mode,
+            monthlyPriceUsd: quote.monthlyPriceUsd,
+          },
+        }),
+      );
+    } else {
+      await this.addModuleToServiceInvoice(tenantId, {
+        moduleId: quote.moduleId,
+        name: quote.name,
+        chargeUsd: quote.chargeUsd,
+        monthlyPriceUsd: quote.monthlyPriceUsd,
+        expiresAt: quote.expiresAt,
+      });
+    }
 
     const contract = await this.contracts.save(
       this.contracts.create({
@@ -653,40 +766,18 @@ export class PlatformSubscriptionService {
     const now = new Date();
     const horizon = new Date(now.getTime() + 15 * 86_400_000);
     const tenants = await this.tenants.find({
-      where: { status: 'active', subscriptionStatus: 'active' },
+      where: [
+        { status: 'active', subscriptionStatus: 'active' },
+        { status: 'active', subscriptionStatus: 'past_due' },
+      ],
     });
     let created = 0;
     const blockPrice = await this.plans.getExtraBlockPriceUsd();
 
     for (const tenant of tenants) {
       if (!tenant.billingCycle || !tenant.subscriptionPeriodEnd) continue;
-      if (tenant.subscriptionPeriodEnd < now) {
-        if (tenant.subscriptionStatus !== 'past_due') {
-          tenant.subscriptionStatus = 'past_due';
-          await this.tenants.save(tenant);
-        }
-      }
-      if (tenant.subscriptionPeriodEnd > horizon) continue;
-
-      const existing = await this.charges.findOne({
-        where: {
-          tenantId: tenant.id,
-          kind: 'renewal',
-          status: 'pending',
-        },
-      });
-      if (existing) continue;
-
-      const dueKey = tenant.subscriptionPeriodEnd.toISOString();
-      const alreadyPaid = await this.charges
-        .createQueryBuilder('c')
-        .where('c.tenant_id = :tid', { tid: tenant.id })
-        .andWhere('c.kind = :kind', { kind: 'renewal' })
-        .andWhere("c.meta->>'sourcePeriodEnd' = :due", { due: dueKey })
-        .getOne();
-      if (alreadyPaid) continue;
-
       if (!isUserPlanCode(tenant.billingCycle)) continue;
+
       const plan = await this.plans.getByCode(tenant.billingCycle);
       if (!plan) continue;
 
@@ -699,12 +790,92 @@ export class PlatformSubscriptionService {
         0,
       );
       const baseMonthly = monthlyRecurringUsd(
-        Number(plan.priceUsd),
+        this.plans.effectivePriceUsd(plan),
         extraBlocks,
         blockPrice,
       );
       const amount = roundMoney(baseMonthly + modulesMonthly);
-      const coversFrom = startOfNextUtcMonth(tenant.subscriptionPeriodEnd);
+      const periodEnd = tenant.subscriptionPeriodEnd;
+      const dueKey = periodEnd.toISOString();
+
+      // Plan / ciclo en $0: mantener activo con el límite, sin cobro pending.
+      // Al vencer (o ya vencido), renueva con factura $0 pagada automáticamente.
+      if (amount <= 0) {
+        if (periodEnd > now) continue;
+
+        const alreadyPaid = await this.charges
+          .createQueryBuilder('c')
+          .where('c.tenant_id = :tid', { tid: tenant.id })
+          .andWhere('c.kind = :kind', { kind: 'renewal' })
+          .andWhere("c.meta->>'sourcePeriodEnd' = :due", { due: dueKey })
+          .getOne();
+        if (alreadyPaid) {
+          if (tenant.subscriptionStatus !== 'active') {
+            tenant.subscriptionStatus = 'active';
+            await this.tenants.save(tenant);
+          }
+          continue;
+        }
+
+        const coversFrom = startOfNextUtcMonth(periodEnd);
+        const coversTo = endOfUtcMonth(coversFrom);
+        await this.charges.save(
+          this.charges.create({
+            tenantId: tenant.id,
+            kind: 'renewal',
+            description: `Renovación ${plan.label} (gratis)`,
+            amountUsd: '0.00',
+            status: 'paid',
+            coversFrom,
+            coversTo,
+            dueAt: periodEnd,
+            paidAt: now,
+            meta: {
+              code: plan.cycle,
+              planPriceUsd: 0,
+              extraBlocks,
+              blockPriceUsd: blockPrice,
+              modulesMonthlyUsd: modulesMonthly,
+              sourcePeriodEnd: dueKey,
+              isFree: true,
+            },
+          }),
+        );
+        tenant.subscriptionStatus = 'active';
+        tenant.subscriptionPeriodStart = coversFrom;
+        tenant.subscriptionPeriodEnd = coversTo;
+        tenant.subscriptionPeriodPriceUsd = '0.00';
+        await this.tenants.save(tenant);
+        created += 1;
+        continue;
+      }
+
+      if (periodEnd < now) {
+        if (tenant.subscriptionStatus !== 'past_due') {
+          tenant.subscriptionStatus = 'past_due';
+          await this.tenants.save(tenant);
+        }
+      }
+      if (periodEnd > horizon) continue;
+
+      const existing = await this.charges.findOne({
+        where: {
+          tenantId: tenant.id,
+          kind: 'renewal',
+          status: 'pending',
+        },
+      });
+      if (existing) continue;
+
+      const alreadyPaid = await this.charges
+        .createQueryBuilder('c')
+        .where('c.tenant_id = :tid', { tid: tenant.id })
+        .andWhere('c.kind = :kind', { kind: 'renewal' })
+        .andWhere("c.meta->>'sourcePeriodEnd' = :due", { due: dueKey })
+        .getOne();
+      if (alreadyPaid) continue;
+
+      const coversFrom = startOfNextUtcMonth(periodEnd);
       const coversTo = endOfUtcMonth(coversFrom);
 
       await this.charges.save(
@@ -716,10 +887,10 @@ export class PlatformSubscriptionService {
           status: 'pending',
           coversFrom,
           coversTo,
-          dueAt: tenant.subscriptionPeriodEnd,
+          dueAt: periodEnd,
           meta: {
             code: plan.cycle,
-            planPriceUsd: Number(plan.priceUsd),
+            planPriceUsd: this.plans.effectivePriceUsd(plan),
             extraBlocks,
             blockPriceUsd: blockPrice,
             modulesMonthlyUsd: modulesMonthly,

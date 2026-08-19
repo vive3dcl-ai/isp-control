@@ -459,6 +459,10 @@ export interface TopologyDevice {
   snmpMonitor?: { ok: boolean; error?: string } | null
   /** gpon | epon | gpon_epon — usually auto-detected */
   ponType?: string | null
+  /** Puerto físico de salida a Internet (RouterOS). */
+  internetEgressPortName?: string | null
+  /** VLAN sobre ese puerto; null = interfaz física. */
+  internetEgressVlanId?: number | null
   /** After connect test: prompt to import ONUs into DB */
   suggestOnuImport?: boolean
   ports: TopologyPort[]

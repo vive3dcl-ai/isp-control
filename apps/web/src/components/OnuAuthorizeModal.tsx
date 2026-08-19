@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '../lib/api'
 import type {
@@ -29,13 +29,13 @@ export function OnuAuthorizeModal({ orphan, onClose, onAuthorized }: Props) {
   const queryClient = useQueryClient()
   // Vacío = automático: la OLT resuelve el primer índice libre al autorizar.
   const [onuId, setOnuId] = useState('')
-  const [onuType, setOnuType] = useState('')
-  const [customType, setCustomType] = useState(false)
+  const [onuType, setOnuType] = useState(orphan.model?.trim() || '')
+  const [customType, setCustomType] = useState(!!orphan.model?.trim())
   const [name, setName] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [progress, setProgress] = useState<string[]>([])
 
-  const snVendor = vendorFromSn(orphan.sn)
+  const snVendor = orphan.vendor || vendorFromSn(orphan.sn)
 
   const typesQuery = useQuery({
     queryKey: ['app', 'settings', 'onus', 'types'],
@@ -55,7 +55,23 @@ export function OnuAuthorizeModal({ orphan, onClose, onAuthorized }: Props) {
     })
   }, [typesQuery.data?.types, orphan.ponType, snVendor])
 
-  // Default: Auto — no preseleccionar para no forzar un type de la lista
+  // Prefill tipo con modelo ACS si coincide con un type del tenant.
+  useEffect(() => {
+    const detected = orphan.model?.trim()
+    if (!detected || !typeOptions.length) return
+    const hit = typeOptions.find(
+      (t) => t.name.toLowerCase() === detected.toLowerCase(),
+    )
+    if (hit) {
+      setCustomType(false)
+      setOnuType(hit.name)
+    } else if (!onuType) {
+      setCustomType(true)
+      setOnuType(detected)
+    }
+    // Solo al abrir / cuando llegan types o el modelo detectado.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orphan.model, typeOptions])
   const authorizeMutation = useMutation({
     mutationFn: () =>
       apiFetch<AuthorizeOnuResponse>('/app/onus/authorize', {
@@ -178,6 +194,13 @@ export function OnuAuthorizeModal({ orphan, onClose, onAuthorized }: Props) {
             />
             <span className="mt-1 block text-xs text-[var(--text-muted)]">
               Vendor por SN: {snVendor}
+              {orphan.model
+                ? ` · modelo ACS: ${orphan.model}`
+                : ' · modelo ACS: aún no Informó'}
+              {orphan.driverId ? ` · script: ${orphan.driverId}` : ''}
+              {orphan.firstSeenAt
+                ? ` · en huérfanas desde ${new Date(orphan.firstSeenAt).toLocaleString()}`
+                : ''}
             </span>
           </label>
 

@@ -38,8 +38,8 @@ export function OnuDeniedModal({ onClose }: Props) {
           <div className="min-w-0">
             <h3 className="text-lg font-semibold">ONUs bloqueadas</h3>
             <p className="mt-0.5 text-xs text-[var(--text-muted)]">
-              SN denegados a mano desde Huérfanas. No se mezclan con Disable en
-              Conectadas. Al quitarlos, vuelven a Huérfanas si siguen en uncfg.
+              SN denegados a mano desde Huérfanas. El bloqueo es permanente:
+              sólo desaparece si lo quitas aquí o si autorizas ese SN.
             </p>
           </div>
           <button
@@ -85,7 +85,14 @@ export function OnuDeniedModal({ onClose }: Props) {
               <tbody>
                 {rows.map((r) => (
                   <tr key={r.id} className="border-t border-[var(--border)]">
-                    <td className="py-2 font-mono text-xs">{r.sn}</td>
+                    <td className="py-2 font-mono text-xs">
+                      {r.sn}
+                      {r.inConnected ? (
+                        <span className="ml-1 text-[10px] text-amber-400">
+                          (también en Conectadas)
+                        </span>
+                      ) : null}
+                    </td>
                     <td className="py-2">{r.oltName ?? '—'}</td>
                     <td className="py-2 font-mono text-xs">
                       {r.oltIf ?? '—'}

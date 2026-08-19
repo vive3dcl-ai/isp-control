@@ -167,8 +167,8 @@ export function isAdminPwaInstalled() {
 
 function iconFor(branding: PlatformBranding, origin: string) {
   const iconSrc =
-    absoluteUrl(branding.logoUrl || branding.faviconUrl || '/favicon.svg', origin) ||
-    `${origin}/favicon.svg`
+    absoluteUrl(branding.faviconUrl || branding.logoUrl || '/favicon.png', origin) ||
+    `${origin}/favicon.png`
   const iconType = iconSrc.includes('data:image/svg') || iconSrc.includes('.svg')
     ? 'image/svg+xml'
     : iconSrc.includes('.webp')

@@ -1,11 +1,11 @@
 /* Service worker — PWA Técnico + Administración + Web Push */
-const CACHE = 'isp-pwa-shell-v2'
+const CACHE = 'isp-pwa-shell-v3'
 const SHELL = [
   '/',
   '/login',
   '/movil',
   '/movil/',
-  '/favicon.svg',
+  '/favicon.png',
   '/index.html',
 ]
 
@@ -109,8 +109,8 @@ self.addEventListener('push', (event) => {
       tag: data.tag || 'isp-control',
       renotify: true,
       data: { link: data.link || '/app', notificationId: data.notificationId },
-      icon: '/favicon.svg',
-      badge: '/favicon.svg',
+      icon: '/favicon.png',
+      badge: '/favicon.png',
     }),
   )
 })
