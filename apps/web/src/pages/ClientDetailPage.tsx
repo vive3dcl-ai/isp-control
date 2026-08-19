@@ -101,12 +101,19 @@ export function ClientDetailPage() {
       serviceId: string
       action: 'suspend' | 'end' | 'activate'
     }) =>
-      apiFetch(`/app/client-services/${serviceId}/${action}`, {
-        method: 'POST',
-      }),
-    onSuccess: () => {
+      apiFetch<{ networkApply?: { via: string; warning?: string } }>(
+        `/app/client-services/${serviceId}/${action}`,
+        { method: 'POST' },
+      ),
+    onSuccess: (data) => {
       void queryClient.invalidateQueries({ queryKey: ['app', 'clients', id] })
       void queryClient.invalidateQueries({ queryKey: ['app', 'dashboard'] })
+      if (data?.networkApply?.warning) {
+        void alert(data.networkApply.warning, {
+          title: 'Suspensión',
+          variant: 'warning',
+        })
+      }
     },
   })
 

@@ -131,11 +131,13 @@ Hecho: pestaña Respaldo en la ficha OLT; dump diario + manual; restore operativ
 
 ---
 
-## Etapa 9 — BNG opcional (no reemplaza la OLT)
+## Etapa 9 — Corte opcional (portal; velocidad = OLT) — **Cumplido**
 
-Solo si un tenant quiere corte/limitación **además** de la OLT (mayorista, CGNAT, IPv6).
+La velocidad sigue en DBA de la OLT. El corte opcional es el **portal cautivo MikroTik** (address-list), no RADIUS ni colas.
 
-Residencial por defecto: **solo DBA OLT**. RADIUS/MikroTik queue = extra, no el camino principal.
+Hecho: al suspender, si el portal está ON se intenta address-list; sin IP WAN o si MikroTik falla → disable OLT y aviso. Al reactivar se quita el listado y, si la ONU estaba admin-disable, `enable`. Cambio de IP WAN refresca el listado. Al activar el portal se migran suspendidos en disable OLT cuando hay WAN. HTTPS no redirige; IPv6 no se corta.
+
+Fuera de alcance (a propósito): RADIUS / queues MikroTik; auto-suspender por factura overdue.
 
 ---
 
@@ -159,7 +161,7 @@ Hecho: se documenta “si cae el API, la flota sigue informando; si cae ACS, Inf
 6  alarmas
 7  firmware
 8  backup OLT
-9  BNG opcional
+9  portal de suspensión (velocidad = OLT)
 10 HA
 ```
 

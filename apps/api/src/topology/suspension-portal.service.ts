@@ -28,6 +28,8 @@ import {
   type PortalTarget,
 } from './suspension-portal-url';
 import { PlatformPublicUrlsService } from '../platform/platform-public-urls.service';
+import { OnuConnectedService } from './onus/onu-connected.service';
+import { isOnuAdminDisabled } from './suspension-portal.util';
 
 export const SUSPENDED_LIST = 'isp-control-suspended';
 /** Destinos permitidos mientras está suspendido (portal aparte). */
@@ -107,6 +109,7 @@ export class SuspensionPortalService {
     private readonly publicUrls: PlatformPublicUrlsService,
     @InjectRepository(Tenant)
     private readonly tenants: Repository<Tenant>,
+    private readonly onus: OnuConnectedService,
   ) {}
 
   /** Public HTML for captive portal. */
@@ -255,6 +258,22 @@ export class SuspensionPortalService {
   ) {
     const schema = this.requireSchema(user);
     const tenant = await this.requireTenant(user);
+    await this.applySuspendedIp(
+      schema,
+      tenant,
+      service,
+      wanIp,
+      routerIdHint,
+    );
+  }
+
+  private async applySuspendedIp(
+    schema: string,
+    tenant: Tenant,
+    service: ClientService,
+    wanIp: string,
+    routerIdHint?: string | null,
+  ) {
     const routers = await this.routersForAction(
       schema,
       routerIdHint,
@@ -291,6 +310,88 @@ export class SuspensionPortalService {
         `Suspensión parcial svc=${service.id}: ${errors.join(' · ')}`,
       );
     }
+  }
+
+  /**
+   * After WAN IP assign/change: keep address-list in sync for CRM-suspended services.
+   */
+  async refreshSuspendedWanIp(schema: string, onuId: string, wanIp: string) {
+    const ip = wanIp.trim();
+    if (!ip) return;
+    const tenant = await this.tenants.findOne({ where: { schemaName: schema } });
+    if (!tenant?.suspensionPortalEnabled) return;
+    const serviceRepo =
+      await this.tenantConnections.getClientServiceRepository(schema);
+    const services = await serviceRepo.find({
+      where: { onuId, status: 'suspended' },
+    });
+    if (services.length === 0) return;
+    const onuRepo = await this.tenantConnections.getOnuRepository(schema);
+    const onu = await onuRepo.findOne({ where: { id: onuId } });
+    let routerId: string | null = null;
+    if (onu?.wanPoolId) {
+      const poolRepo = await this.tenantConnections.getIpPoolRepository(schema);
+      const pool = await poolRepo.findOne({ where: { id: onu.wanPoolId } });
+      routerId = pool?.routerId ?? null;
+    }
+    for (const service of services) {
+      try {
+        await this.applySuspendedIp(schema, tenant, service, ip, routerId);
+      } catch (err) {
+        this.logger.warn(
+          `Refresh WAN suspendida onu=${onuId} svc=${service.id}: ${
+            err instanceof Error ? err.message : err
+          }`,
+        );
+      }
+    }
+  }
+
+  async migrateOltDisabledToPortal(user: AuthUser): Promise<{
+    migrated: number;
+    leftOnOlt: number;
+  }> {
+    const schema = this.requireSchema(user);
+    const tenant = await this.requireTenant(user);
+    if (!tenant.suspensionPortalEnabled) {
+      return { migrated: 0, leftOnOlt: 0 };
+    }
+    const serviceRepo =
+      await this.tenantConnections.getClientServiceRepository(schema);
+    const services = await serviceRepo.find({
+      where: { status: 'suspended' },
+    });
+    let migrated = 0;
+    let leftOnOlt = 0;
+    const onuRepo = await this.tenantConnections.getOnuRepository(schema);
+    for (const service of services) {
+      if (!service.onuId) continue;
+      const onu = await onuRepo.findOne({ where: { id: service.onuId } });
+      if (!onu || !isOnuAdminDisabled(onu.adminState)) continue;
+      const wanIp = onu.wanIp?.trim();
+      if (!wanIp || !onu.oltId || !onu.onuIf) {
+        leftOnOlt += 1;
+        continue;
+      }
+      try {
+        await this.onus.enable(user, onu.oltId, onu.onuIf);
+        await this.addSuspendedIp(user, service, wanIp);
+        migrated += 1;
+      } catch (err) {
+        this.logger.warn(
+          `Migrar portal svc=${service.id}: ${
+            err instanceof Error ? err.message : err
+          }`,
+        );
+        try {
+          await this.onus.disable(user, onu.oltId, onu.onuIf);
+        } catch {
+          /* keep previous OLT state if re-disable fails */
+        }
+        leftOnOlt += 1;
+      }
+    }
+    return { migrated, leftOnOlt };
   }
 
   async removeSuspendedIp(

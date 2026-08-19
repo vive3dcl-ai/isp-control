@@ -21,6 +21,10 @@ import {
   type AccessAlarmKind,
 } from '../topology/onus/network-alarm.util';
 import { SuspensionPortalService } from '../topology/suspension-portal.service';
+import {
+  isOnuAdminDisabled,
+  planPortalSuspend,
+} from '../topology/suspension-portal.util';
 import { isManagedOltDevice } from '../topology/olts/olt.constants';
 import { Tenant } from '../tenants/entities/tenant.entity';
 import { CreateClientDto, UpdateClientDto } from './dto/client.dto';
@@ -58,6 +62,11 @@ import {
   type CrmServiceDesired,
   type ServiceStateView,
 } from '../topology/onus/onu-service-state.util';
+
+export type NetworkApplyResult = {
+  via: 'portal' | 'olt' | 'olt_fallback' | 'none';
+  warning?: string;
+};
 
 @Injectable()
 export class CrmService {
@@ -1148,12 +1157,13 @@ export class CrmService {
     if (dto.activeFrom !== undefined) service.activeFrom = dto.activeFrom;
     if (dto.activeTo !== undefined) service.activeTo = dto.activeTo;
     const nextStatus = dto.status as ClientServiceStatus | undefined;
+    let networkApply: NetworkApplyResult | undefined;
     if (
       nextStatus &&
       (nextStatus === 'active' || nextStatus === 'suspended') &&
       nextStatus !== service.status
     ) {
-      await this.applyNetworkServiceStatus(user, id, nextStatus);
+      networkApply = await this.applyNetworkServiceStatus(user, id, nextStatus);
     }
     if (dto.status !== undefined)
       service.status = dto.status as ClientServiceStatus;
@@ -1187,7 +1197,7 @@ export class CrmService {
         );
       }
     }
-    return saved;
+    return networkApply ? Object.assign(saved, { networkApply }) : saved;
   }
 
   async setServiceStatus(
@@ -1312,12 +1322,13 @@ export class CrmService {
 
   /**
    * Portal mode: MikroTik address-list. Default: Disable/Enable ONU on OLT.
+   * If the portal cannot apply (no WAN IP / MikroTik down), fall back to OLT disable.
    */
   private async applyNetworkServiceStatus(
     user: AuthUser,
     serviceId: string,
     status: 'suspended' | 'active',
-  ) {
+  ): Promise<NetworkApplyResult> {
     if (!user.tenantId) {
       throw new BadRequestException('Sin empresa asociada');
     }
@@ -1331,21 +1342,21 @@ export class CrmService {
     if (!tenant) throw new NotFoundException('Empresa no encontrada');
 
     if (tenant.suspensionPortalEnabled) {
-      await this.applyPortalSuspension(user, schema, service, status);
-      return;
+      return this.applyPortalSuspension(user, schema, service, status);
     }
 
-    if (!service.onuId) return;
+    if (!service.onuId) return { via: 'none' };
 
     const onuRepo = await this.tenantConnections.getOnuRepository(schema);
     const onu = await onuRepo.findOne({ where: { id: service.onuId } });
-    if (!onu?.oltId || !onu.onuIf) return;
+    if (!onu?.oltId || !onu.onuIf) return { via: 'none' };
 
     if (status === 'suspended') {
       await this.onus.disable(user, onu.oltId, onu.onuIf);
     } else {
       await this.onus.enable(user, onu.oltId, onu.onuIf);
     }
+    return { via: 'olt' };
   }
 
   private async applyPortalSuspension(
@@ -1353,10 +1364,10 @@ export class CrmService {
     schema: string,
     service: ClientService,
     status: 'suspended' | 'active',
-  ) {
+  ): Promise<NetworkApplyResult> {
     if (!service.onuId) {
       throw new BadRequestException(
-        'Portal de suspensión: el servicio debe tener una ONU enlazada con IP WAN',
+        'Portal de suspensión: el servicio debe tener una ONU enlazada',
       );
     }
     const onuRepo = await this.tenantConnections.getOnuRepository(schema);
@@ -1364,11 +1375,6 @@ export class CrmService {
     if (!onu) {
       throw new BadRequestException(
         'Portal de suspensión: ONU enlazada no encontrada',
-      );
-    }
-    if (!onu.wanIp?.trim()) {
-      throw new BadRequestException(
-        'Portal de suspensión: la ONU no tiene IP WAN asignada',
       );
     }
 
@@ -1379,21 +1385,68 @@ export class CrmService {
       routerId = pool?.routerId ?? null;
     }
 
-    if (status === 'suspended') {
-      await this.suspensionPortal.addSuspendedIp(
-        user,
-        service,
-        onu.wanIp.trim(),
-        routerId,
-      );
-    } else {
-      await this.suspensionPortal.removeSuspendedIp(
-        user,
-        service,
-        onu.wanIp.trim(),
-        routerId,
-      );
+    if (status === 'active') {
+      try {
+        await this.suspensionPortal.removeSuspendedIp(
+          user,
+          service,
+          onu.wanIp?.trim() || null,
+          routerId,
+        );
+      } catch (err) {
+        this.logger.warn(
+          `Quitar address-list svc=${service.id}: ${
+            err instanceof Error ? err.message : err
+          }`,
+        );
+      }
+      if (
+        isOnuAdminDisabled(onu.adminState) &&
+        onu.oltId &&
+        onu.onuIf
+      ) {
+        await this.onus.enable(user, onu.oltId, onu.onuIf);
+        return { via: 'olt' };
+      }
+      return { via: 'portal' };
     }
+
+    const plan = planPortalSuspend({
+      wanIp: onu.wanIp,
+      oltId: onu.oltId,
+      onuIf: onu.onuIf,
+    });
+    if (plan.action === 'portal') {
+      try {
+        await this.suspensionPortal.addSuspendedIp(
+          user,
+          service,
+          plan.wanIp,
+          routerId,
+        );
+        return { via: 'portal' };
+      } catch (err) {
+        const reason =
+          err instanceof Error ? err.message : String(err);
+        this.logger.warn(
+          `Portal falló svc=${service.id}, fallback OLT: ${reason}`,
+        );
+        if (onu.oltId && onu.onuIf) {
+          await this.onus.disable(user, onu.oltId, onu.onuIf);
+          return {
+            via: 'olt_fallback',
+            warning: `${reason} Se aplicó disable en la OLT (sin portal cautivo).`,
+          };
+        }
+        throw err;
+      }
+    }
+
+    if (!onu.oltId || !onu.onuIf) {
+      throw new BadRequestException(plan.reason);
+    }
+    await this.onus.disable(user, onu.oltId, onu.onuIf);
+    return { via: 'olt_fallback', warning: plan.reason };
   }
 
   async dashboardStats(user: AuthUser) {

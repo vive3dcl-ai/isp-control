@@ -181,8 +181,9 @@ export function SuspensionPortalSettingsTab({
         <div>
           <h2 className="text-base font-semibold">Portal de suspensión</h2>
           <p className="mt-1 text-sm text-[var(--text-muted)]">
-            Elige portal interno (plantillas) o un enlace externo. Cada empresa
-            tiene una URL única.
+            Elige portal interno (plantillas) o un enlace externo. HTTPS no
+            redirige (solo HTTP + allow-list de pagos). IPv6 no se corta. Sin
+            IP WAN o MikroTik, el corte es disable en la OLT.
           </p>
         </div>
         {canWrite && (

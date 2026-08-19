@@ -173,7 +173,17 @@ export function EmpresaSettingsTab({ canWrite }: { canWrite: boolean }) {
       }),
     onSuccess: (data) => {
       void queryClient.setQueryData(['app', 'settings', 'company'], data)
-      setMsg('Datos de la empresa guardados')
+      const m = data.portalMigrate
+      if (m && (m.migrated > 0 || m.leftOnOlt > 0)) {
+        setMsg(
+          `Guardado. Portal: ${m.migrated} contrato(s) pasados a cautivo` +
+            (m.leftOnOlt
+              ? `; ${m.leftOnOlt} siguen en disable OLT (sin IP WAN o MikroTik).`
+              : '.'),
+        )
+      } else {
+        setMsg('Datos de la empresa guardados')
+      }
     },
   })
 
@@ -546,10 +556,11 @@ export function EmpresaSettingsTab({ canWrite }: { canWrite: boolean }) {
                   <span>
                     <span className="font-medium">Portal de suspensión</span>
                     <span className="mt-1 block text-[11px] text-[var(--text-muted)]">
-                      Si está activo, al suspender se bloquea internet completo
-                      (HTTPS, VPN, apps) vía MikroTik y solo se deja el portal +
-                      dominios de pago. Si no, se hace Disable de la ONU en la
-                      OLT.
+                      Si está activo, al suspender se intenta el portal cautivo
+                      MikroTik (address-list). Sin IP WAN o si MikroTik no
+                      responde, el corte es disable en la OLT (sin página
+                      cautiva). HTTPS no redirige (solo HTTP + allow-list de
+                      pagos). IPv6 no se corta.
                     </span>
                   </span>
                 </label>
@@ -648,11 +659,10 @@ export function EmpresaSettingsTab({ canWrite }: { canWrite: boolean }) {
                       </button>
                     )}
                     <p className="text-[11px] text-[var(--text-muted)]">
-                      Reglas: NAT HTTP → portal; allow DNS; allow portal;
-                      allow pagos (Mercado Pago); drop de todo lo demás
-                      (HTTPS, VPN, etc.) para{' '}
-                      <code>isp-control-suspended</code>. Guarda primero si
-                      acabas de activar el checkbox.
+                      NAT HTTP (puerto 80) hacia el portal; DNS y pagos en
+                      allow-list; el resto de IPv4 se corta. HTTPS no redirige.
+                      Si falta IP WAN o MikroTik, el corte es disable OLT.
+                      Guarda primero si acabas de activar el checkbox.
                     </p>
                     {configureMsg && (
                       <p className="text-sm text-emerald-400">{configureMsg}</p>

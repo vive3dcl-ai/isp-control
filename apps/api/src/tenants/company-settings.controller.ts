@@ -61,11 +61,21 @@ export class CompanySettingsController {
 
   @Patch()
   @TenantRoles(...CRM_WRITE_ROLES)
-  updateCompany(@CurrentUser() user: AuthUser, @Body() dto: UpdateCompanyDto) {
+  async updateCompany(
+    @CurrentUser() user: AuthUser,
+    @Body() dto: UpdateCompanyDto,
+  ) {
     if (!user.tenantId) {
       throw new NotFoundException('Sin empresa asociada');
     }
-    return this.tenants.updateCompany(user.tenantId, dto);
+    const previous = await this.tenants.getCompany(user.tenantId);
+    const saved = await this.tenants.updateCompany(user.tenantId, dto);
+    if (!previous.suspensionPortalEnabled && saved.suspensionPortalEnabled) {
+      const portalMigrate =
+        await this.suspensionPortal.migrateOltDisabledToPortal(user);
+      return { ...saved, portalMigrate };
+    }
+    return saved;
   }
 
   @Post('suspension-portal/configure-mikrotik')

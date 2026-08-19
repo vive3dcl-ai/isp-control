@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { In, IsNull } from 'typeorm';
@@ -19,12 +20,16 @@ import {
   type IpNetworkInfo,
 } from './ip-pool.util';
 import { MikrotikClient } from './mikrotik.client';
+import { SuspensionPortalService } from '../suspension-portal.service';
 
 @Injectable()
 export class IpPoolService {
+  private readonly logger = new Logger(IpPoolService.name);
+
   constructor(
     private readonly tenantConnections: TenantConnectionService,
     private readonly mikrotik: MikrotikClient,
+    private readonly suspensionPortal: SuspensionPortalService,
   ) {}
 
   private requireSchema(user: AuthUser): string {
@@ -1020,6 +1025,15 @@ export class IpPoolService {
     // WAN estática gestionada ⇒ la ONU queda en modo router.
     onu.mode = 'router';
     await onuRepo.save(onu);
+    void this.suspensionPortal
+      .refreshSuspendedWanIp(schema, onu.id, keep.ipAddress)
+      .catch((err: unknown) => {
+        this.logger.warn(
+          `Address-list suspensión onu=${onu.id}: ${
+            err instanceof Error ? err.message : err
+          }`,
+        );
+      });
     return this.wanAssignResult(pool, keep.ipAddress);
   }
 

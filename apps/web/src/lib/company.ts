@@ -77,6 +77,7 @@ export type CompanyProfile = {
   suspensionPortalAppliedUrl: string | null
   suspensionPortalNeedsMikrotikReconfigure: boolean
   slug: string
+  portalMigrate?: { migrated: number; leftOnOlt: number }
 }
 
 export type ConfigureMikrotikResult = {
