@@ -33,6 +33,10 @@ import { assessServiceRoute } from '../../drivers/onu/models/generic-zte/route';
 import { resolveServiceWanForVerify } from '../../drivers/onu/infra/resolve-service-wan-for-verify';
 import { OnuTr069ConfigService } from './onu-tr069-config.service';
 import {
+  acsModelKey,
+  OnuAcsDriverCatalogService,
+} from './onu-acs-driver-catalog.service';
+import {
   needsMigratedHealthBackfill,
   shouldSkipHealthPass,
 } from '../../drivers/olt/zte/shared/zte-olt-dba.util';
@@ -76,6 +80,7 @@ export class OnuPostProvisionVerifyService {
     private readonly tenantConnections: TenantConnectionService,
     private readonly tr069: OnuTr069ConfigService,
     private readonly serviceVlans: ServiceVlanService,
+    private readonly acsDrivers: OnuAcsDriverCatalogService,
   ) {}
 
   private async withOnuVerifyLock<T>(
@@ -700,6 +705,26 @@ export class OnuPostProvisionVerifyService {
       onu.verifyStartedAt = onu.verifyStartedAt ?? new Date();
     }
     await onuRepo.save(onu);
+    if (next === 'ok' && verifyDriver?.id.startsWith('generic-')) {
+      const key = acsModelKey(null, onu.onuType);
+      if (key) {
+        const family = verifyDriver.id.replace(/^generic-/, '');
+        await this.acsDrivers
+          .recordLearned({
+            schema,
+            modelKey: key,
+            family,
+            sn: onu.sn,
+          })
+          .catch((err) =>
+            this.logger.warn(
+              `no se registró driver ACS ${key}: ${
+                err instanceof Error ? err.message : err
+              }`,
+            ),
+          );
+      }
+    }
 
     this.logger.log(
       `verify${opts.soft ? ' (kick)' : opts.manual ? ' (manual)' : ''} ${onu.sn ?? onuId} attempt=${attempt} → ${next}` +

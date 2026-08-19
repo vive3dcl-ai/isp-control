@@ -4,6 +4,7 @@
 import { vendorFromSn } from '../../infra/vendor-from-sn';
 import { resolveGenericServiceWan } from '../../infra/resolve-service-wan';
 import { applyGenericServiceSpv } from '../../infra/service-spv';
+import { ensureGenericServiceWan } from '../../infra/ensure-generic-service-wan';
 import { OMCI_BRIDGE_PARAM_OWNERS } from '../../param-owners';
 import type {
   ApplyServiceSpvParams,
@@ -20,37 +21,10 @@ import { DEFAULT_VERIFY_CHECKS } from '../../types';
 import { GENERIC_UNKNOWN_PROGRESS_PLAN } from '../_progress-plans';
 import type { WanConnectionRef } from '../../infra/wan-datamodel';
 
-async function verifyHeal(ctx: OnuVerifyHealCtx): Promise<OnuModelProvisionResult> {
-  const found = resolveGenericServiceWan(ctx.device, {
-    mgmtIp: ctx.mgmtIp,
-    expectedIp: ctx.wan.wanIp,
-    expectedVlanId: ctx.wan.wanVlan,
-  });
-  if (!found || found.isMgmt) {
-    return {
-      ok: false,
-      notes: ['generic-unknown: sin WAN de servicio reconocible'],
-      progress: { currentStepId: 'apply_service_spv', completed: [], notes: [] },
-    };
-  }
-  const msg = await applyGenericServiceSpv({
-    client: ctx.client,
-    deviceId: ctx.deviceId,
-    device: ctx.device,
-    sn: ctx.sn,
-    wan: ctx.wan,
-    found,
-    owners: OMCI_BRIDGE_PARAM_OWNERS,
-  });
-  return {
-    ok: true,
-    notes: ['verify generic-unknown', msg],
-    progress: {
-      currentStepId: 'apply_service_spv',
-      completed: ['apply_service_spv'],
-      notes: [msg],
-    },
-  };
+async function verifyHeal(
+  ctx: OnuVerifyHealCtx,
+): Promise<OnuModelProvisionResult> {
+  return ensureGenericServiceWan(ctx, 'unknown_hgu');
 }
 
 export const genericUnknownDriver: OnuDriver = {
@@ -67,12 +41,9 @@ export const genericUnknownDriver: OnuDriver = {
     return v === 'other' || !v;
   },
   async ensureServiceWan(
-    _ctx: OnuModelProvisionCtx,
+    ctx: OnuModelProvisionCtx,
   ): Promise<OnuModelProvisionResult> {
-    return {
-      ok: false,
-      notes: ['generic-unknown: no crea WAN de servicio'],
-    };
+    return ensureGenericServiceWan(ctx, 'unknown_hgu');
   },
   diagnoseGaps(
     _device: Record<string, unknown>,

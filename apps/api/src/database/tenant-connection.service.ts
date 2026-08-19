@@ -22,6 +22,7 @@ import { OnuType } from '../topology/shared/entities/onu-type.entity';
 import { Onu } from '../topology/shared/entities/onu.entity';
 import { OnuMetricSample } from '../topology/shared/entities/onu-metric-sample.entity';
 import { OnuDenied } from '../topology/shared/entities/onu-denied.entity';
+import { OnuAcsDriver } from '../topology/shared/entities/onu-acs-driver.entity';
 import { OnuOrphanSighting } from '../topology/shared/entities/onu-orphan-sighting.entity';
 import { IpPool } from '../topology/shared/entities/ip-pool.entity';
 import { IpPoolAllocation } from '../topology/shared/entities/ip-pool-allocation.entity';
@@ -632,6 +633,30 @@ const TOPOLOGY_ALTER = (schema: string) => `
   );
   CREATE INDEX IF NOT EXISTS "idx_onu_denied_sn" ON "${schema}"."onu_denied" ("sn");
 
+  CREATE TABLE IF NOT EXISTS "${schema}"."onu_acs_drivers" (
+    "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    "model_key" varchar(80) NOT NULL,
+    "family" varchar(32) NOT NULL,
+    "library_id" varchar(80) NULL,
+    "wan_path" varchar(255) NULL,
+    "vlan_leaf" varchar(255) NULL,
+    "bind_leaf" varchar(255) NULL,
+    "spv" jsonb NOT NULL DEFAULT '{}'::jsonb,
+    "playbook" jsonb NOT NULL DEFAULT '[]'::jsonb,
+    "faults_skip" jsonb NOT NULL DEFAULT '[]'::jsonb,
+    "source" varchar(16) NOT NULL DEFAULT 'seed',
+    "enabled" boolean NOT NULL DEFAULT true,
+    "success_count" int NOT NULL DEFAULT 0,
+    "learned_from_sn" varchar(40) NULL,
+    "needs_reboot_after_creds" boolean NOT NULL DEFAULT false,
+    "created_at" TIMESTAMPTZ NOT NULL DEFAULT now(),
+    "updated_at" TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT "uq_onu_acs_drivers_model" UNIQUE ("model_key")
+  );
+  CREATE INDEX IF NOT EXISTS "idx_onu_acs_drivers_family"
+    ON "${schema}"."onu_acs_drivers" ("family");
+
+
   CREATE TABLE IF NOT EXISTS "${schema}"."ip_pools" (
     "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     "olt_id" uuid NOT NULL REFERENCES "${schema}"."network_devices"("id") ON DELETE CASCADE,
@@ -1030,6 +1055,7 @@ export class TenantConnectionService implements OnModuleDestroy {
         Onu,
         OnuMetricSample,
         OnuDenied,
+        OnuAcsDriver,
         OnuOrphanSighting,
         IpPool,
         IpPoolAllocation,
@@ -1199,6 +1225,15 @@ export class TenantConnectionService implements OnModuleDestroy {
     await this.ensureTenantSchema(schemaName);
     const ds = await this.getDataSource(schemaName);
     return ds.getRepository(OnuMetricSample);
+  }
+
+
+  async getOnuAcsDriverRepository(
+    schemaName: string,
+  ): Promise<Repository<OnuAcsDriver>> {
+    await this.ensureTenantSchema(schemaName);
+    const ds = await this.getDataSource(schemaName);
+    return ds.getRepository(OnuAcsDriver);
   }
 
   async getOnuDeniedRepository(

@@ -5,6 +5,7 @@
 import { vendorFromSn } from '../../infra/vendor-from-sn';
 import { resolveGenericServiceWan } from '../../infra/resolve-service-wan';
 import { applyGenericServiceSpv } from '../../infra/service-spv';
+import { ensureGenericServiceWan } from '../../infra/ensure-generic-service-wan';
 import { ACS_HGU_PARAM_OWNERS } from '../../param-owners';
 import {
   detectDataModelRoot,
@@ -44,39 +45,10 @@ function diagnoseGaps(
   };
 }
 
-async function verifyHeal(ctx: OnuVerifyHealCtx): Promise<OnuModelProvisionResult> {
-  const found = resolveGenericServiceWan(ctx.device, {
-    mgmtIp: ctx.mgmtIp,
-    expectedIp: ctx.wan.wanIp,
-    expectedVlanId: ctx.wan.wanVlan,
-  });
-  if (!found || found.isMgmt) {
-    return {
-      ok: false,
-      notes: [
-        'generic-huawei: sin WAN de servicio — hace falta modelo library o WAN ya existente',
-      ],
-      progress: { currentStepId: 'apply_service_spv', completed: [], notes: [] },
-    };
-  }
-  const msg = await applyGenericServiceSpv({
-    client: ctx.client,
-    deviceId: ctx.deviceId,
-    device: ctx.device,
-    sn: ctx.sn,
-    wan: ctx.wan,
-    found,
-    owners: ACS_HGU_PARAM_OWNERS,
-  });
-  return {
-    ok: true,
-    notes: ['verify generic-huawei', msg],
-    progress: {
-      currentStepId: 'apply_service_spv',
-      completed: ['apply_service_spv'],
-      notes: [msg],
-    },
-  };
+async function verifyHeal(
+  ctx: OnuVerifyHealCtx,
+): Promise<OnuModelProvisionResult> {
+  return ensureGenericServiceWan(ctx, 'huawei_hgu');
 }
 
 export const genericHuaweiDriver: OnuDriver = {
@@ -92,14 +64,9 @@ export const genericHuaweiDriver: OnuDriver = {
     return vendorFromSn(ctx.sn) === 'huawei';
   },
   async ensureServiceWan(
-    _ctx: OnuModelProvisionCtx,
+    ctx: OnuModelProvisionCtx,
   ): Promise<OnuModelProvisionResult> {
-    return {
-      ok: false,
-      notes: [
-        'generic-huawei: no crea WAN de servicio — hace falta modelo library o WAN ya existente',
-      ],
-    };
+    return ensureGenericServiceWan(ctx, 'huawei_hgu');
   },
   diagnoseGaps,
   verifyHeal,

@@ -73,8 +73,16 @@ export {
 } from './infra/resolve-service-wan-for-verify';
 export { genericFiberhomeDriver } from './models/generic-fiberhome';
 export { genericHuaweiDriver } from './models/generic-huawei';
+export { genericTendaDriver } from './models/generic-tenda';
 export { genericUnknownDriver } from './models/generic-unknown';
 export { genericZteDriver } from './models/generic-zte';
+export {
+  classifyGenericFamily,
+  inspectGenericPlaybook,
+  isZteBridgeModel,
+  isZteHguModel,
+} from './infra/inspect-generic-playbook';
+export { ensureGenericServiceWan } from './infra/ensure-generic-service-wan';
 export { assessServiceRoute } from './models/generic-zte';
 export {
   HG8145X6_INFORM_INTERVAL_S,

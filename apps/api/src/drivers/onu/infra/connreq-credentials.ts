@@ -77,7 +77,7 @@ export function connreqCredentialsTrusted(opts: {
  * mande el ACS espera al siguiente Inform. Las ONUs migradas llegan con 43200
  * (12 h), que convierte cualquier reintento en una avería de medio día.
  */
-export const CONN_REQ_INFORM_INTERVAL_S = 300;
+export const CONN_REQ_INFORM_INTERVAL_S = 120;
 
 /** Sólo se acorta; si el CPE ya informa seguido, no se toca. */
 export function shouldShortenInformInterval(

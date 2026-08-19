@@ -894,6 +894,16 @@ describe('resolveOnuDriver (library → brand generic)', () => {
     ).toBe('tenda-hg9');
   });
 
+  it('Tenda modelo distinto de HG9 → generic-tenda', () => {
+    expect(
+      resolveOnuDriver({
+        sn: 'TDTC353E9A98',
+        onuType: 'HG15',
+        acsModel: 'HG15',
+      })?.id,
+    ).toBe('generic-tenda');
+  });
+
   it('resolveOnuDriverForModel preview por vendor+modelo', () => {
     expect(
       resolveOnuDriverForModel({

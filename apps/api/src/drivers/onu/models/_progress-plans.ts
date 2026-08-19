@@ -31,21 +31,31 @@ export const FIBERHOME_HG6143D_PROGRESS_PLAN: OnuProgressStepDef[] = [
 ];
 
 export const GENERIC_HUAWEI_PROGRESS_PLAN: OnuProgressStepDef[] = [
+  ACS_ENSURE_SERVICE_STEP,
   ACS_SPV_STEP,
   ...netStepsFromVerifyChecks(TR098_VERIFY_CHECKS),
 ];
 
 export const GENERIC_FIBERHOME_PROGRESS_PLAN: OnuProgressStepDef[] = [
+  ACS_ENSURE_SERVICE_STEP,
   ACS_SPV_STEP,
   ...netStepsFromVerifyChecks(TR098_VERIFY_CHECKS),
 ];
 
 export const GENERIC_ZTE_PROGRESS_PLAN: OnuProgressStepDef[] = [
+  ACS_ENSURE_SERVICE_STEP,
   ACS_SPV_STEP,
   ...netStepsFromVerifyChecks(DEFAULT_VERIFY_CHECKS),
 ];
 
 export const GENERIC_UNKNOWN_PROGRESS_PLAN: OnuProgressStepDef[] = [
+  ACS_ENSURE_SERVICE_STEP,
   ACS_SPV_STEP,
   ...netStepsFromVerifyChecks(DEFAULT_VERIFY_CHECKS),
+];
+
+export const GENERIC_TENDA_PROGRESS_PLAN: OnuProgressStepDef[] = [
+  ACS_ENSURE_SERVICE_STEP,
+  ACS_SPV_STEP,
+  ...netStepsFromVerifyChecks(TR098_VERIFY_CHECKS),
 ];

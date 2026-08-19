@@ -1,16 +1,12 @@
 /**
- * Modelo genérico FiberHome — fallback. Solo SPV sobre WAN existente.
+ * Genérico Tenda (SN TDTC) cuando el modelo no es HG9.
+ * ACS crea/cura WAN; OMCI no pisa VLAN de servicio.
  */
-import { vendorFromSn } from '../../infra/vendor-from-sn';
+import { isTendaSn, matchesTendaHg9 } from '../tenda-hg9/match';
 import { resolveGenericServiceWan } from '../../infra/resolve-service-wan';
 import { applyGenericServiceSpv } from '../../infra/service-spv';
 import { ensureGenericServiceWan } from '../../infra/ensure-generic-service-wan';
 import { ACS_HGU_PARAM_OWNERS } from '../../param-owners';
-import {
-  detectDataModelRoot,
-  shouldWriteConnReqCredentials,
-} from '../../infra/connreq-credentials';
-import { genieGet, strVal } from '../../../../topology/shared/genieacs-nbi.client';
 import type {
   ApplyServiceSpvParams,
   OnuDriver,
@@ -23,48 +19,37 @@ import type {
   ResolveServiceWanOpts,
 } from '../../types';
 import { TR098_VERIFY_CHECKS } from '../../types';
-import { GENERIC_FIBERHOME_PROGRESS_PLAN } from '../_progress-plans';
+import { GENERIC_TENDA_PROGRESS_PLAN } from '../_progress-plans';
 import type { WanConnectionRef } from '../../infra/wan-datamodel';
-
-function diagnoseGaps(
-  device: Record<string, unknown>,
-  _wan: OnuModelProvisionWanPlan,
-  opts?: { reachable?: boolean },
-): OnuHealGaps {
-  const root = detectDataModelRoot(device);
-  const user = strVal(
-    genieGet(device, `${root}.ManagementServer.ConnectionRequestUsername`),
-  );
-  return {
-    connreqOurs: !shouldWriteConnReqCredentials(user),
-    reachable: opts?.reachable,
-  };
-}
 
 async function verifyHeal(
   ctx: OnuVerifyHealCtx,
 ): Promise<OnuModelProvisionResult> {
-  return ensureGenericServiceWan(ctx, 'fiberhome_hgu');
+  return ensureGenericServiceWan(ctx, 'tenda');
 }
 
-export const genericFiberhomeDriver: OnuDriver = {
-  id: 'generic-fiberhome',
-  brand: 'fiberhome',
+export const genericTendaDriver: OnuDriver = {
+  id: 'generic-tenda',
+  brand: 'unknown',
   omciPlan: { serviceWanOmci: 'skip' },
   skipOmciServiceWan: true,
   paramOwners: ACS_HGU_PARAM_OWNERS,
   verifyChecks: TR098_VERIFY_CHECKS,
-  progressPlan: GENERIC_FIBERHOME_PROGRESS_PLAN,
+  progressPlan: GENERIC_TENDA_PROGRESS_PLAN,
   supportsTr181RouteHeal: false,
   matches(ctx: OnuModelProvisionMatchCtx): boolean {
-    return vendorFromSn(ctx.sn) === 'fiberhome';
+    return isTendaSn(ctx.sn) && !matchesTendaHg9(ctx);
   },
-  async ensureServiceWan(
-    ctx: OnuModelProvisionCtx,
-  ): Promise<OnuModelProvisionResult> {
-    return ensureGenericServiceWan(ctx, 'fiberhome_hgu');
+  ensureServiceWan(ctx: OnuModelProvisionCtx): Promise<OnuModelProvisionResult> {
+    return ensureGenericServiceWan(ctx, 'tenda');
   },
-  diagnoseGaps,
+  diagnoseGaps(
+    _device: Record<string, unknown>,
+    _wan: OnuModelProvisionWanPlan,
+    opts?: { reachable?: boolean },
+  ): OnuHealGaps {
+    return { reachable: opts?.reachable };
+  },
   verifyHeal,
   healOne: verifyHeal,
   resolveServiceWan(

@@ -23,6 +23,8 @@ import {
 import { IpPoolService } from '../routers/ip-pool.service';
 import { ServiceVlanService } from '../olts/service-vlan.service';
 import { OnuCatalogAdminService } from './onu-catalog-admin.service';
+import { OnuAcsDriverCatalogService } from './onu-acs-driver-catalog.service';
+import { isZteHguModel } from '../../drivers/onu/infra/inspect-generic-playbook';
 import { HuaweiOltClient } from '../../drivers/olt/huawei/huawei-olt.client';
 import { resolveOltCli, type ManagedOltCliClient } from '../../drivers/olt';
 import {
@@ -216,6 +218,7 @@ export class OnuTr069ConfigService {
     private readonly ipPools: IpPoolService,
     private readonly serviceVlans: ServiceVlanService,
     private readonly onuCatalog: OnuCatalogAdminService,
+    private readonly acsDrivers: OnuAcsDriverCatalogService,
     private readonly zteC3xxOlt: ZteC3xxOltClient,
     private readonly zteTitanOlt: ZteTitanOltClient,
     private readonly huaweiOlt: HuaweiOltClient,
@@ -2399,7 +2402,11 @@ export class OnuTr069ConfigService {
           onuType: onu.onuType,
           acsModel: null,
         });
-        if (driverSkipsOmciServiceWan(drv) && again.omciOk !== false) {
+        if (
+          (driverSkipsOmciServiceWan(drv) ||
+            isZteHguModel(onu.onuType, null)) &&
+          again.omciOk !== false
+        ) {
           const rb = await this.rebootOnuWithCap(
             schema,
             { id: onu.id, oltId: onu.oltId, onuIf: onu.onuIf },
@@ -3315,10 +3322,10 @@ export class OnuTr069ConfigService {
           expectedVlanId: wan.wanVlan,
         }) ?? null;
       if (!found || found.isMgmt) {
-        // Solo library crea WAN; generic de marca no.
-        const library = resolveOnuModelHandler(matchCtx);
-        if (library) {
-          const result = await library.ensureServiceWan(
+        await this.acsDrivers.seedLibraries(schema).catch(() => undefined);
+                const creator = driver ?? resolveOnuModelHandler(matchCtx);
+        if (creator?.ensureServiceWan) {
+          const result = await creator.ensureServiceWan(
             this.buildModelProvisionCtx({
               schema,
               onuId: onu.id,
@@ -3335,11 +3342,11 @@ export class OnuTr069ConfigService {
               explicit: opts?.explicit ?? false,
             }),
           );
-          const msg = result.notes.join(' · ') || library.id;
+          const msg = result.notes.join(' · ') || creator.id;
           return withNotes(
             result.ok
-              ? `driver ${library.id}: ${msg}`
-              : `driver ${library.id} falló: ${msg}`,
+              ? `driver ${creator.id}: ${msg}`
+              : `driver ${creator.id} falló: ${msg}`,
           );
         }
         if (!found) {

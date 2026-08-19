@@ -7,8 +7,10 @@ import { vendorFromSn } from './infra/vendor-from-sn';
 import { fiberhomeHg6143dHandler } from './models/fiberhome-hg6143d';
 import { genericFiberhomeDriver } from './models/generic-fiberhome';
 import { genericHuaweiDriver } from './models/generic-huawei';
+import { genericTendaDriver } from './models/generic-tenda';
 import { genericUnknownDriver } from './models/generic-unknown';
 import { genericZteDriver } from './models/generic-zte';
+import { isTendaSn } from './models/tenda-hg9/match';
 import { huaweiHg8145x6Handler } from './models/huawei-hg8145x6';
 import { huaweiHguVeipHandler } from './models/huawei-hgu-veip';
 import { tendaHg9Handler } from './models/tenda-hg9';
@@ -28,6 +30,7 @@ export const ONU_GENERIC_DRIVERS: OnuDriver[] = [
   genericHuaweiDriver,
   genericZteDriver,
   genericFiberhomeDriver,
+  genericTendaDriver,
   genericUnknownDriver,
 ];
 
@@ -67,6 +70,7 @@ export function resolveOnuDriver(
   if (vendor === 'huawei') return genericHuaweiDriver;
   if (vendor === 'zte') return genericZteDriver;
   if (vendor === 'fiberhome') return genericFiberhomeDriver;
+  if (isTendaSn(sn)) return genericTendaDriver;
   return genericUnknownDriver;
 }
 

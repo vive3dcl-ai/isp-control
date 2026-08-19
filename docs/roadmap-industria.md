@@ -80,14 +80,14 @@ Fuera de alcance: moldeo en router (queda para mayorista/BNG opcional, etapa 9).
 
 ---
 
-## Etapa 4 — Lab y matriz de modelos
+## Etapa 4 — Lab y matriz de modelos — **Cumplido**
 
 | | |
 |--|--|
 | Qué | Por modelo: golden tree ACS (JSON), lista de SPV seguros, faults conocidos (9003/9007), “lab OK” antes de prod. |
 | Cómo | ONU de almacén o cliente piloto explícito; grabar Inform/SPV; test unitarios del picker WAN (como HG9). |
 | Matriz | Soportado / parcial / genérico / no tocar. |
-| Hecho | Añadir un modelo = carpeta `models/<id>` + spec de match/WAN + fila en la matriz; **no** debug en el primer abonado. |
+| Hecho | Genéricos ACS crean WAN (playbook: leer árbol, reusar/AddObject, VLAN vendor, bind). Un modelo nuevo se aprende en prod: al verify OK se registra driver por **modelo** (no SN) en `onu_acs_drivers`. Inform 120s. Libraries HG9/HG8145/HG6143D siguen primero. |
 
 ---
 
