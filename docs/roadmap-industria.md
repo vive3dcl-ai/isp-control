@@ -19,9 +19,9 @@ Estado actual (aprovechar, no reinventar):
 
 ---
 
-## Paso 0 — Deuda operativa (estabilizar lo que ya existe)
+## Paso 0 — Deuda operativa (estabilizar lo que ya existe) — **Cumplido**
 
-Hacer el producto **predecible** antes de sumar capas.
+Hacer el producto **predecible** antes de sumar capas. Cerrado en código: Huérfanas no listan SN ya en Conectadas; denegar guarda `onuSnKey` y el purge no borra `manual !== false`; heal HG9/HG8145 hace SPV si Inform vive y el reboot OMCI del poller usa `force: false`.
 
 | Ítem | Qué | Hecho cuando |
 |------|-----|----------------|

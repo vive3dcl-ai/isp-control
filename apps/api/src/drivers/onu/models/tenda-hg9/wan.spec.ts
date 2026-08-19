@@ -170,6 +170,15 @@ describe('tenda-hg9 wan selection', () => {
     ).toBe(false);
   });
 
+  it('WAN con IP de gestión en WCD.3 no es ok', () => {
+    expect(
+      isTendaServiceWanApplied(
+        tendaDevice({ wcd3Ip: '30.30.20.186' }),
+        wan,
+      ),
+    ).toBe(false);
+  });
+
   it('SPV no escribe ServiceType ni X_TDTC_ServiceList=INTERNET', () => {
     const conns = listTendaWanIpConnections(tendaDevice());
     const target = findTendaServiceWan(conns, { expectedVlan: 703 })!;

@@ -32,6 +32,7 @@ export {
 export {
   TENDA_HG9_PROGRESS_PLAN,
   diagnoseGapsTendaHg9,
+  pickTendaHg9VerifyAction,
   verifyHealTendaHg9,
 } from './verify';
 export {

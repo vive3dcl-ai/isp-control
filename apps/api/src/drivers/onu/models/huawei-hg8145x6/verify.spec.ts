@@ -179,6 +179,7 @@ describe('pickHg8145VerifyStep', () => {
       }),
     );
     expect(step).toBe('ensure_service_spv');
+    expect(step).not.toBe('ensure_omci_tr069');
   });
 
   it('WAN mal configurada solo SPV', () => {

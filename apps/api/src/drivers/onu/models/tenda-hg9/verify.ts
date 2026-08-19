@@ -49,13 +49,27 @@ export function diagnoseGapsTendaHg9(
   };
 }
 
+export type TendaHg9VerifyAction = 'noop' | 'omci' | 'spv';
+
+/**
+ * Heal HG9: Inform vivo + WAN mal → solo SPV (OMCI extra pisa la IP ACS).
+ * ConnReq no forma parte del veredicto WAN.
+ */
+export function pickTendaHg9VerifyAction(
+  gaps: OnuHealGaps,
+): TendaHg9VerifyAction {
+  if (gaps.serviceWanOk) return 'noop';
+  if (gaps.informAlive) return 'spv';
+  if (gaps.reachable === false && gaps.informAlive === false) return 'omci';
+  return 'spv';
+}
+
 export async function verifyHealTendaHg9(
   ctx: OnuVerifyHealCtx,
 ): Promise<OnuModelProvisionResult> {
-  const { gaps } = ctx;
+  const action = pickTendaHg9VerifyAction(ctx.gaps);
 
-  // Si la WAN de servicio ya está bien, no tocar OMCI (pisa la IP ACS).
-  if (gaps.serviceWanOk) {
+  if (action === 'noop') {
     return {
       ok: true,
       notes: ['verify tenda-hg9: WAN servicio ya OK'],
@@ -67,16 +81,12 @@ export async function verifyHealTendaHg9(
     };
   }
 
-  // Agente TR-069 muerto: OMCI + reboot antes de SPV.
-  if (
-    gaps.reachable === false &&
-    gaps.informAlive === false &&
-    ctx.ensureOmciTr069
-  ) {
+  // Agente TR-069 muerto: OMCI + reboot (tope del poller: force false).
+  if (action === 'omci' && ctx.ensureOmciTr069) {
     const omci = await ctx.ensureOmciTr069();
     const notes = ['verify tenda-hg9 → ensure_omci_tr069', ...omci.notes];
     if (omci.ok) {
-      const rb = await ctx.reboot({ force: ctx.explicit });
+      const rb = await ctx.reboot({ force: false });
       notes.push(rb.note);
     }
     return {

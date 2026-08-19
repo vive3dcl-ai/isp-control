@@ -44,10 +44,11 @@ import {
   loadAcsModelsBySerial,
 } from './onu-orphan-enrich.util';
 import { shouldApplyAcsModelToOnuType } from './onu-acs-model-reconcile.util';
-
-function onuSnKey(sn: string | null | undefined): string {
-  return (sn ?? '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
-}
+import {
+  onuSnKey,
+  shouldPurgeDeniedAlreadyConnected,
+  uncfgHideReason,
+} from './onu-uncfg-visibility.util';
 
 function isAdminDisabled(state: string | null | undefined): boolean {
   return /disable/i.test(state ?? '');
@@ -729,7 +730,6 @@ export class OnuConnectedService {
       .where('o.sn IS NOT NULL')
       .andWhere("o.sn <> ''")
       .getMany();
-    const knownByOltSn = new Map<string, Set<string>>();
     const knownBySn = new Set<string>();
     const onuTypeBySn = new Map<string, string>();
     const suspendedKeys = new Set<string>();
@@ -737,9 +737,6 @@ export class OnuConnectedService {
       const sn = onuSnKey(r.sn);
       if (!sn) continue;
       knownBySn.add(sn);
-      const set = knownByOltSn.get(r.oltId) ?? new Set<string>();
-      set.add(sn);
-      knownByOltSn.set(r.oltId, set);
       const t = r.onuType?.trim();
       if (t && !onuTypeBySn.has(sn)) onuTypeBySn.set(sn, t);
       if (isAdminDisabled(r.adminState)) suspendedKeys.add(sn);
@@ -779,23 +776,23 @@ export class OnuConnectedService {
           });
           continue;
         }
-        const knownOnThisOlt = knownByOltSn.get(olt.id) ?? new Set<string>();
         for (const u of result.onus) {
           rawUncfg += 1;
           const sn = onuSnKey(u.sn);
           if (!sn) continue;
-          // Denylist only — OLT uncfg is source of truth (even if SN still in DB).
-          if (deniedSn.has(sn)) {
+          const hide = uncfgHideReason(sn, {
+            deniedSn,
+            connectedSn: knownBySn,
+          });
+          if (hide === 'denied') {
             hiddenDenied += 1;
             continue;
           }
-          // Admin-disabled in Conectadas (shutdown) often reappears as uncfg.
-          if (suspendedKeys.has(sn)) {
-            hiddenSuspended += 1;
+          if (hide === 'connected') {
+            alsoInConnected += 1;
+            if (suspendedKeys.has(sn)) hiddenSuspended += 1;
             continue;
           }
-          const inConnected = knownOnThisOlt.has(sn);
-          if (inConnected) alsoInConnected += 1;
           onus.push({
             oltId: olt.id,
             oltName: olt.name,
@@ -807,7 +804,7 @@ export class OnuConnectedService {
             board: u.board,
             port: u.port,
             suggestedOnuId: u.suggestedOnuId,
-            inConnected,
+            inConnected: false,
             model: null,
             modelSource: null,
             driverId: null,
@@ -1004,7 +1001,7 @@ export class OnuConnectedService {
     },
   ) {
     const schema = this.requireSchema(user);
-    const sn = body.sn?.trim().toUpperCase();
+    const sn = onuSnKey(body.sn);
     if (!sn) throw new BadRequestException('sn requerido');
 
     const onuRepo = await this.tenantConnections.getOnuRepository(schema);
@@ -1579,7 +1576,7 @@ export class OnuConnectedService {
       note: string | null;
     },
   ) {
-    const sn = data.sn.toUpperCase();
+    const sn = onuSnKey(data.sn);
     let row = await deniedRepo.findOne({ where: { sn } });
     const now = new Date();
     if (!row) {
@@ -1629,12 +1626,9 @@ export class OnuConnectedService {
     const deniedRows = await deniedRepo.find();
     let removed = 0;
     for (const d of deniedRows) {
-      // Only auto-blocks. If `manual` is null/undefined, keep the row.
-      if (d.manual !== false) continue;
-      if (knownBySn.has(onuSnKey(d.sn))) {
-        await deniedRepo.remove(d);
-        removed += 1;
-      }
+      if (!shouldPurgeDeniedAlreadyConnected(d, knownBySn)) continue;
+      await deniedRepo.remove(d);
+      removed += 1;
     }
     return removed;
   }

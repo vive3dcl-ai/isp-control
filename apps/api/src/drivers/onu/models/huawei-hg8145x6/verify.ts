@@ -179,7 +179,7 @@ export async function verifyHealHg8145x6(
 
   switch (step) {
     case 'ensure_omci_tr069': {
-      const r = await ensureOmciTr069(ctx);
+      const r = await ensureOmciTr069(ctx, { force: false });
       return withProgress({ ok: r.ok, notes: [head, ...r.notes] });
     }
     case 'ensure_connreq': {

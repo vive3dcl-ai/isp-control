@@ -321,6 +321,7 @@ export async function ensureInform(
  */
 export async function ensureOmciTr069(
   ctx: OnuModelProvisionCtx,
+  opts?: { force?: boolean },
 ): Promise<Hg8145StepResult> {
   if (!ctx.ensureOmciTr069) {
     return {
@@ -336,7 +337,9 @@ export async function ensureOmciTr069(
     if (!r.ok) {
       return { ok: false, notes: ['ensure_omci_tr069', ...notes], halt: true };
     }
-    const rb = await ctx.reboot({ force: ctx.explicit });
+    const rb = await ctx.reboot({
+      force: opts?.force ?? ctx.explicit,
+    });
     notes.push(rb.note);
     return {
       ok: rb.ok || !!rb.skipped,
