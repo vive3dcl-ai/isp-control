@@ -36,9 +36,9 @@ Despliegue: API + web, **sin migraciones**.
 
 ---
 
-## Etapa 1 — Un estado de servicio (contrato manda)
+## Etapa 1 — Un estado de servicio (contrato manda) — **Cumplido**
 
-Hoy cada botón (suspender OLT, denegar, cortar) cuenta una historia distinta.
+Hoy cada botón (suspender OLT, denegar, cortar) cuenta una historia distinta. Cerrado en código (sin columna nueva): el estado canónico se deriva de CRM + `adminState` + denylist; el panel muestra desvío (p. ej. CRM activo + OLT disable); **Reconciliar OLT** alinea la red al contrato. Baja `no onu` solo con confirmación en Reconciliar.
 
 | | |
 |--|--|

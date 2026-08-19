@@ -66,6 +66,35 @@ export interface ServicePlan {
   updatedAt: string
 }
 
+export type CanonicalServiceState =
+  | 'active'
+  | 'suspended'
+  | 'denied'
+  | 'disabled_olt'
+  | 'pending_auth'
+
+export type ServiceDriftCode =
+  | 'crm_active_olt_disabled'
+  | 'crm_suspended_olt_enabled'
+  | 'crm_ended_onu_present'
+  | 'crm_active_sn_denied'
+
+export type ServiceStateView = {
+  canonical: CanonicalServiceState
+  desired: ClientServiceStatus | null
+  oltAdmin: 'enable' | 'disable' | 'unknown'
+  enforcement: 'olt_shutdown' | 'portal' | 'none'
+  drift: { code: ServiceDriftCode; message: string } | null
+}
+
+export const canonicalServiceLabel: Record<CanonicalServiceState, string> = {
+  active: 'Activo',
+  suspended: 'Suspendido',
+  denied: 'Denegado',
+  disabled_olt: 'Disable OLT',
+  pending_auth: 'Pendiente de autorizar',
+}
+
 export interface ClientService {
   id: string
   clientId: string
@@ -76,6 +105,7 @@ export interface ClientService {
   activeFrom: string | null
   activeTo: string | null
   status: ClientServiceStatus
+  serviceState?: ServiceStateView | null
   street: string
   city: string
   zipCode: string

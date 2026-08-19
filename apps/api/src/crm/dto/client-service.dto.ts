@@ -1,4 +1,5 @@
 import {
+  IsBoolean,
   IsIn,
   IsInt,
   IsNumber,
@@ -160,4 +161,11 @@ export class UpdateClientServiceDto {
   @Min(-180)
   @Max(180)
   longitude?: number | null;
+}
+
+export class ReconcileOltDto {
+  /** Si el contrato está `ended`, borra la ONU de la OLT (`no onu`). */
+  @IsOptional()
+  @IsBoolean()
+  removeOnu?: boolean;
 }

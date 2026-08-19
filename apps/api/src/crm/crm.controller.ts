@@ -35,6 +35,7 @@ import {
 } from './dto/speed-profile.dto';
 import {
   CreateClientServiceDto,
+  ReconcileOltDto,
   UpdateClientServiceDto,
 } from './dto/client-service.dto';
 import { CreateZoneDto, UpdateZoneDto } from './dto/zone.dto';
@@ -335,6 +336,16 @@ export class CrmController {
     @Param('id', ParseUUIDPipe) id: string,
   ) {
     return this.crm.setServiceStatus(user, id, 'active');
+  }
+
+  @Post('client-services/:id/reconcile-olt')
+  @TenantRoles(...CRM_WRITE_ROLES)
+  reconcileOlt(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ReconcileOltDto,
+  ) {
+    return this.crm.reconcileOlt(user, id, dto);
   }
 
   /** One-shot: sincroniza nombre compuesto ONU en OLT (solo migrados, una vez). */

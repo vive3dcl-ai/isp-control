@@ -8,7 +8,8 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { ILike, In } from 'typeorm';
+import { InjectRepository } from '@nestjs/typeorm';
+import { ILike, In, Repository } from 'typeorm';
 import type { AuthUser } from '../../auth/auth.types';
 import { TenantConnectionService } from '../../database/tenant-connection.service';
 import {
@@ -44,11 +45,18 @@ import {
   loadAcsModelsBySerial,
 } from './onu-orphan-enrich.util';
 import { shouldApplyAcsModelToOnuType } from './onu-acs-model-reconcile.util';
+import { Tenant } from '../../tenants/entities/tenant.entity';
 import {
   onuSnKey,
   shouldPurgeDeniedAlreadyConnected,
   uncfgHideReason,
 } from './onu-uncfg-visibility.util';
+import {
+  deriveServiceState,
+  pickLinkedService,
+  type CrmServiceDesired,
+  type ServiceStateView,
+} from './onu-service-state.util';
 
 function isAdminDisabled(state: string | null | undefined): boolean {
   return /disable/i.test(state ?? '');
@@ -102,6 +110,8 @@ export class OnuConnectedService {
     private readonly huaweiSnmp: HuaweiOltSnmpClient,
     private readonly onuCatalog: OnuCatalogAdminService,
     private readonly onuTypeSync: OnuTypeOltSyncService,
+    @InjectRepository(Tenant)
+    private readonly tenants: Repository<Tenant>,
   ) {}
 
   private recentlyDeletedKey(schema: string, kind: 'sn' | 'if', value: string) {
@@ -310,7 +320,60 @@ export class OnuConnectedService {
     return `${d} days, ${h} hours, ${m} minutes, ${s} seconds`;
   }
 
-  private serializeOnu(row: Onu, oltName: string) {
+  private async tenantUsesPortal(user: AuthUser): Promise<boolean> {
+    if (!user.tenantId) return false;
+    const tenant = await this.tenants.findOne({
+      where: { id: user.tenantId },
+    });
+    return !!tenant?.suspensionPortalEnabled;
+  }
+
+  private async serviceStatesByOnuId(
+    schema: string,
+    onus: Onu[],
+    portal: boolean,
+  ): Promise<Map<string, ServiceStateView>> {
+    const out = new Map<string, ServiceStateView>();
+    if (!onus.length) return out;
+    const serviceRepo =
+      await this.tenantConnections.getClientServiceRepository(schema);
+    const services = await serviceRepo.find({
+      where: { onuId: In(onus.map((o) => o.id)) },
+    });
+    const deniedRepo =
+      await this.tenantConnections.getOnuDeniedRepository(schema);
+    const deniedSn = new Set(
+      (await deniedRepo.find()).map((d) => onuSnKey(d.sn)),
+    );
+    const byOnu = new Map<string, typeof services>();
+    for (const s of services) {
+      if (!s.onuId) continue;
+      const list = byOnu.get(s.onuId) ?? [];
+      list.push(s);
+      byOnu.set(s.onuId, list);
+    }
+    for (const onu of onus) {
+      const linked = pickLinkedService(byOnu.get(onu.id) ?? []);
+      out.set(
+        onu.id,
+        deriveServiceState({
+          crmStatus: (linked?.status as CrmServiceDesired) ?? null,
+          adminState: onu.adminState,
+          denied: deniedSn.has(onuSnKey(onu.sn)),
+          inUncfg: false,
+          inInventory: true,
+          portalSuspension: portal,
+        }),
+      );
+    }
+    return out;
+  }
+
+  private serializeOnu(
+    row: Onu,
+    oltName: string,
+    serviceState?: ServiceStateView | null,
+  ) {
     return {
       id: row.id,
       oltId: row.oltId,
@@ -352,6 +415,7 @@ export class OnuConnectedService {
       verifyCheckedAt: row.verifyCheckedAt?.toISOString() ?? null,
       verifyAttempt: row.verifyAttempt ?? 0,
       verifyDetail: row.verifyDetail ?? {},
+      serviceState: serviceState ?? null,
     };
   }
 
@@ -1639,8 +1703,14 @@ export class OnuConnectedService {
     const oltName = new Map(olts.map((o) => [o.id, o.name]));
     const onuRepo = await this.tenantConnections.getOnuRepository(schema);
     const rows = await onuRepo.find({ order: { onuIf: 'ASC' } });
+    const portal = await this.tenantUsesPortal(user);
+    const states = await this.serviceStatesByOnuId(schema, rows, portal);
     const onus = rows.map((r) =>
-      this.serializeOnu(r, oltName.get(r.oltId) ?? 'OLT'),
+      this.serializeOnu(
+        r,
+        oltName.get(r.oltId) ?? 'OLT',
+        states.get(r.id) ?? null,
+      ),
     );
     return {
       onus,
@@ -2443,7 +2513,14 @@ export class OnuConnectedService {
       }
     }
 
-    const persisted = row ? this.serializeOnu(row, olt.name) : base;
+    const portal = await this.tenantUsesPortal(user);
+    const serviceState = row
+      ? (await this.serviceStatesByOnuId(schema, [row], portal)).get(row.id) ??
+        null
+      : null;
+    const persisted = row
+      ? this.serializeOnu(row, olt.name, serviceState)
+      : base;
 
     let tr069ProfileName: string | null = null;
     const profileId =
@@ -2479,7 +2556,7 @@ export class OnuConnectedService {
     return {
       probedAt: live?.probedAt ?? row?.lastProbedAt?.toISOString() ?? null,
       fromDatabase: !!row,
-      client,
+      client: client ? { ...client, serviceState } : null,
       onu: {
         ...persisted,
         ...(o
@@ -2549,8 +2626,8 @@ export class OnuConnectedService {
       .createQueryBuilder('s')
       .leftJoinAndSelect('s.client', 'c')
       .where('s.onu_id = :onuDbId', { onuDbId })
-      .andWhere("s.status != 'ended'")
-      .orderBy('s.createdAt', 'DESC')
+      .orderBy(`CASE WHEN s.status = 'ended' THEN 1 ELSE 0 END`, 'ASC')
+      .addOrderBy('s.createdAt', 'DESC')
       .getOne();
     if (!service?.client) return null;
 
@@ -2562,6 +2639,7 @@ export class OnuConnectedService {
       label: person || c.companyName || 'Cliente',
       serviceName: service.name ?? null,
       serviceStatus: service.status ?? null,
+      serviceState: null as ServiceStateView | null,
     };
   }
 

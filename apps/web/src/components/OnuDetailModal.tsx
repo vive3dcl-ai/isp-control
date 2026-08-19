@@ -6,6 +6,7 @@ import { apiFetch } from '../lib/api'
 import { useAuth } from '../auth/AuthContext'
 import { findNapForClient, loadMapDrafts } from '../lib/map-elements'
 import type { NetworkMapLocations } from '../lib/network-map'
+import { canonicalServiceLabel } from '../lib/crm'
 import {
   formatSignal,
   type ConnectedOnuDetailResponse,
@@ -842,6 +843,31 @@ export function OnuDetailModal({
                       )}
                     </dd>
                   </div>
+                  {(() => {
+                    const st =
+                      o.serviceState ??
+                      detailQuery.data?.client?.serviceState ??
+                      null
+                    if (!st) return null
+                    return (
+                      <div className="flex gap-2">
+                        <dt className="w-40 shrink-0 text-[var(--text-muted)]">
+                          Estado servicio
+                        </dt>
+                        <dd className="min-w-0">
+                          {canonicalServiceLabel[st.canonical]}
+                          {st.drift ? (
+                            <span
+                              className="mt-0.5 block text-xs text-[var(--danger)]"
+                              title={st.drift.code}
+                            >
+                              {st.drift.message}
+                            </span>
+                          ) : null}
+                        </dd>
+                      </div>
+                    )
+                  })()}
                   <Row
                     label="Fecha autorización"
                     value={o.authDate ?? 'Pendiente'}

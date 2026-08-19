@@ -8,7 +8,7 @@ import {
   forwardRef,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import type { AuthUser } from '../auth/auth.types';
 import { TenantConnectionService } from '../database/tenant-connection.service';
 import { TopologyService } from '../topology/topology.service';
@@ -45,6 +45,12 @@ import { BillingService } from '../billing/billing.service';
 import { InventoryService } from '../inventory/inventory.service';
 import { ClientPortalService } from '../client-portal/client-portal.service';
 import type { Client } from './entities/client.entity';
+import { onuSnKey } from '../topology/onus/onu-uncfg-visibility.util';
+import {
+  deriveServiceState,
+  type CrmServiceDesired,
+  type ServiceStateView,
+} from '../topology/onus/onu-service-state.util';
 
 @Injectable()
 export class CrmService {
@@ -239,6 +245,50 @@ export class CrmService {
     };
   }
 
+  private async portalEnabled(user: AuthUser): Promise<boolean> {
+    if (!user.tenantId) return false;
+    const tenant = await this.tenants.findOne({
+      where: { id: user.tenantId },
+    });
+    return !!tenant?.suspensionPortalEnabled;
+  }
+
+  private async decorateClientServices(
+    user: AuthUser,
+    services: ClientService[],
+  ): Promise<Array<ClientService & { serviceState: ServiceStateView }>> {
+    const schema = this.requireSchema(user);
+    const portal = await this.portalEnabled(user);
+    const onuIds = [
+      ...new Set(
+        services.map((s) => s.onuId).filter((id): id is string => !!id),
+      ),
+    ];
+    const onuRepo = await this.tenantConnections.getOnuRepository(schema);
+    const onus = onuIds.length
+      ? await onuRepo.find({ where: { id: In(onuIds) } })
+      : [];
+    const onuById = new Map(onus.map((o) => [o.id, o]));
+    const deniedRepo =
+      await this.tenantConnections.getOnuDeniedRepository(schema);
+    const deniedSn = new Set(
+      (await deniedRepo.find()).map((d) => onuSnKey(d.sn)),
+    );
+
+    return services.map((s) => {
+      const onu = s.onuId ? onuById.get(s.onuId) : undefined;
+      const serviceState = deriveServiceState({
+        crmStatus: s.status as CrmServiceDesired,
+        adminState: onu?.adminState ?? null,
+        denied: onu?.sn ? deniedSn.has(onuSnKey(onu.sn)) : false,
+        inUncfg: false,
+        inInventory: !!onu,
+        portalSuspension: portal,
+      });
+      return Object.assign(s, { serviceState });
+    });
+  }
+
   private async requireClient(user: AuthUser, id: string) {
     const clients = await this.tenantConnections.getClientRepository(
       this.requireSchema(user),
@@ -259,7 +309,10 @@ export class CrmService {
       order: { createdAt: 'DESC' },
     });
 
-    return { ...client, services: clientServices };
+    return {
+      ...client,
+      services: await this.decorateClientServices(user, clientServices),
+    };
   }
 
   async createClient(user: AuthUser, dto: CreateClientDto) {
@@ -979,11 +1032,12 @@ export class CrmService {
     const repo = await this.tenantConnections.getClientServiceRepository(
       this.requireSchema(user),
     );
-    return repo.find({
+    const rows = await repo.find({
       where: { clientId },
       relations: { servicePlan: { speedProfile: true } },
       order: { createdAt: 'DESC' },
     });
+    return this.decorateClientServices(user, rows);
   }
 
   async createClientService(
@@ -1084,6 +1138,14 @@ export class CrmService {
     if (dto.price !== undefined) service.price = dto.price.toFixed(2);
     if (dto.activeFrom !== undefined) service.activeFrom = dto.activeFrom;
     if (dto.activeTo !== undefined) service.activeTo = dto.activeTo;
+    const nextStatus = dto.status as ClientServiceStatus | undefined;
+    if (
+      nextStatus &&
+      (nextStatus === 'active' || nextStatus === 'suspended') &&
+      nextStatus !== service.status
+    ) {
+      await this.applyNetworkServiceStatus(user, id, nextStatus);
+    }
     if (dto.status !== undefined)
       service.status = dto.status as ClientServiceStatus;
     if (dto.street !== undefined) service.street = dto.street.trim();
@@ -1102,10 +1164,6 @@ export class CrmService {
     id: string,
     status: ClientServiceStatus,
   ) {
-    if (status === 'suspended' || status === 'active') {
-      await this.applyNetworkServiceStatus(user, id, status);
-    }
-
     const patch: UpdateClientServiceDto = { status };
     if (status === 'ended') {
       patch.activeTo = new Date().toISOString().slice(0, 10);
@@ -1114,6 +1172,61 @@ export class CrmService {
       patch.activeTo = null;
     }
     return this.updateClientService(user, id, patch);
+  }
+
+  /**
+   * Alinea la OLT (o el portal) con el estado CRM del contrato.
+   * Baja (`ended`) solo borra la ONU si `removeOnu` es true.
+   */
+  async reconcileOlt(
+    user: AuthUser,
+    id: string,
+    opts?: { removeOnu?: boolean },
+  ) {
+    const schema = this.requireSchema(user);
+    const repo =
+      await this.tenantConnections.getClientServiceRepository(schema);
+    const service = await repo.findOne({
+      where: { id },
+      relations: { servicePlan: { speedProfile: true } },
+    });
+    if (!service) throw new NotFoundException('Client service not found');
+
+    if (service.status === 'ended') {
+      if (!opts?.removeOnu) {
+        const [decorated] = await this.decorateClientServices(user, [service]);
+        return {
+          ok: true,
+          skipped: true,
+          reason: 'ended_without_removeOnu',
+          service: decorated,
+        };
+      }
+      if (service.onuId) {
+        const onuRepo = await this.tenantConnections.getOnuRepository(schema);
+        const onu = await onuRepo.findOne({ where: { id: service.onuId } });
+        if (onu?.oltId && onu.onuIf) {
+          await this.onus.deleteOnu(user, onu.oltId, onu.onuIf);
+        }
+        service.onuId = null;
+        await repo.save(service);
+      }
+      const [decorated] = await this.decorateClientServices(user, [service]);
+      return { ok: true, removedOnu: true, service: decorated };
+    }
+
+    if (service.status === 'active' || service.status === 'suspended') {
+      await this.applyNetworkServiceStatus(user, id, service.status);
+    }
+
+    const fresh = await repo.findOne({
+      where: { id },
+      relations: { servicePlan: { speedProfile: true } },
+    });
+    const [decorated] = await this.decorateClientServices(user, [
+      fresh ?? service,
+    ]);
+    return { ok: true, service: decorated };
   }
 
   /**

@@ -5,6 +5,7 @@ import { useAuth } from '../auth/AuthContext'
 import { apiFetch } from '../lib/api'
 import {
   canWriteCrm,
+  canonicalServiceLabel,
   clientDisplayName,
   serviceStatusLabel,
   type Client,
@@ -107,6 +108,26 @@ export function ClientDetailPage() {
       void queryClient.invalidateQueries({ queryKey: ['app', 'clients', id] })
       void queryClient.invalidateQueries({ queryKey: ['app', 'dashboard'] })
     },
+  })
+
+  const reconcileMutation = useMutation({
+    mutationFn: ({
+      serviceId,
+      removeOnu,
+    }: {
+      serviceId: string
+      removeOnu?: boolean
+    }) =>
+      apiFetch(`/app/client-services/${serviceId}/reconcile-olt`, {
+        method: 'POST',
+        body: JSON.stringify({ removeOnu: !!removeOnu }),
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['app', 'clients', id] })
+      void queryClient.invalidateQueries({ queryKey: ['app', 'onus'] })
+      void queryClient.invalidateQueries({ queryKey: ['app', 'dashboard'] })
+    },
+    onError: (err: Error) => void alert(err.message),
   })
 
   const syncOnuNameMutation = useMutation({
@@ -394,6 +415,21 @@ export function ClientDetailPage() {
                               s.status as ClientServiceStatus
                             ] ?? s.status}
                           </span>
+                          {s.serviceState?.canonical &&
+                          s.serviceState.canonical !== s.status ? (
+                            <span className="text-[10px] text-[var(--text-muted)]">
+                              (
+                              {canonicalServiceLabel[s.serviceState.canonical]})
+                            </span>
+                          ) : null}
+                          {s.serviceState?.drift ? (
+                            <span
+                              className="rounded-full border border-[var(--danger)] px-2 py-0.5 text-[10px] text-[var(--danger)]"
+                              title={s.serviceState.drift.message}
+                            >
+                              Desvío
+                            </span>
+                          ) : null}
                           {s.onuId ? (
                             <ServiceSignalIcon onu={linkedOnu} />
                           ) : null}
@@ -462,6 +498,40 @@ export function ClientDetailPage() {
                                 className="rounded-md border border-[var(--border)] px-2.5 py-1 text-xs hover:border-[var(--accent)] hover:text-[var(--accent)]"
                               >
                                 Suspender
+                              </button>
+                            )}
+                            {s.serviceState?.drift && (
+                              <button
+                                type="button"
+                                disabled={reconcileMutation.isPending}
+                                onClick={() => {
+                                  const removeOnu =
+                                    s.serviceState?.drift?.code ===
+                                    'crm_ended_onu_present'
+                                  const run = () =>
+                                    reconcileMutation.mutate({
+                                      serviceId: s.id,
+                                      removeOnu,
+                                    })
+                                  if (!removeOnu) {
+                                    run()
+                                    return
+                                  }
+                                  void confirm(
+                                    '¿Quitar la ONU de la OLT (`no onu`)? El SN volverá a Huérfanas.',
+                                    {
+                                      title: 'Reconciliar OLT',
+                                      danger: true,
+                                      confirmLabel: 'Quitar ONU',
+                                    },
+                                  ).then((ok) => {
+                                    if (ok) run()
+                                  })
+                                }}
+                                className="rounded-md border border-[var(--warning,var(--accent))] px-2.5 py-1 text-xs hover:border-[var(--accent)] hover:text-[var(--accent)]"
+                                title={s.serviceState.drift.message}
+                              >
+                                Reconciliar OLT
                               </button>
                             )}
                             {s.status !== 'ended' && (

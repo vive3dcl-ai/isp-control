@@ -107,6 +107,7 @@ export type ConnectedOnu = {
   verifyCheckedAt?: string | null
   verifyAttempt?: number
   verifyDetail?: Record<string, unknown>
+  serviceState?: import('./crm').ServiceStateView | null
 }
 
 export type OnuManualConfig = {
@@ -246,6 +247,7 @@ export type ConnectedOnuDetailResponse = {
     label: string
     serviceName: string | null
     serviceStatus: string | null
+    serviceState?: import('./crm').ServiceStateView | null
   } | null
   onu: ConnectedOnuDetail
 }
