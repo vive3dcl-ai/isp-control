@@ -14,6 +14,7 @@ export type NotificationType =
   | 'ticket_status'
   | 'calendar_assigned'
   | 'device_down'
+  | 'network_alarm'
   | 'generic';
 
 @Entity({ name: 'notifications', schema: 'public' })

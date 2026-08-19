@@ -101,17 +101,17 @@ Tabla tenant `device_audit_events` (escrituras OLT/ACS). Historial en ficha ONU.
 
 ---
 
-## Etapa 6 — Alarmas de red (NOC)
+## Etapa 6 — Alarmas de red (NOC) — **Cumplido**
 
 No son los tickets tenant↔plataforma.
 
-- Inform ACS ausente > N×intervalo
-- RX ONU bajo umbral
-- LOS / dying gasp
-- OLT inalcanzable
-- Cola ACS > umbral
+- Inform ACS ausente > 3×120s **solo si la ONU sigue online** (no desenchufe)
+- RX ONU peor que −28 dBm con ONU online
+- LOS **sin** dying gasp (corte de fibra; apagado de cliente no alerta)
+- OLT inalcanzable: aviso `device_down` existente
+- Cola ACS: omitida (NBI GenieACS sin API de cola clara)
 
-Hecho: el técnico de zona recibe el evento (panel + opcional Telegram) con SN y OLT.
+Hecho: campana + Web Push al abrir; dashboard Alertas = `network_alarms` abiertas. Sin Telegram.
 
 ---
 

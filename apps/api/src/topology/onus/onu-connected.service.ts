@@ -58,6 +58,7 @@ import {
   type ServiceStateView,
 } from './onu-service-state.util';
 import { NetworkAuditService } from './network-audit.service';
+import { NetworkAlarmService } from './network-alarm.service';
 
 function isAdminDisabled(state: string | null | undefined): boolean {
   return /disable/i.test(state ?? '');
@@ -112,6 +113,7 @@ export class OnuConnectedService {
     private readonly onuCatalog: OnuCatalogAdminService,
     private readonly onuTypeSync: OnuTypeOltSyncService,
     private readonly audit: NetworkAuditService,
+    private readonly alarms: NetworkAlarmService,
     @InjectRepository(Tenant)
     private readonly tenants: Repository<Tenant>,
   ) {}
@@ -2934,6 +2936,13 @@ export class OnuConnectedService {
     }
 
     await this.pruneOnuMetricSamples(schema, samples);
+    try {
+      await this.alarms.syncSchema(schema);
+    } catch (err) {
+      this.logger.warn(
+        `ONU alarms ${schema}: ${err instanceof Error ? err.message : err}`,
+      );
+    }
   }
 
   /** Keep the last 24h of ONU metric history (1-min fleet + denser live). */

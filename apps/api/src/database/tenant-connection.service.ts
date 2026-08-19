@@ -24,6 +24,7 @@ import { OnuMetricSample } from '../topology/shared/entities/onu-metric-sample.e
 import { OnuDenied } from '../topology/shared/entities/onu-denied.entity';
 import { OnuAcsDriver } from '../topology/shared/entities/onu-acs-driver.entity';
 import { DeviceAuditEvent } from '../topology/shared/entities/device-audit-event.entity';
+import { NetworkAlarm } from '../topology/shared/entities/network-alarm.entity';
 import { OnuOrphanSighting } from '../topology/shared/entities/onu-orphan-sighting.entity';
 import { IpPool } from '../topology/shared/entities/ip-pool.entity';
 import { IpPoolAllocation } from '../topology/shared/entities/ip-pool-allocation.entity';
@@ -677,6 +678,26 @@ const TOPOLOGY_ALTER = (schema: string) => `
     ON "${schema}"."device_audit_events" ("olt_id", "occurred_at" DESC);
   CREATE INDEX IF NOT EXISTS "idx_device_audit_onu_time"
     ON "${schema}"."device_audit_events" ("onu_id", "occurred_at" DESC);
+  CREATE TABLE IF NOT EXISTS "${schema}"."network_alarms" (
+    "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    "kind" varchar(32) NOT NULL,
+    "onu_id" uuid NULL,
+    "sn" varchar(40) NULL,
+    "olt_id" uuid NULL,
+    "status" varchar(12) NOT NULL DEFAULT 'open',
+    "detail" jsonb NOT NULL DEFAULT '{}'::jsonb,
+    "opened_at" TIMESTAMPTZ NOT NULL DEFAULT now(),
+    "cleared_at" TIMESTAMPTZ NULL,
+    "updated_at" TIMESTAMPTZ NOT NULL DEFAULT now()
+  );
+  CREATE INDEX IF NOT EXISTS "idx_network_alarms_status"
+    ON "${schema}"."network_alarms" ("status");
+  CREATE INDEX IF NOT EXISTS "idx_network_alarms_onu"
+    ON "${schema}"."network_alarms" ("onu_id");
+  CREATE UNIQUE INDEX IF NOT EXISTS "uq_network_alarms_open_kind_onu"
+    ON "${schema}"."network_alarms" ("kind", "onu_id")
+    WHERE "status" = 'open';
+
 
 
 
@@ -1080,6 +1101,7 @@ export class TenantConnectionService implements OnModuleDestroy {
         OnuDenied,
         OnuAcsDriver,
         DeviceAuditEvent,
+        NetworkAlarm,
         OnuOrphanSighting,
         IpPool,
         IpPoolAllocation,
@@ -1252,6 +1274,15 @@ export class TenantConnectionService implements OnModuleDestroy {
   }
 
 
+
+
+  async getNetworkAlarmRepository(
+    schemaName: string,
+  ): Promise<Repository<NetworkAlarm>> {
+    await this.ensureTenantSchema(schemaName);
+    const ds = await this.getDataSource(schemaName);
+    return ds.getRepository(NetworkAlarm);
+  }
 
   async getDeviceAuditEventRepository(
     schemaName: string,

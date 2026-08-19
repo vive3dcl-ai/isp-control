@@ -40,6 +40,7 @@ import { IpPoolController } from './routers/ip-pool.controller';
 import { OnuTr069ConfigService } from './onus/onu-tr069-config.service';
 import { OnuAcsDriverCatalogService } from './onus/onu-acs-driver-catalog.service';
 import { NetworkAuditService } from './onus/network-audit.service';
+import { NetworkAlarmService } from './onus/network-alarm.service';
 import { ServiceVlanService } from './olts/service-vlan.service';
 import { ServiceVlanController } from './olts/service-vlan.controller';
 import { NetworkNodeService } from './network-node.service';
@@ -103,6 +104,7 @@ import { SupportModule } from '../support/support.module';
     OnuTr069ConfigService,
     OnuAcsDriverCatalogService,
     NetworkAuditService,
+    NetworkAlarmService,
     ServiceVlanService,
     NetworkNodeService,
     SuspensionPortalService,
@@ -120,6 +122,7 @@ import { SupportModule } from '../support/support.module';
     OnuTr069ConfigService,
     OnuAcsDriverCatalogService,
     NetworkAuditService,
+    NetworkAlarmService,
     ServiceVlanService,
     NetworkNodeService,
     SuspensionPortalService,
