@@ -85,7 +85,9 @@ export class BillingSchedulerService implements OnModuleInit, OnModuleDestroy {
       }> = [
         {
           name: 'billing.periods',
-          enabled: settings.periodsEnabled,
+          enabled:
+            settings.periodsEnabled &&
+            settings.billingRegime !== 'from_install',
           cron: settings.periodsCron,
           last: settings.periodsLastRunAt,
           mark: (at) => {

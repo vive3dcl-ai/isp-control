@@ -78,6 +78,13 @@ export class Client {
   @Column({ name: 'migrated_at', type: 'timestamptz', nullable: true })
   migratedAt: Date | null;
 
+  /**
+   * Día del mes de instalación (1–31). Solo para clientes sin fecha de alta
+   * en el servicio (p. ej. importados) cuando el régimen es desde instalación.
+   */
+  @Column({ name: 'install_day', type: 'smallint', nullable: true })
+  installDay: number | null;
+
   @OneToMany(() => ClientService, (s) => s.client)
   services: ClientService[];
 

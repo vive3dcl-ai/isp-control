@@ -146,7 +146,8 @@ export class CrmService {
     const repo = await this.tenantConnections.getClientRepository(
       this.requireSchema(user),
     );
-    return repo.find({ order: { createdAt: 'DESC' } });
+    const rows = await repo.find({ order: { createdAt: 'DESC' } });
+    return this.withInstallDateFlag(this.requireSchema(user), rows);
   }
 
   /**
@@ -307,6 +308,24 @@ export class CrmService {
     });
   }
 
+  private async withInstallDateFlag(schema: string, clients: Client[]) {
+    if (clients.length === 0) return [];
+    const services =
+      await this.tenantConnections.getClientServiceRepository(schema);
+    const rows = await services.find({
+      where: { clientId: In(clients.map((c) => c.id)) },
+      select: ['clientId', 'activeFrom'],
+    });
+    const withFrom = new Set(
+      rows.filter((s) => !!s.activeFrom).map((s) => s.clientId),
+    );
+    return clients.map((c) =>
+      Object.assign(c, {
+        hasInstallDate: c.installDay != null || withFrom.has(c.id),
+      }),
+    );
+  }
+
   private async requireClient(user: AuthUser, id: string) {
     const clients = await this.tenantConnections.getClientRepository(
       this.requireSchema(user),
@@ -317,18 +336,19 @@ export class CrmService {
   }
 
   async getClient(user: AuthUser, id: string) {
+    const schema = this.requireSchema(user);
     const client = await this.requireClient(user, id);
-    const services = await this.tenantConnections.getClientServiceRepository(
-      this.requireSchema(user),
-    );
+    const services =
+      await this.tenantConnections.getClientServiceRepository(schema);
     const clientServices = await services.find({
       where: { clientId: id },
       relations: { servicePlan: { speedProfile: true } },
       order: { createdAt: 'DESC' },
     });
+    const [decorated] = await this.withInstallDateFlag(schema, [client]);
 
     return {
-      ...client,
+      ...decorated,
       services: await this.decorateClientServices(user, clientServices),
     };
   }
@@ -356,6 +376,7 @@ export class CrmService {
       note: dto.note?.trim() ?? '',
       isActive: dto.isActive ?? true,
       zoneId: dto.zoneId ?? null,
+      installDay: dto.installDay ?? null,
     });
     if (!client.firstName && !client.lastName && !client.companyName) {
       throw new BadRequestException(
@@ -408,6 +429,9 @@ export class CrmService {
         await this.assertZoneExists(this.requireSchema(user), client.zoneId);
       }
     }
+    if (dto.installDay !== undefined) {
+      client.installDay = dto.installDay ?? null;
+    }
 
     if (!client.firstName && !client.lastName && !client.companyName) {
       throw new BadRequestException(
@@ -416,6 +440,13 @@ export class CrmService {
     }
 
     const saved = await repo.save(client);
+    if (dto.installDay != null) {
+      await this.billing.applyClientInstallDay(
+        this.requireSchema(user),
+        saved.id,
+        dto.installDay,
+      );
+    }
     await this.syncPortalSnapshot(user, saved);
     const becameActiveClient =
       (!wasActive && saved.isActive && !saved.isLead) ||

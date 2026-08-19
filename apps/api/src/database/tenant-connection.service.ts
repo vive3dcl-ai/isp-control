@@ -1073,10 +1073,16 @@ const TOPOLOGY_ALTER = (schema: string) => `
     ADD COLUMN IF NOT EXISTS "multicast_cidr" varchar(64) NULL;
   ALTER TABLE "${schema}"."tv_servers"
     ADD COLUMN IF NOT EXISTS "multicast_port" int NOT NULL DEFAULT 5000;
+
+  -- v57: régimen de facturación de la empresa + día de instalación del cliente
+  ALTER TABLE "${schema}"."billing_settings"
+    ADD COLUMN IF NOT EXISTS "billing_regime" varchar(32) NOT NULL DEFAULT 'calendar_month';
+  ALTER TABLE "${schema}"."clients"
+    ADD COLUMN IF NOT EXISTS "install_day" smallint NULL;
 `;
 
 /** Bump when tenant DDL adds new tables/columns so existing processes re-apply. */
-const TENANT_SCHEMA_VERSION = 56;
+const TENANT_SCHEMA_VERSION = 57;
 
 @Injectable()
 export class TenantConnectionService implements OnModuleDestroy {

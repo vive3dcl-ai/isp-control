@@ -73,6 +73,18 @@ export class BillingSettings {
   @Column({ name: 'default_due_days', type: 'int', default: 10 })
   defaultDueDays: number;
 
+  /**
+   * calendar_month = cobro fijo de calendario (1.er mes prorrateado).
+   * from_install = ciclo mensual desde el día de instalación de cada cliente.
+   */
+  @Column({
+    name: 'billing_regime',
+    type: 'varchar',
+    length: 32,
+    default: 'calendar_month',
+  })
+  billingRegime: 'calendar_month' | 'from_install';
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

@@ -141,18 +141,8 @@ export function ServicePlansSettingsTab({ canWrite }: { canWrite: boolean }) {
                         </span>
                       )}
                     </td>
-                    <td className="px-4 py-3">
-                      <div>
-                        {p.billingAnchor === 'calendar_month'
-                          ? 'Inicio de mes'
-                          : 'Día de instalación'}
-                      </div>
-                      <div className="text-xs text-[var(--text-muted)]">
-                        Ciclo {p.billingCycleDay === 'last' ? 'último' : 'primero'}
-                        {p.billingAnchor === 'calendar_month'
-                          ? ' · 1.er mes prorrateado'
-                          : ''}
-                      </div>
+                    <td className="px-4 py-3 text-xs text-[var(--text-muted)]">
+                      Según Ajustes → Facturación
                     </td>
                     <td className="px-4 py-3">
                       {p.isActive ? 'Activo' : 'Inactivo'}

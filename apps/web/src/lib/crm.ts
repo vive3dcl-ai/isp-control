@@ -26,6 +26,9 @@ export interface Client {
   zoneId: string | null
   /** Interno: cliente de migración (sin badge en UI). */
   migratedAt: string | null
+  /** Día del mes de instalación (1–31); solo si no hay fecha de alta. */
+  installDay: number | null
+  hasInstallDate?: boolean
   createdAt: string
   updatedAt: string
 }

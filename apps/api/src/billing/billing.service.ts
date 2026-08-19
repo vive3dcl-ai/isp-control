@@ -30,6 +30,14 @@ import {
   UpdateInvoiceTemplateDto,
 } from './dto/billing.dto';
 import { InvoicePdfService } from './invoice-pdf.service';
+import {
+  computeFirstPeriod as firstPeriodForRegime,
+  dateOnDayOfMonth,
+  daysInclusive,
+  effectiveBillingRegime,
+  rollPeriod,
+  type BillingRegime,
+} from './billing-period.util';
 
 @Injectable()
 export class BillingService {
@@ -80,6 +88,12 @@ export class BillingService {
       settings.sendCron = this.assertCron(dto.sendCron);
     if (dto.defaultDueDays !== undefined)
       settings.defaultDueDays = dto.defaultDueDays;
+    if (dto.billingRegime !== undefined) {
+      settings.billingRegime = dto.billingRegime;
+    }
+    if (effectiveBillingRegime(settings.billingRegime) === 'from_install') {
+      settings.periodsEnabled = false;
+    }
 
     await repo.save(settings);
     return this.serializeSettings(settings);
@@ -122,6 +136,7 @@ export class BillingService {
       sendCron: s.sendCron,
       sendLastRunAt: s.sendLastRunAt,
       defaultDueDays: s.defaultDueDays,
+      billingRegime: effectiveBillingRegime(s.billingRegime),
       updatedAt: s.updatedAt,
     };
   }
@@ -597,55 +612,102 @@ export class BillingService {
     service: ClientService,
     plan: ServicePlan,
   ) {
+    const settings = await this.ensureSettings(schema);
+    const regime = this.regimeOf(settings);
     const services =
       await this.tenantConnections.getClientServiceRepository(schema);
-    const from = service.activeFrom || new Date().toISOString().slice(0, 10);
-    const { periodStart, periodEnd, nextBillingDate } = this.computeFirstPeriod(
+    const from = await this.resolveServiceStartDate(schema, service, regime);
+    const { periodStart, periodEnd, nextBillingDate } = firstPeriodForRegime(
       from,
-      plan,
+      regime,
     );
+    service.activeFrom = service.activeFrom || from;
     service.periodStart = periodStart;
     service.periodEnd = periodEnd;
     service.nextBillingDate = nextBillingDate;
     await services.save(service);
   }
 
+  private regimeOf(settings: BillingSettings): BillingRegime {
+    return effectiveBillingRegime(settings.billingRegime);
+  }
+
+  private async resolveServiceStartDate(
+    schema: string,
+    service: ClientService,
+    regime: BillingRegime,
+  ): Promise<string> {
+    if (service.activeFrom) return service.activeFrom;
+    if (regime === 'from_install') {
+      const clients = await this.tenantConnections.getClientRepository(schema);
+      const client = await clients.findOne({
+        where: { id: service.clientId },
+      });
+      if (client?.installDay) {
+        return dateOnDayOfMonth(
+          new Date().toISOString().slice(0, 10),
+          client.installDay,
+        );
+      }
+    }
+    return new Date().toISOString().slice(0, 10);
+  }
+
+  /**
+   * Assign install day on imported clients and seed missing service.activeFrom.
+   */
+  async applyClientInstallDay(
+    schema: string,
+    clientId: string,
+    installDay: number,
+  ) {
+    const day = Math.min(31, Math.max(1, Math.floor(installDay)));
+    const clients = await this.tenantConnections.getClientRepository(schema);
+    const client = await clients.findOne({ where: { id: clientId } });
+    if (!client) throw new NotFoundException('Client not found');
+    client.installDay = day;
+    await clients.save(client);
+
+    const services =
+      await this.tenantConnections.getClientServiceRepository(schema);
+    const plans = await this.tenantConnections.getServicePlanRepository(schema);
+    const rows = await services.find({ where: { clientId } });
+    const today = new Date().toISOString().slice(0, 10);
+    const from = dateOnDayOfMonth(today, day);
+    for (const svc of rows) {
+      if (svc.activeFrom) continue;
+      svc.activeFrom = from;
+      const plan = await plans.findOne({ where: { id: svc.servicePlanId } });
+      if (plan) {
+        await this.initServicePeriods(schema, svc, plan);
+      } else {
+        await services.save(svc);
+      }
+    }
+  }
+
   computeFirstPeriod(
     activeFrom: string,
     plan: Pick<ServicePlan, 'billingAnchor' | 'billingCycleDay'>,
+    regime?: BillingRegime,
   ): { periodStart: string; periodEnd: string; nextBillingDate: string } {
-    const start = parseDate(activeFrom);
-    if (plan.billingAnchor === 'calendar_month') {
-      const periodStart = activeFrom;
-      const end = endOfMonth(start);
-      const next = addDays(end, 1);
-      return {
-        periodStart,
-        periodEnd: formatDate(end),
-        nextBillingDate: formatDate(next),
-      };
-    }
-    // installation: monthly from install day
-    const periodStart = activeFrom;
-    const end = addMonthsClamp(start, 1);
-    end.setUTCDate(end.getUTCDate() - 1);
-    const next = addDays(end, 1);
-    return {
-      periodStart,
-      periodEnd: formatDate(end),
-      nextBillingDate: formatDate(next),
-    };
+    const resolved =
+      regime ??
+      (plan.billingAnchor === 'installation'
+        ? 'from_install'
+        : 'calendar_month');
+    return firstPeriodForRegime(activeFrom, resolved);
   }
 
   /** Advance periods for services whose period already ended. */
   async runMaintainPeriods(schema: string) {
-    await this.ensureSettings(schema);
+    const settings = await this.ensureSettings(schema);
+    const regime = this.regimeOf(settings);
+    if (regime === 'from_install') {
+      return { advanced: 0 };
+    }
     const services =
       await this.tenantConnections.getClientServiceRepository(schema);
-    const plans = await this.tenantConnections.getServicePlanRepository(schema);
-    const planById = new Map(
-      (await plans.find()).map((p) => [p.id, p] as const),
-    );
     const today = new Date().toISOString().slice(0, 10);
     const active = await services.find({
       where: [{ status: 'active' }, { status: 'suspended' }],
@@ -654,20 +716,10 @@ export class BillingService {
     let advanced = 0;
     for (const svc of active) {
       if (!svc.periodEnd || svc.periodEnd >= today) continue;
-      const plan = planById.get(svc.servicePlanId);
-      if (!plan) continue;
-      const nextStart = addDays(parseDate(svc.periodEnd), 1);
-      const periodStart = formatDate(nextStart);
-      let periodEnd: Date;
-      if (plan.billingAnchor === 'calendar_month') {
-        periodEnd = endOfMonth(nextStart);
-      } else {
-        periodEnd = addMonthsClamp(nextStart, 1);
-        periodEnd.setUTCDate(periodEnd.getUTCDate() - 1);
-      }
-      svc.periodStart = periodStart;
-      svc.periodEnd = formatDate(periodEnd);
-      svc.nextBillingDate = formatDate(addDays(periodEnd, 1));
+      const next = rollPeriod(svc.periodEnd, regime);
+      svc.periodStart = next.periodStart;
+      svc.periodEnd = next.periodEnd;
+      svc.nextBillingDate = next.nextBillingDate;
       await services.save(svc);
       advanced += 1;
     }
@@ -721,15 +773,16 @@ export class BillingService {
       for (const svc of clientServices) {
         const plan = planById.get(svc.servicePlanId)!;
         const monthly = Number(svc.price);
+        const regime = this.regimeOf(settings);
         const isProrate =
-          plan.billingAnchor === 'calendar_month' &&
+          regime === 'calendar_month' &&
           svc.periodStart &&
           svc.periodEnd &&
-          daysInRange(svc.periodStart, svc.periodEnd) <
+          daysInclusive(svc.periodStart, svc.periodEnd) <
             daysInMonth(parseDate(svc.periodStart));
 
         if (isProrate && svc.periodStart && svc.periodEnd) {
-          const days = daysInRange(svc.periodStart, svc.periodEnd);
+          const days = daysInclusive(svc.periodStart, svc.periodEnd);
           const dim = daysInMonth(parseDate(svc.periodStart));
           const amount = Math.round(((monthly * days) / dim) * 100) / 100;
           items.push({
@@ -790,20 +843,13 @@ export class BillingService {
       createdInvoiceIds.push(invoice.id);
 
       // Roll each included service's period forward after invoicing.
+      const regime = this.regimeOf(settings);
       for (const svc of clientServices) {
-        const plan = planById.get(svc.servicePlanId)!;
         if (svc.periodEnd) {
-          const nextStart = addDays(parseDate(svc.periodEnd), 1);
-          svc.periodStart = formatDate(nextStart);
-          let periodEnd: Date;
-          if (plan.billingAnchor === 'calendar_month') {
-            periodEnd = endOfMonth(nextStart);
-          } else {
-            periodEnd = addMonthsClamp(nextStart, 1);
-            periodEnd.setUTCDate(periodEnd.getUTCDate() - 1);
-          }
-          svc.periodEnd = formatDate(periodEnd);
-          svc.nextBillingDate = formatDate(addDays(periodEnd, 1));
+          const next = rollPeriod(svc.periodEnd, regime);
+          svc.periodStart = next.periodStart;
+          svc.periodEnd = next.periodEnd;
+          svc.nextBillingDate = next.nextBillingDate;
         }
         await services.save(svc);
       }

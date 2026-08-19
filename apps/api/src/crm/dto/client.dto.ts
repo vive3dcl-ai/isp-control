@@ -2,6 +2,7 @@ import { Transform, Type } from 'class-transformer';
 import {
   IsBoolean,
   IsEmail,
+  IsInt,
   IsNumber,
   IsOptional,
   IsString,
@@ -119,6 +120,14 @@ export class CreateClientDto {
   )
   @IsUUID()
   zoneId?: string | null;
+
+  /** Día del mes de instalación (1–31), para clientes sin fecha de alta. */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(31)
+  installDay?: number | null;
 }
 
 export class UpdateClientDto extends CreateClientDto {}

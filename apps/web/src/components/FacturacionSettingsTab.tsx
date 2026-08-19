@@ -141,6 +141,7 @@ function BillingCronsPanel({ canWrite }: { canWrite: boolean }) {
       sendEnabled: form!.sendEnabled,
       sendCron: form!.sendCron,
       defaultDueDays: form!.defaultDueDays,
+      billingRegime: form!.billingRegime ?? 'calendar_month',
     })
   }
 
@@ -171,8 +172,8 @@ function BillingCronsPanel({ canWrite }: { canWrite: boolean }) {
             Flujo de facturación
           </h3>
           <p>
-            Aquí defines cuándo se renuevan los períodos, se generan los cobros
-            mensuales y se envían a los clientes.
+            Aquí eliges el régimen de cobro de la empresa, cuándo se generan
+            las facturas y cuándo se envían a los clientes.
           </p>
           <p className="mt-2">
             Los cargos inmediatos, como una instalación, no esperan estos
@@ -245,6 +246,50 @@ function BillingCronsPanel({ canWrite }: { canWrite: boolean }) {
               />
             </label>
           </div>
+          <fieldset className="mt-4 space-y-2">
+            <legend className="text-sm font-medium text-[var(--text)]">
+              Régimen de facturación
+            </legend>
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="radio"
+                className="mt-1"
+                name="billingRegime"
+                disabled={!canWrite}
+                checked={
+                  (form.billingRegime ?? 'calendar_month') === 'calendar_month'
+                }
+                onChange={() => set('billingRegime', 'calendar_month')}
+              />
+              <span>
+                <span className="font-medium">Facturación mensual</span>
+                <span className="mt-0.5 block text-[11px] text-[var(--text-muted)]">
+                  Cobro fijo una vez al mes (calendario). El primer mes se
+                  prorratea. Se mantienen los períodos, el envío y los días de
+                  gracia.
+                </span>
+              </span>
+            </label>
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="radio"
+                className="mt-1"
+                name="billingRegime"
+                disabled={!canWrite}
+                checked={form.billingRegime === 'from_install'}
+                onChange={() => set('billingRegime', 'from_install')}
+              />
+              <span>
+                <span className="font-medium">Desde instalación</span>
+                <span className="mt-0.5 block text-[11px] text-[var(--text-muted)]">
+                  Cada cliente factura el día del mes en que se instaló. Sin
+                  prorrateo de calendario. El envío y el tiempo de gracia
+                  siguen iguales. En clientes importados sin fecha de alta se
+                  pide el día de instalación.
+                </span>
+              </span>
+            </label>
+          </fieldset>
           <p className="mt-3 text-xs text-[var(--text-muted)]">
             Próximo número:{' '}
             <span className="font-medium text-[var(--text)]">
@@ -256,6 +301,7 @@ function BillingCronsPanel({ canWrite }: { canWrite: boolean }) {
       </div>
 
       <div className="grid items-stretch gap-4 lg:grid-cols-2 xl:grid-cols-3">
+        {form.billingRegime !== 'from_install' && (
         <ScheduleCard
           title="Actualizar períodos de servicio"
           description="Mantiene al día el mes en curso de cada contrato (inicio, fin y próxima fecha de cobro)."
@@ -268,9 +314,14 @@ function BillingCronsPanel({ canWrite }: { canWrite: boolean }) {
           onRun={() => void runJob('Actualizar períodos', 'periods')}
           running={runMutation.isPending}
         />
+        )}
         <ScheduleCard
           title="Generar facturas del período"
-          description="Crea las facturas mensuales (y prorrateos) cuando llega la fecha de cobro. No incluye las que ya se emitieron al instante."
+          description={
+            form.billingRegime === 'from_install'
+              ? 'Crea la factura de cada cliente cuando llega el aniversario de instalación. Mismos envíos y días de gracia.'
+              : 'Crea las facturas mensuales (y prorrateos) cuando llega la fecha de cobro. No incluye las que ya se emitieron al instante.'
+          }
           enabled={!!form.generateEnabled}
           cron={form.generateCron ?? ''}
           lastRun={form.generateLastRunAt}

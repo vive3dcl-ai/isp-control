@@ -35,6 +35,8 @@ export interface BillingSettings {
   sendCron: string
   sendLastRunAt: string | null
   defaultDueDays: number
+  /** calendar_month = cobro fijo de calendario; from_install = ciclo desde el día de alta */
+  billingRegime: 'calendar_month' | 'from_install'
   updatedAt: string
 }
 

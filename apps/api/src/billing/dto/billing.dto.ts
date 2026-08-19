@@ -62,6 +62,10 @@ export class UpdateBillingSettingsDto {
   @Min(0)
   @Max(90)
   defaultDueDays?: number;
+
+  @IsOptional()
+  @IsIn(['calendar_month', 'from_install'])
+  billingRegime?: 'calendar_month' | 'from_install';
 }
 
 export class CreateInvoiceTemplateDto {

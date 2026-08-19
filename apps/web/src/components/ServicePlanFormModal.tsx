@@ -300,46 +300,14 @@ export function ServicePlanFormModal({
                 </span>
               </span>
             </label>
-            <label className="block text-sm">
-              <span className="mb-1 block text-[var(--text-muted)]">
-                Inicio del ciclo
+            <p className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-[11px] text-[var(--text-muted)]">
+              El ciclo de cobro (mensual con prorrateo o desde el día de
+              instalación) se define para toda la empresa en{' '}
+              <span className="font-medium text-[var(--text)]">
+                Ajustes → Facturación
               </span>
-              <select
-                className={inputClass}
-                value={form.billingAnchor}
-                onChange={(e) =>
-                  set('billingAnchor', e.target.value as PlanBillingAnchor)
-                }
-              >
-                <option value="installation">Desde el día de instalación</option>
-                <option value="calendar_month">Inicio del mes (calendario)</option>
-              </select>
-              <span className="mt-1 block text-[11px] text-[var(--text-muted)]">
-                {form.billingAnchor === 'installation'
-                  ? 'Ciclos mensuales que empiezan el mismo día de la instalación.'
-                  : 'Ciclos por mes calendario. El primer mes se prorratea a los días restantes.'}
-              </span>
-            </label>
-            <label className="block text-sm">
-              <span className="mb-1 block text-[var(--text-muted)]">
-                Día de inicio del ciclo
-              </span>
-              <select
-                className={inputClass}
-                value={form.billingCycleDay}
-                onChange={(e) =>
-                  set('billingCycleDay', e.target.value as PlanBillingCycleDay)
-                }
-              >
-                <option value="first">Primero</option>
-                <option value="last">Último</option>
-              </select>
-              <span className="mt-1 block text-[11px] text-[var(--text-muted)]">
-                {form.billingCycleDay === 'first'
-                  ? 'El ciclo / cobro se ancla al primer día del periodo.'
-                  : 'El ciclo / cobro se ancla al último día del periodo.'}
-              </span>
-            </label>
+              .
+            </p>
           </fieldset>
 
           <fieldset className="space-y-2">

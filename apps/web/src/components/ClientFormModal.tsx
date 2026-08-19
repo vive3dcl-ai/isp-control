@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '../lib/api'
 import type { Client } from '../lib/crm'
 import type { CompanyProfile } from '../lib/company'
+import type { BillingSettings } from '../lib/billing'
 import {
   companyDocumentType,
   formatDocument,
@@ -41,6 +42,7 @@ type ClientForm = {
   isLead: boolean
   isActive: boolean
   zoneId: string | null
+  installDay: number | ''
 }
 
 const empty: ClientForm = {
@@ -62,6 +64,7 @@ const empty: ClientForm = {
   isLead: false,
   isActive: true,
   zoneId: null,
+  installDay: '',
 }
 
 export function ClientFormModal({
@@ -92,6 +95,16 @@ export function ClientFormModal({
     enabled: open,
     staleTime: 60_000,
   })
+  const billingQuery = useQuery({
+    queryKey: ['app', 'settings', 'billing'],
+    queryFn: () => apiFetch<BillingSettings>('/app/settings/billing'),
+    enabled: open,
+    staleTime: 60_000,
+  })
+  const fromInstall =
+    billingQuery.data?.billingRegime === 'from_install'
+  const showInstallDay =
+    fromInstall && (!client || !client.hasInstallDate)
   const country = companyQuery.data?.country ?? ''
   const docTypes = personalDocumentTypes(country)
   const companyDoc = companyDocumentType(country)
@@ -120,6 +133,7 @@ export function ClientFormModal({
         isLead: client.isLead,
         isActive: client.isActive,
         zoneId: client.zoneId ?? null,
+        installDay: client.installDay ?? '',
       })
     } else {
       setForm(empty)
@@ -137,15 +151,21 @@ export function ClientFormModal({
 
   const mutation = useMutation({
     mutationFn: (payload: ClientForm) => {
+      const body: Record<string, unknown> = { ...payload }
+      if (showInstallDay && payload.installDay !== '') {
+        body.installDay = Number(payload.installDay)
+      } else {
+        delete body.installDay
+      }
       if (client) {
         return apiFetch<Client>(`/app/clients/${client.id}`, {
           method: 'PATCH',
-          body: JSON.stringify(payload),
+          body: JSON.stringify(body),
         })
       }
       return apiFetch<Client>('/app/clients', {
         method: 'POST',
-        body: JSON.stringify(payload),
+        body: JSON.stringify(body),
       })
     },
     onSuccess: (saved) => {
@@ -377,6 +397,35 @@ export function ClientFormModal({
                 Las zonas se gestionan en Ajustes → Zonas.
               </span>
             </label>
+
+            {showInstallDay && (
+              <label className="block text-sm">
+                <span className="mb-1 block text-[var(--text-muted)]">
+                  Día de instalación
+                </span>
+                <select
+                  className={inputClass}
+                  value={form.installDay === '' ? '' : String(form.installDay)}
+                  onChange={(e) =>
+                    set(
+                      'installDay',
+                      e.target.value === '' ? '' : Number(e.target.value),
+                    )
+                  }
+                >
+                  <option value="">Elegir día del mes</option>
+                  {Array.from({ length: 31 }, (_, i) => i + 1).map((d) => (
+                    <option key={d} value={d}>
+                      {d}
+                    </option>
+                  ))}
+                </select>
+                <span className="mt-1 block text-[11px] text-[var(--text-muted)]">
+                  Solo para clientes sin fecha de alta (p. ej. importados). El
+                  ciclo de cobro arranca ese día de cada mes.
+                </span>
+              </label>
+            )}
 
             <label className="block text-sm">
               <span className="mb-1 block text-[var(--text-muted)]">Nota</span>
