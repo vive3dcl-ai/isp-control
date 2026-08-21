@@ -10,6 +10,13 @@ import { useAuth } from '../auth/AuthContext'
 import { canWriteCrm } from '../lib/crm'
 import { PanelShell } from '../components/PanelShell'
 import { ModalPortal } from '../components/ModalPortal'
+import {
+  DesktopTableWrap,
+  MobileList,
+  MobileListCard,
+  MobileListEmpty,
+  MobileListMeta,
+} from '../components/MobileList'
 import { useNotify } from '../components/NotifyProvider'
 import { ListSearchInput, matchesSearch } from '../components/ListSearchInput'
 
@@ -213,7 +220,72 @@ export function InventoryPage() {
           </p>
         )}
 
-        <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
+        <MobileList>
+          {listQuery.isLoading && (
+            <p className="text-sm text-[var(--text-muted)]">Cargando…</p>
+          )}
+          {!listQuery.isLoading && items.length === 0 && (
+            <MobileListEmpty>Sin equipos en inventario.</MobileListEmpty>
+          )}
+          {items.map((item) => (
+            <MobileListCard key={item.id}>
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold">
+                    {item.brand} {item.model}
+                  </p>
+                  <p className="text-xs text-[var(--text-muted)]">
+                    {TYPE_LABEL[item.type]}
+                  </p>
+                </div>
+                <span className="shrink-0 font-mono text-sm">
+                  {item.quantity}
+                </span>
+              </div>
+              <MobileListMeta>
+                <span>{item.isActive ? 'Activo' : 'Inactivo'}</span>
+              </MobileListMeta>
+              {canWrite && (
+                <div className="mt-2 flex flex-wrap gap-3">
+                  <button
+                    type="button"
+                    className="text-xs text-[var(--accent)] hover:underline"
+                    onClick={() => openEdit(item)}
+                  >
+                    Editar
+                  </button>
+                  <button
+                    type="button"
+                    className="text-xs text-[var(--accent)] hover:underline"
+                    onClick={() => openAdjust(item)}
+                  >
+                    Ajuste
+                  </button>
+                  <button
+                    type="button"
+                    className="text-xs text-[var(--danger)] hover:underline"
+                    onClick={() => {
+                      void confirm(
+                        `¿Eliminar ${inventoryLabel(item)} del inventario?`,
+                        {
+                          title: 'Eliminar ítem',
+                          danger: true,
+                          confirmLabel: 'Eliminar',
+                        },
+                      ).then((ok) => {
+                        if (ok) void deleteMutation.mutateAsync(item.id)
+                      })
+                    }}
+                  >
+                    Eliminar
+                  </button>
+                </div>
+              )}
+            </MobileListCard>
+          ))}
+        </MobileList>
+
+        <DesktopTableWrap>
           <table className="w-full min-w-[640px] text-left text-sm">
             <thead className="border-b border-[var(--border)] bg-[var(--bg)] text-[var(--text-muted)]">
               <tr>
@@ -294,7 +366,7 @@ export function InventoryPage() {
               ))}
             </tbody>
           </table>
-        </div>
+        </DesktopTableWrap>
       </div>
 
       {(modal === 'create' || modal === 'edit') && (

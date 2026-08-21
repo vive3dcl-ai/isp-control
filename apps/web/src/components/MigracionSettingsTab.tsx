@@ -12,6 +12,13 @@ import {
   type MigrationSegmentConfig,
 } from "../lib/onu-migration";
 import { MigrationWizardModal } from "./MigrationWizardModal";
+import {
+  DesktopTableWrap,
+  MobileList,
+  MobileListCard,
+  MobileListEmpty,
+  MobileListMeta,
+} from "./MobileList";
 
 /** Subset of the VLAN catalog (Ajustes → VLANs) needed to label the segment. */
 type CatalogVlan = {
@@ -415,7 +422,77 @@ export function MigracionSettingsTab({ canWrite }: { canWrite: boolean }) {
             </div>
           </div>
 
-          <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
+          <MobileList>
+            {visibleCandidates.length === 0 && (
+              <MobileListEmpty>
+                {search.trim()
+                  ? `Ninguna candidata coincide con «${search.trim()}».`
+                  : "No hay candidatas en este segmento."}
+              </MobileListEmpty>
+            )}
+            {visibleCandidates.map((c) => {
+              const done = migratedIfs.has(c.onuIf);
+              const clientLabel = c.suggestedClientName
+                ? `${c.suggestedFirstName || c.suggestedClientName}${
+                    c.suggestedLastName ? ` ${c.suggestedLastName}` : ""
+                  }`
+                : null;
+              return (
+                <MobileListCard key={c.onuIf}>
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="font-mono text-xs font-semibold">
+                        {c.onuIf}
+                      </p>
+                      <p className="truncate text-sm">{c.name || "—"}</p>
+                    </div>
+                    {!done && canWrite && (
+                      <button
+                        type="button"
+                        disabled={!mgmtVlanPick || !wanVlanPick}
+                        onClick={() => startWizard(c)}
+                        className="shrink-0 rounded-md border border-[var(--border)] px-2 py-1 text-xs hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:opacity-40"
+                      >
+                        Migrar
+                      </button>
+                    )}
+                  </div>
+                  <MobileListMeta>
+                    <span className="font-mono">{c.sn || "—"}</span>
+                    <span>·</span>
+                    <span>
+                      VLAN{" "}
+                      {(c.vlans.length
+                        ? c.vlans
+                        : c.vlan != null
+                          ? [c.vlan]
+                          : []
+                      ).join(", ") || "—"}
+                    </span>
+                    <span>·</span>
+                    {done ? (
+                      <span className="text-emerald-400">Migrada</span>
+                    ) : c.online ? (
+                      <span className="text-emerald-400">Online</span>
+                    ) : (
+                      <span className="text-amber-300">Offline</span>
+                    )}
+                    {!c.inDb && !done && (
+                      <span className="text-[var(--text-muted)]">(sin DB)</span>
+                    )}
+                    {clientLabel && (
+                      <>
+                        <span>·</span>
+                        <span className="truncate">{clientLabel}</span>
+                      </>
+                    )}
+                  </MobileListMeta>
+                </MobileListCard>
+              );
+            })}
+          </MobileList>
+
+          <DesktopTableWrap>
             <table className="min-w-full text-left text-sm">
               <thead className="border-b border-[var(--border)] bg-[var(--bg)]/60 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
                 <tr>
@@ -518,7 +595,7 @@ export function MigracionSettingsTab({ canWrite }: { canWrite: boolean }) {
                 )}
               </tbody>
             </table>
-          </div>
+          </DesktopTableWrap>
 
           {pct === 100 && segmentTotal > 0 && (
             <p className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">

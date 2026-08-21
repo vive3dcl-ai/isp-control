@@ -56,6 +56,11 @@ export type OnuModelProvisionCtx = OnuModelProvisionMatchCtx & {
    * Necesario cuando el agente TR-069 dejó de Informar tras reboot.
    */
   ensureOmciTr069?: () => Promise<OnuOmciTr069Result>;
+  /**
+   * Reaplica service-port / flow L2 de la VLAN de servicio en la OLT.
+   * Necesario cuando el ACS muestra ERROR_NO_CARRIER (WAN ACS ok, sin tráfico).
+   */
+  ensureServiceL2?: () => Promise<OnuOmciTr069Result>;
   enqueueOnly?: boolean;
   /** Persiste avance del script para el modal (poll UI). */
   onProgress?: (
@@ -64,10 +69,19 @@ export type OnuModelProvisionCtx = OnuModelProvisionMatchCtx & {
 };
 
 /** Estado persistido en verifyDetail.progress (sobrevive ticks del poller). */
+export type OnuProgressStepHistoryEntry = {
+  id: string;
+  status: 'done' | 'error' | 'skipped';
+  note?: string;
+  at: string;
+};
+
 export type OnuProgressState = {
   currentStepId: string | null;
   completed: string[];
   notes: string[];
+  /** Historial ordenado de pasos ACS/OLT realmente ejecutados (para el modal). */
+  history?: OnuProgressStepHistoryEntry[];
   updatedAt: string;
 };
 
@@ -87,6 +101,11 @@ export type OnuHealGaps = {
   mgmtReady?: boolean;
   hasServiceWan?: boolean;
   serviceWanOk?: boolean;
+  /**
+   * false = WAN INTERNET existe pero sin carrier L2
+   * (LastConnectionError=ERROR_NO_CARRIER / Connecting).
+   */
+  serviceCarrierOk?: boolean;
 };
 
 export type OnuVerifyHealCtx = OnuModelProvisionCtx & {
@@ -149,6 +168,7 @@ export type OnuVerifyCheckId =
   | 'dns'
   | 'route'
   | 'uplinkVlan'
+  | 'lanBind'
   | 'traffic';
 
 export type OnuVerifyChecksPlan = Partial<
@@ -158,18 +178,19 @@ export type OnuVerifyChecksPlan = Partial<
 /** Suite por defecto (= comportamiento histórico del poller). */
 export const DEFAULT_VERIFY_CHECKS: Record<OnuVerifyCheckId, OnuVerifyCheckMode> =
   {
-    arp: 'required',
+    arp: 'skip',
     connreq: 'required',
     wan: 'required',
     dns: 'required',
     route: 'required',
     uplinkVlan: 'required',
+    lanBind: 'required',
     traffic: 'optional',
   };
 
 /** TR-098 Huawei/FiberHome: route TR-181 no aplica.
  *  connreq es optional: en Huawei el user fábrica `acs` hace flaquear el CR
- *  (401↔ok) y tumbaría el veredicto aunque ARP+WAN ya demuestren servicio. */
+ *  (401↔ok) y tumbaría el veredicto aunque WAN+DNS ya demuestren servicio. */
 export const TR098_VERIFY_CHECKS: OnuVerifyChecksPlan = {
   ...DEFAULT_VERIFY_CHECKS,
   route: 'skip',
@@ -197,8 +218,17 @@ export function driverSkipsOmciServiceWan(
 export function resolveVerifyChecks(
   driver: OnuDriver | null | undefined,
 ): Record<OnuVerifyCheckId, OnuVerifyCheckMode> {
-  const plan = driver?.verifyChecks ?? {};
-  return { ...DEFAULT_VERIFY_CHECKS, ...plan };
+  const plan: Record<OnuVerifyCheckId, OnuVerifyCheckMode> = {
+    ...DEFAULT_VERIFY_CHECKS,
+    ...(driver?.verifyChecks ?? {}),
+  };
+  const lanBindOwner =
+    driver?.paramOwners?.lanBind ??
+    (resolveOmciPlan(driver).serviceWanOmci === 'skip' ? 'acs' : 'none');
+  if (lanBindOwner === 'none') {
+    plan.lanBind = 'skip';
+  }
+  return plan;
 }
 
 export function verifyCheckMode(
@@ -209,7 +239,7 @@ export function verifyCheckMode(
 }
 
 /** Paso visible en el modal de avance (ACS o probe de red). */
-export type OnuProgressStepPhase = 'acs' | 'net';
+export type OnuProgressStepPhase = 'acs' | 'olt' | 'net';
 
 export type OnuProgressStepDef = {
   id: string;
@@ -218,13 +248,14 @@ export type OnuProgressStepDef = {
 };
 
 const NET_CHECK_LABELS: Record<OnuVerifyCheckId, string> = {
-  arp: 'ARP en el router del gateway',
-  connreq: 'Credenciales de petición de conexión',
-  wan: 'WAN TR-069 (IP, máscara, gateway, VLAN)',
-  dns: 'DNS de la WAN',
+  arp: 'ARP',
+  connreq: 'Credenciales de administración',
+  wan: 'WAN internet',
+  dns: 'DNS',
   route: 'Ruta por defecto / WAN legacy (TR-181)',
   uplinkVlan: 'VLAN WAN en uplink de la OLT',
-  traffic: 'Internet (WAN + ARP / bytes)',
+  lanBind: 'Bind NAT',
+  traffic: 'Internet',
 };
 
 /** Pasos net a partir de verifyChecks (omite skip). */
@@ -237,11 +268,11 @@ export function netStepsFromVerifyChecks(
   };
   const order: OnuVerifyCheckId[] = [
     'connreq',
-    'arp',
     'wan',
     'dns',
     'route',
     'uplinkVlan',
+    'lanBind',
     'traffic',
   ];
   return order
@@ -267,6 +298,7 @@ export function emptyProgressState(
     currentStepId: partial?.currentStepId ?? null,
     completed: partial?.completed ?? [],
     notes: partial?.notes ?? [],
+    history: partial?.history ?? [],
     updatedAt: partial?.updatedAt ?? new Date().toISOString(),
   };
 }
@@ -278,11 +310,16 @@ export function mergeProgressState(
   const completed = [
     ...new Set([...(prev?.completed ?? []), ...(next.completed ?? [])]),
   ];
-  const notes = [...(prev?.notes ?? []), ...(next.notes ?? [])].slice(-20);
+  const notes = [...(prev?.notes ?? []), ...(next.notes ?? [])].slice(-40);
+  const history = [
+    ...(prev?.history ?? []),
+    ...(next.history ?? []),
+  ].slice(-40);
   return {
     currentStepId: next.currentStepId ?? prev?.currentStepId ?? null,
     completed,
     notes,
+    history,
     updatedAt: new Date().toISOString(),
   };
 }

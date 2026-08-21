@@ -1,4 +1,5 @@
 import {
+  IsBoolean,
   IsIn,
   IsOptional,
   IsString,
@@ -78,4 +79,9 @@ export class UpdateTenantDto {
   @IsOptional()
   @IsIn(['active', 'inactive', 'suspended'])
   status?: 'active' | 'inactive' | 'suspended';
+
+  /** Empresa interna ISP Control (siempre activa, sin mora). */
+  @IsOptional()
+  @IsBoolean()
+  isInternalCompany?: boolean;
 }

@@ -2,6 +2,12 @@ import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '../lib/api'
 import type { TopologyPort } from '../lib/topology'
+import {
+  DesktopTableWrap,
+  MobileList,
+  MobileListCard,
+  MobileListMeta,
+} from './MobileList'
 
 const inputClass =
   'w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 outline-none ring-[var(--accent)] focus:ring-2'
@@ -273,38 +279,61 @@ export function SwitchBridgeVlansPanel({
 
         <div className="rounded-lg border border-[var(--border)] p-3 lg:col-span-2">
           <h3 className="text-sm font-medium">Puertos en bridge</h3>
-          <div className="mt-2 max-h-40 overflow-auto text-sm">
-            <table className="w-full text-left">
-              <thead className="text-xs text-[var(--text-muted)]">
-                <tr>
-                  <th className="py-1 pr-2">Interfaz</th>
-                  <th className="py-1 pr-2">Bridge</th>
-                  <th className="py-1">PVID</th>
-                </tr>
-              </thead>
-              <tbody>
-                {ports.map((p) => (
-                  <tr
-                    key={`${p.bridge}-${p.interface}`}
-                    className={`border-t border-[var(--border)] ${
-                      canWrite
-                        ? 'cursor-pointer hover:bg-[var(--bg)]'
-                        : ''
-                    }`}
-                    onClick={() => {
-                      if (!canWrite) return
-                      setPortIface(p.interface)
-                      setPortBridge(p.bridge || 'bridge')
-                      setPortPvid(String(p.pvid || 1))
-                    }}
-                  >
-                    <td className="py-1 pr-2 font-medium">{p.interface}</td>
-                    <td className="py-1 pr-2">{p.bridge}</td>
-                    <td className="py-1">{p.pvid}</td>
+          <div className="mt-2 max-h-52 overflow-auto text-sm">
+            <MobileList>
+              {ports.map((p) => (
+                <MobileListCard
+                  key={`${p.bridge}-${p.interface}`}
+                  className={canWrite ? 'cursor-pointer' : undefined}
+                  onClick={() => {
+                    if (!canWrite) return
+                    setPortIface(p.interface)
+                    setPortBridge(p.bridge || 'bridge')
+                    setPortPvid(String(p.pvid || 1))
+                  }}
+                >
+                  <p className="text-sm font-semibold">{p.interface}</p>
+                  <MobileListMeta>
+                    <span>{p.bridge}</span>
+                    <span>·</span>
+                    <span>PVID {p.pvid}</span>
+                  </MobileListMeta>
+                </MobileListCard>
+              ))}
+            </MobileList>
+            <DesktopTableWrap bordered={false}>
+              <table className="w-full text-left">
+                <thead className="text-xs text-[var(--text-muted)]">
+                  <tr>
+                    <th className="py-1 pr-2">Interfaz</th>
+                    <th className="py-1 pr-2">Bridge</th>
+                    <th className="py-1">PVID</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {ports.map((p) => (
+                    <tr
+                      key={`${p.bridge}-${p.interface}`}
+                      className={`border-t border-[var(--border)] ${
+                        canWrite
+                          ? 'cursor-pointer hover:bg-[var(--bg)]'
+                          : ''
+                      }`}
+                      onClick={() => {
+                        if (!canWrite) return
+                        setPortIface(p.interface)
+                        setPortBridge(p.bridge || 'bridge')
+                        setPortPvid(String(p.pvid || 1))
+                      }}
+                    >
+                      <td className="py-1 pr-2 font-medium">{p.interface}</td>
+                      <td className="py-1 pr-2">{p.bridge}</td>
+                      <td className="py-1">{p.pvid}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </DesktopTableWrap>
           </div>
           {canWrite && (
             <form
@@ -378,43 +407,80 @@ export function SwitchBridgeVlansPanel({
             </button>
           )}
         </div>
-        <div className="mt-2 max-h-52 overflow-auto text-sm">
-          <table className="w-full text-left">
-            <thead className="text-xs text-[var(--text-muted)]">
-              <tr>
-                <th className="py-1 pr-2">VLAN</th>
-                <th className="py-1 pr-2">Bridge</th>
-                <th className="py-1 pr-2">Tagged</th>
-                <th className="py-1">Untagged</th>
-              </tr>
-            </thead>
-            <tbody>
-              {vlans.map((v, i) => (
-                <tr
-                  key={`${v.bridge}-${v.vlanIds.join('-')}-${i}`}
-                  className={`border-t border-[var(--border)] align-top ${
-                    canWrite ? 'cursor-pointer hover:bg-[var(--bg)]' : ''
-                  } ${
-                    editingExisting &&
-                    vlanId === String(v.vlanIds[0]) &&
-                    vlanBridge === v.bridge
-                      ? 'bg-[var(--accent)]/10'
-                      : ''
-                  }`}
-                  onClick={() => {
-                    if (canWrite) loadVlanForEdit(v)
-                  }}
-                >
-                  <td className="py-1 pr-2 font-medium">
-                    {v.vlanIds.join(', ')}
-                  </td>
-                  <td className="py-1 pr-2">{v.bridge}</td>
-                  <td className="py-1 pr-2">{v.tagged.join(', ') || '—'}</td>
-                  <td className="py-1">{v.untagged.join(', ') || '—'}</td>
+        <div className="mt-2 max-h-64 overflow-auto text-sm">
+          <MobileList>
+            {vlans.map((v, i) => (
+              <MobileListCard
+                key={`${v.bridge}-${v.vlanIds.join('-')}-${i}`}
+                className={[
+                  canWrite ? 'cursor-pointer' : '',
+                  editingExisting &&
+                  vlanId === String(v.vlanIds[0]) &&
+                  vlanBridge === v.bridge
+                    ? 'border-[var(--accent)] bg-[var(--accent)]/10'
+                    : '',
+                ]
+                  .filter(Boolean)
+                  .join(' ')}
+                onClick={() => {
+                  if (canWrite) loadVlanForEdit(v)
+                }}
+              >
+                <p className="text-sm font-semibold">
+                  VLAN {v.vlanIds.join(', ')}
+                </p>
+                <MobileListMeta>
+                  <span>{v.bridge}</span>
+                  <span>·</span>
+                  <span className="line-clamp-2">
+                    Tagged: {v.tagged.join(', ') || '—'}
+                  </span>
+                  <span>·</span>
+                  <span className="line-clamp-2">
+                    Untagged: {v.untagged.join(', ') || '—'}
+                  </span>
+                </MobileListMeta>
+              </MobileListCard>
+            ))}
+          </MobileList>
+          <DesktopTableWrap bordered={false}>
+            <table className="w-full text-left">
+              <thead className="text-xs text-[var(--text-muted)]">
+                <tr>
+                  <th className="py-1 pr-2">VLAN</th>
+                  <th className="py-1 pr-2">Bridge</th>
+                  <th className="py-1 pr-2">Tagged</th>
+                  <th className="py-1">Untagged</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {vlans.map((v, i) => (
+                  <tr
+                    key={`${v.bridge}-${v.vlanIds.join('-')}-${i}`}
+                    className={`border-t border-[var(--border)] align-top ${
+                      canWrite ? 'cursor-pointer hover:bg-[var(--bg)]' : ''
+                    } ${
+                      editingExisting &&
+                      vlanId === String(v.vlanIds[0]) &&
+                      vlanBridge === v.bridge
+                        ? 'bg-[var(--accent)]/10'
+                        : ''
+                    }`}
+                    onClick={() => {
+                      if (canWrite) loadVlanForEdit(v)
+                    }}
+                  >
+                    <td className="py-1 pr-2 font-medium">
+                      {v.vlanIds.join(', ')}
+                    </td>
+                    <td className="py-1 pr-2">{v.bridge}</td>
+                    <td className="py-1 pr-2">{v.tagged.join(', ') || '—'}</td>
+                    <td className="py-1">{v.untagged.join(', ') || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </DesktopTableWrap>
         </div>
         {canWrite && (
           <form onSubmit={onVlan} className="mt-3 space-y-3">

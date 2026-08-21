@@ -96,10 +96,10 @@ describe('resolveOnuModelHandler', () => {
     expect(h?.id).toBe('huawei-hgu-veip');
   });
 
-  it('no elige FiberHome HG6244C (aún sin library)', () => {
+  it('elige FiberHome HG6244C library (mismo bind LAN que HG6143D)', () => {
     expect(
-      resolveOnuModelHandler({ sn: 'FHTT968157D8', onuType: 'HG6244C' }),
-    ).toBeNull();
+      resolveOnuModelHandler({ sn: 'FHTT968157D8', onuType: 'HG6244C' })?.id,
+    ).toBe('fiberhome-hg6143d');
   });
 
   it('elige FiberHome HG6143d library', () => {
@@ -168,7 +168,9 @@ describe('OnuDriver contract', () => {
     });
     expect(resolveOmciPlan(hg).serviceWanOmci).toBe('skip');
     expect(resolveVerifyChecks(hg).route).toBe('skip');
-    expect(resolveVerifyChecks(hg).arp).toBe('required');
+    expect(resolveVerifyChecks(hg).arp).toBe('skip');
+    expect(resolveVerifyChecks(hg).lanBind).toBe('required');
+    expect(resolveVerifyChecks(hg).traffic).toBe('optional');
 
     const zte = resolveOnuDriver({
       sn: 'ZTEGD71F2028',
@@ -176,6 +178,7 @@ describe('OnuDriver contract', () => {
     });
     expect(resolveOmciPlan(zte).serviceWanOmci).toBe('apply');
     expect(resolveVerifyChecks(zte).route).toBe('required');
+    expect(resolveVerifyChecks(zte).lanBind).toBe('skip');
   });
 });
 
@@ -392,7 +395,7 @@ describe('plantilla ISP multi-WAN', () => {
     expect(isServiceWanApplied(ispTemplateDevice(), WAN_702)).toBe(false);
   });
 
-  it('isServiceWanApplied falla si SSID/LAN bind está en 0 (EG8145X6)', () => {
+  it('isServiceWanApplied falla si ningún SSID está ligado', () => {
     const device = ispTemplateDevice({
       vlan: 702,
       ip: '40.40.21.64',
@@ -410,7 +413,7 @@ describe('plantilla ISP multi-WAN', () => {
       Lan2Enable: leaf(1),
       Lan3Enable: leaf(1),
       Lan4Enable: leaf(1),
-      SSID1Enable: leaf(1),
+      SSID1Enable: leaf(0),
       SSID2Enable: leaf(0),
       SSID3Enable: leaf(0),
       SSID4Enable: leaf(0),
@@ -865,13 +868,31 @@ describe('resolveOnuDriver (library → brand generic)', () => {
     ).toBe('generic-zte');
   });
 
-  it('FiberHome HG6244C → generic-fiberhome', () => {
+  it('FiberHome HG6243C → generic-fiberhome', () => {
     expect(
       resolveOnuDriver({
         sn: 'FHTT12345678',
         onuType: 'HG6243C',
       })?.id,
     ).toBe('generic-fiberhome');
+  });
+
+  it('FiberHome HG6244C → library hg6143d', () => {
+    expect(
+      resolveOnuDriver({
+        sn: 'FHTT96815A70',
+        onuType: 'HG6244C',
+      })?.id,
+    ).toBe('fiberhome-hg6143d');
+  });
+
+  it('FiberHome HG6145F → library hg6143d (mismo X_FH)', () => {
+    expect(
+      resolveOnuDriver({
+        sn: 'FHTT9B1AA630',
+        onuType: 'HG6145F',
+      })?.id,
+    ).toBe('fiberhome-hg6143d');
   });
 
   it('FiberHome HG6143D (OLT mal etiquetado F600) → library', () => {
@@ -960,7 +981,7 @@ describe('fiberhome-hg6143d library', () => {
                     ExternalIPAddress: leaf('40.40.20.5'),
                     DNSServers: leaf('8.8.8.8,8.8.4.4'),
                     X_FH_LanInterface: leaf(
-                      'InternetGatewayDevice.LANDevice.1.LANEthernetInterfaceConfig.1',
+                      'InternetGatewayDevice.LANDevice.1.LANEthernetInterfaceConfig.1,InternetGatewayDevice.LANDevice.1.WLANConfiguration.1',
                     ),
                   },
                 },

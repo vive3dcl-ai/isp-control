@@ -46,6 +46,8 @@ export class PlatformPlansService implements OnModuleInit {
         ALTER COLUMN "is_free" SET NOT NULL;
       ALTER TABLE public.tenants
         ADD COLUMN IF NOT EXISTS "extra_user_blocks" int NOT NULL DEFAULT 0;
+      ALTER TABLE public.tenants
+        ADD COLUMN IF NOT EXISTS "is_internal_company" boolean NOT NULL DEFAULT false;
       CREATE TABLE IF NOT EXISTS public.platform_billing_settings (
         "id" int PRIMARY KEY,
         "extra_block_price_usd" numeric(12,2) NOT NULL DEFAULT 40,
@@ -66,10 +68,11 @@ export class PlatformPlansService implements OnModuleInit {
 
     for (const t of USER_PLAN_TIERS) {
       const existing = await this.plans.findOne({ where: { cycle: t.code } });
+      const months = t.code === 'lifetime' ? 0 : 1;
       if (existing) {
         existing.userLimit = t.userLimit;
         existing.sortOrder = t.sortOrder;
-        existing.months = 1;
+        existing.months = months;
         existing.label = t.label;
         await this.plans.save(existing);
         continue;
@@ -77,7 +80,7 @@ export class PlatformPlansService implements OnModuleInit {
       await this.plans.save(
         this.plans.create({
           cycle: t.code,
-          months: 1,
+          months,
           label: t.label,
           userLimit: t.userLimit,
           sortOrder: t.sortOrder,
@@ -172,15 +175,17 @@ export class PlatformPlansService implements OnModuleInit {
   }
 
   private serialize(r: PlatformSystemPlan) {
+    const isLifetime = r.cycle === 'lifetime';
     return {
       id: r.id,
       code: r.cycle as UserPlanCode,
       cycle: r.cycle as UserPlanCode, // alias compat UI antigua
       userLimit: r.userLimit,
-      months: 1,
+      months: isLifetime ? 0 : 1,
       label: r.label,
       priceUsd: Number(r.priceUsd),
       isFree: !!r.isFree,
+      isLifetime,
       enabled: r.enabled,
       sortOrder: r.sortOrder,
     };

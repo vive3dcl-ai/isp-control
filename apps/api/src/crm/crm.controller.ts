@@ -124,6 +124,26 @@ export class CrmController {
     return this.crm.deleteClient(user, id);
   }
 
+  /** Suspende todos los servicios activos del cliente (portal o disable OLT). */
+  @Post('clients/:id/suspend')
+  @TenantRoles(...CRM_WRITE_ROLES)
+  suspendClient(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.crm.setClientServicesStatus(user, id, 'suspended');
+  }
+
+  /** Reactiva todos los servicios suspendidos del cliente. */
+  @Post('clients/:id/activate')
+  @TenantRoles(...CRM_WRITE_ROLES)
+  activateClient(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.crm.setClientServicesStatus(user, id, 'active');
+  }
+
   // —— Zones ——
 
   @Get('zones')

@@ -1,5 +1,6 @@
 import {
   deriveServiceState,
+  onuAccessStatus,
   pickLinkedService,
 } from './onu-service-state.util';
 
@@ -116,5 +117,28 @@ describe('pickLinkedService', () => {
   it('si solo hay ended, usa el más reciente', () => {
     const picked = pickLinkedService([t('ended', 1), t('ended', 3)]);
     expect(picked?.createdAt.toISOString()).toContain('2026-01-03');
+  });
+});
+
+describe('onuAccessStatus', () => {
+  it('admin disable gana sobre LOS y RX', () => {
+    expect(
+      onuAccessStatus({
+        adminState: 'disable',
+        online: false,
+        status: 'los',
+        phaseState: 'LOS',
+      }),
+    ).toBe('disabled');
+  });
+
+  it('online no suspendida', () => {
+    expect(
+      onuAccessStatus({
+        adminState: 'enable',
+        online: true,
+        status: 'online',
+      }),
+    ).toBe('online');
   });
 });

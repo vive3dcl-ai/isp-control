@@ -8,6 +8,7 @@ import {
 } from '../../../../topology/shared/genieacs-nbi.client';
 import type { OnuModelProvisionWanPlan } from '../../types';
 import type { WanConnectionRef } from '../../infra/wan-datamodel';
+import { assessServiceLanBind } from '../../infra/lan-bind';
 
 const WAN_DEV = 'InternetGatewayDevice.WANDevice';
 
@@ -105,20 +106,7 @@ export function isServiceWanApplied(
   }
   const want = expectedHuaweiDns(wan);
   if (want && (target.dnsServers ?? '').trim() !== want) return false;
-
-  for (const n of [1, 2, 3, 4]) {
-    const lan = strVal(
-      genieGet(device, `${target.conn}.X_HW_LANBIND.Lan${n}Enable`),
-    );
-    if (lan === '0') return false;
-  }
-  for (const n of [1, 2, 3, 4]) {
-    const ssid = strVal(
-      genieGet(device, `${target.conn}.X_HW_LANBIND.SSID${n}Enable`),
-    );
-    if (ssid === '0') return false;
-  }
-  return true;
+  return assessServiceLanBind(device, target.conn).ok;
 }
 
 export function findReusableBlankHuaweiWan(

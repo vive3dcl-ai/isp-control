@@ -8,6 +8,7 @@ import {
 } from '../../../../topology/shared/genieacs-nbi.client';
 import type { OnuModelProvisionWanPlan } from '../../types';
 import type { WanConnectionRef } from '../../infra/wan-datamodel';
+import { assessServiceLanBind } from '../../infra/lan-bind';
 
 const WAN_DEV = 'InternetGatewayDevice.WANDevice';
 
@@ -105,20 +106,7 @@ export function isServiceWanApplied(
   }
   const want = expectedHuaweiDns(wan);
   if (want && (target.dnsServers ?? '').trim() !== want) return false;
-
-  for (const n of [1, 2, 3, 4]) {
-    const lan = strVal(
-      genieGet(device, `${target.conn}.X_HW_LANBIND.Lan${n}Enable`),
-    );
-    if (lan === '0') return false;
-  }
-  for (const n of [1, 2, 3, 4]) {
-    const ssid = strVal(
-      genieGet(device, `${target.conn}.X_HW_LANBIND.SSID${n}Enable`),
-    );
-    if (ssid === '0') return false;
-  }
-  return true;
+  return assessServiceLanBind(device, target.conn).ok;
 }
 
 export function findReusableBlankHuaweiWan(
@@ -145,6 +133,7 @@ export function needsNewWanConnectionDevice(
 export function buildHuaweiServiceWanParams(
   conn: string,
   wan: OnuModelProvisionWanPlan,
+  opts?: { omitIpAddress?: boolean },
 ): Array<[string, string | number | boolean, string]> {
   const dns = [wan.wanDns1, wan.wanDns2]
     .filter((v): v is string => !!v?.trim())
@@ -153,15 +142,21 @@ export function buildHuaweiServiceWanParams(
   const ssidBinds: Array<[string, number, string]> = [1, 2, 3, 4, 5, 6, 7, 8].map(
     (n) => [`${conn}.X_HW_LANBIND.SSID${n}Enable`, 1, u],
   );
+  const ipParams: Array<[string, string | number | boolean, string]> =
+    opts?.omitIpAddress
+      ? []
+      : [
+          [`${conn}.ExternalIPAddress`, wan.wanIp, 'xsd:string'],
+          [`${conn}.SubnetMask`, wan.wanMask, 'xsd:string'],
+          [`${conn}.DefaultGateway`, wan.wanGateway, 'xsd:string'],
+        ];
   return [
     [`${conn}.X_HW_SERVICELIST`, 'INTERNET', 'xsd:string'],
     [`${conn}.X_HW_VLAN`, wan.wanVlan, u],
     [`${conn}.Name`, `ISPCTRL_INTERNET_${wan.wanVlan}`, 'xsd:string'],
     [`${conn}.ConnectionType`, 'IP_Routed', 'xsd:string'],
     [`${conn}.AddressingType`, 'Static', 'xsd:string'],
-    [`${conn}.ExternalIPAddress`, wan.wanIp, 'xsd:string'],
-    [`${conn}.SubnetMask`, wan.wanMask, 'xsd:string'],
-    [`${conn}.DefaultGateway`, wan.wanGateway, 'xsd:string'],
+    ...ipParams,
     [`${conn}.DNSEnabled`, true, 'xsd:boolean'],
     [`${conn}.DNSServers`, dns, 'xsd:string'],
     [`${conn}.NATEnabled`, true, 'xsd:boolean'],

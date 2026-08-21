@@ -13,6 +13,13 @@ import {
   type FirmwareTarget,
 } from '../lib/onu-firmware'
 import { useNotify } from './NotifyProvider'
+import {
+  DesktopTableWrap,
+  MobileList,
+  MobileListCard,
+  MobileListEmpty,
+  MobileListMeta,
+} from './MobileList'
 
 const inputClass =
   'w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm outline-none ring-[var(--accent)] focus:ring-2'
@@ -235,7 +242,66 @@ export function OnuFirmwarePanel({ canWrite }: { canWrite: boolean }) {
         </form>
       )}
 
-      <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
+      <MobileList>
+        {loading && (
+          <p className="text-sm text-[var(--text-muted)]">Cargando…</p>
+        )}
+        {!loading && images.length === 0 && (
+          <MobileListEmpty>
+            No hay imágenes. Sube un firmware y asócialo a un modelo.
+          </MobileListEmpty>
+        )}
+        {images.map((img) => {
+          const active = img.id === selectedId
+          return (
+            <MobileListCard
+              key={img.id}
+              className={`cursor-pointer ${
+                active ? 'ring-1 ring-[var(--accent)]' : ''
+              }`}
+              onClick={() => setSelectedId(img.id)}
+            >
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold">
+                    {img.modelKey}
+                  </p>
+                  <p className="font-mono text-[11px] text-[var(--text-muted)]">
+                    {img.version}
+                  </p>
+                </div>
+                {canWrite && (
+                  <button
+                    type="button"
+                    className="shrink-0 text-xs text-[var(--danger)] hover:underline"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      askDelete(img)
+                    }}
+                  >
+                    Borrar
+                  </button>
+                )}
+              </div>
+              <MobileListMeta>
+                <span className="truncate">{img.fileName}</span>
+                <span>·</span>
+                <span>{formatFileSize(img.byteSize)}</span>
+                <span>·</span>
+                {img.acsRegistered ? (
+                  <span className="text-emerald-500">Registrada</span>
+                ) : (
+                  <span className="text-amber-500">Solo disco</span>
+                )}
+                <span>·</span>
+                <span>{new Date(img.createdAt).toLocaleString()}</span>
+              </MobileListMeta>
+            </MobileListCard>
+          )
+        })}
+      </MobileList>
+
+      <DesktopTableWrap>
         <table className="min-w-full text-left text-sm">
           <thead className="bg-[var(--bg)] text-xs uppercase text-[var(--text-muted)]">
             <tr>
@@ -311,7 +377,7 @@ export function OnuFirmwarePanel({ canWrite }: { canWrite: boolean }) {
             })}
           </tbody>
         </table>
-      </div>
+      </DesktopTableWrap>
 
       {selected && (
         <div className="space-y-3">
@@ -333,7 +399,64 @@ export function OnuFirmwarePanel({ canWrite }: { canWrite: boolean }) {
           {targetsQuery.isLoading && (
             <p className="text-sm text-[var(--text-muted)]">Cargando ONUs…</p>
           )}
-          <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
+          <MobileList>
+            {targets.length === 0 && !targetsQuery.isLoading && (
+              <MobileListEmpty>
+                No hay ONUs Conectadas de este modelo.
+              </MobileListEmpty>
+            )}
+            {targets.map((t) => (
+              <MobileListCard key={t.onuId}>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="truncate font-mono text-sm font-semibold">
+                      {t.sn ?? '—'}
+                    </p>
+                    {t.name ? (
+                      <p className="truncate text-xs text-[var(--text-muted)]">
+                        {t.name}
+                      </p>
+                    ) : null}
+                  </div>
+                  {t.online ? (
+                    <span className="shrink-0 text-xs text-emerald-500">
+                      Online
+                    </span>
+                  ) : (
+                    <span className="shrink-0 text-xs text-[var(--text-muted)]">
+                      Offline
+                    </span>
+                  )}
+                </div>
+                <MobileListMeta>
+                  <span>{t.oltName || '—'}</span>
+                  <span>·</span>
+                  <span className="font-mono">ACS {t.acsVersion ?? '—'}</span>
+                </MobileListMeta>
+                {(canWrite || (!t.canUpgrade && t.skipReason)) && (
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    {canWrite && (
+                      <button
+                        type="button"
+                        className={btnPrimary}
+                        disabled={busy || !t.canUpgrade}
+                        title={t.skipReason ?? 'Encolar Download TR-069'}
+                        onClick={() => askUpgradeOne(t)}
+                      >
+                        Actualizar
+                      </button>
+                    )}
+                    {!t.canUpgrade && t.skipReason && (
+                      <span className="text-xs text-[var(--text-muted)]">
+                        {t.skipReason}
+                      </span>
+                    )}
+                  </div>
+                )}
+              </MobileListCard>
+            ))}
+          </MobileList>
+          <DesktopTableWrap>
             <table className="min-w-full text-left text-sm">
               <thead className="bg-[var(--bg)] text-xs uppercase text-[var(--text-muted)]">
                 <tr>
@@ -401,7 +524,7 @@ export function OnuFirmwarePanel({ canWrite }: { canWrite: boolean }) {
                 ))}
               </tbody>
             </table>
-          </div>
+          </DesktopTableWrap>
         </div>
       )}
     </div>

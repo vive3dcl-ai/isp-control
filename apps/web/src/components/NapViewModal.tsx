@@ -262,12 +262,7 @@ export function NapViewModal({
               : 'max-h-[min(92vh,100dvh)] max-w-[min(100rem,95vw)] rounded-xl',
           ].join(' ')}
         >
-          <div
-            className={[
-              'flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-[var(--border)] px-4 py-3 sm:px-5',
-              mobile ? 'pt-[max(0.75rem,env(safe-area-inset-top))]' : '',
-            ].join(' ')}
-          >
+          <div className="modal-safe-header flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-[var(--border)] px-4 py-3 sm:px-5">
             <div className="flex items-center gap-3">
               <MapElementTypeIcon type="nap" size={40} />
               <div>
@@ -337,7 +332,7 @@ export function NapViewModal({
                 onChange={onChange}
               />
             ) : (
-              <div className="min-h-0 flex-1 space-y-4 overflow-auto p-3 sm:p-4">
+              <div className="min-h-0 flex-1 space-y-4 overflow-auto p-3 pb-[max(0.75rem,var(--safe-bottom))] sm:p-4 sm:pb-4">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-xs font-semibold tracking-wide text-[var(--text-muted)] uppercase">
                     Splitters

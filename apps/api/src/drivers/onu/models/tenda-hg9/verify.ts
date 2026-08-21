@@ -15,7 +15,12 @@ import {
   isTendaServiceWanApplied,
   listTendaWanIpConnections,
 } from './wan';
-import { ACS_ENSURE_SERVICE_STEP } from '../_progress-plans';
+import { ACS_ENSURE_SERVICE_STEP, OLT_SERVICE_L2_STEP } from '../_progress-plans';
+import {
+  healServiceL2IfNeeded,
+  serviceWanCarrierOk,
+} from '../../infra/service-carrier';
+import { healServiceWanVlanToPanel } from '../../infra/service-wan-vlan';
 import {
   TR098_VERIFY_CHECKS,
   netStepsFromVerifyChecks,
@@ -24,6 +29,7 @@ import {
 
 export const TENDA_HG9_PROGRESS_PLAN: OnuProgressStepDef[] = [
   ACS_ENSURE_SERVICE_STEP,
+  OLT_SERVICE_L2_STEP,
   ...netStepsFromVerifyChecks(TR098_VERIFY_CHECKS),
 ];
 
@@ -46,19 +52,25 @@ export function diagnoseGapsTendaHg9(
     reachable: opts?.reachable,
     hasServiceWan: has,
     serviceWanOk: isTendaServiceWanApplied(device, wan),
+    serviceCarrierOk: serviceWanCarrierOk(device, {
+      expectedIp: wan.wanIp,
+      expectedVlanId: wan.wanVlan,
+      mgmtIp: opts?.mgmtIp,
+    }),
   };
 }
 
-export type TendaHg9VerifyAction = 'noop' | 'omci' | 'spv';
+export type TendaHg9VerifyAction = 'noop' | 'omci' | 'spv' | 'l2';
 
 /**
  * Heal HG9: Inform vivo + WAN mal → solo SPV (OMCI extra pisa la IP ACS).
- * ConnReq no forma parte del veredicto WAN.
+ * Sin carrier L2 → service-port OLT antes de SPV.
  */
 export function pickTendaHg9VerifyAction(
   gaps: OnuHealGaps,
 ): TendaHg9VerifyAction {
-  if (gaps.serviceWanOk) return 'noop';
+  if (gaps.serviceWanOk && gaps.serviceCarrierOk !== false) return 'noop';
+  if (gaps.serviceCarrierOk === false) return 'l2';
   if (gaps.informAlive) return 'spv';
   if (gaps.reachable === false && gaps.informAlive === false) return 'omci';
   return 'spv';
@@ -67,7 +79,30 @@ export function pickTendaHg9VerifyAction(
 export async function verifyHealTendaHg9(
   ctx: OnuVerifyHealCtx,
 ): Promise<OnuModelProvisionResult> {
-  const action = pickTendaHg9VerifyAction(ctx.gaps);
+  // VLAN panel primero (recreate; Tenda no reescribe X_TDTC_VLAN).
+  const vlanHeal = await healServiceWanVlanToPanel(ctx, {
+    family: 'tenda',
+    prefer: 'recreate',
+  });
+  if (vlanHeal) {
+    return {
+      ok: vlanHeal.ok,
+      notes: ['verify tenda-hg9', ...vlanHeal.notes],
+      progress: vlanHeal.progress,
+    };
+  }
+
+  const gaps = {
+    ...ctx.gaps,
+    serviceCarrierOk:
+      ctx.gaps.serviceCarrierOk ??
+      serviceWanCarrierOk(ctx.device ?? {}, {
+        expectedIp: ctx.wan?.wanIp,
+        expectedVlanId: ctx.wan?.wanVlan,
+        mgmtIp: ctx.mgmtIp,
+      }),
+  };
+  const action = pickTendaHg9VerifyAction(gaps);
 
   if (action === 'noop') {
     return {
@@ -77,6 +112,19 @@ export async function verifyHealTendaHg9(
         currentStepId: null,
         completed: ['ensure_service_wan'],
         notes: ['WAN servicio ya OK'],
+      },
+    };
+  }
+
+  if (action === 'l2') {
+    const l2 = await healServiceL2IfNeeded(ctx, { force: true });
+    return {
+      ok: l2?.ok ?? false,
+      notes: ['verify tenda-hg9', ...(l2?.notes ?? ['ensure_service_l2'])],
+      progress: l2?.progress ?? {
+        currentStepId: 'ensure_service_l2',
+        completed: [],
+        notes: [],
       },
     };
   }

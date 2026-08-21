@@ -964,8 +964,17 @@ export class IpPoolService {
 
   /**
    * Assign (or reuse) a WAN/internet IP from the OLT's internet pool for vlanId.
+   *
+   * `preferIp`: si el CPE/ACS ya tiene una IP del pool (p. ej. tras borrar y
+   * reautorizar), reutilizarla evita el desfase DB↔ACS y el SPV que Huawei
+   * rechaza con 9005 cuando no hay carrier.
    */
-  async assignWanIp(schema: string, onu: Onu, vlanId: number) {
+  async assignWanIp(
+    schema: string,
+    onu: Onu,
+    vlanId: number,
+    opts?: { preferIp?: string | null },
+  ) {
     const poolRepo = await this.tenantConnections.getIpPoolRepository(schema);
     const pool = await poolRepo.findOne({
       where: {
@@ -990,7 +999,9 @@ export class IpPoolService {
     const onuRepo = await this.tenantConnections.getOnuRepository(schema);
 
     // Keep existing IP if already in this pool; otherwise free other WAN allocs.
-    let keep = (
+    let keep:
+      | Awaited<ReturnType<typeof allocRepo.find>>[number]
+      | undefined = (
       await allocRepo.find({
         where: { onuId: onu.id, poolId: pool.id },
         order: { createdAt: 'DESC' },
@@ -1014,8 +1025,39 @@ export class IpPoolService {
       }
     }
 
+    const net = this.poolStats(pool.gateway, pool.prefix);
+    const prefer = opts?.preferIp?.trim() || null;
+    if (prefer && isIpInUsable(prefer, net)) {
+      const taken = await allocRepo.findOne({
+        where: { poolId: pool.id, ipAddress: prefer },
+      });
+      const available =
+        !taken || taken.onuId === onu.id || taken.onuId == null;
+      if (available) {
+        if (keep && keep.ipAddress !== prefer) {
+          await allocRepo.delete({ id: keep.id });
+          keep = undefined;
+        }
+        if (!keep || keep.ipAddress !== prefer) {
+          if (taken && taken.onuId == null) {
+            await allocRepo.delete({ id: taken.id });
+          }
+          if (taken && taken.onuId === onu.id) {
+            keep = taken;
+          } else {
+            keep = await allocRepo.save(
+              allocRepo.create({
+                poolId: pool.id,
+                ipAddress: prefer,
+                onuId: onu.id,
+              }),
+            );
+          }
+        }
+      }
+    }
+
     if (!keep) {
-      const net = this.poolStats(pool.gateway, pool.prefix);
       keep = await this.allocateLowestFreeIp(schema, pool.id, onu.id, net);
     }
 
@@ -1035,6 +1077,83 @@ export class IpPoolService {
         );
       });
     return this.wanAssignResult(pool, keep.ipAddress);
+  }
+
+  /**
+   * Si el ACS reporta una IP del pool distinta a la de BD y está libre (o ya
+   * es de esta ONU), alinear la asignación a esa IP. Evita curar a ciegas con
+   * SPV ExternalIPAddress tras delete/reauth.
+   */
+  async adoptWanIpIfFree(
+    schema: string,
+    onu: Onu,
+    acsIp: string,
+  ): Promise<{ adopted: boolean; wanIp: string | null; note: string }> {
+    const want = acsIp.trim();
+    if (!want || !onu.wanPoolId) {
+      return { adopted: false, wanIp: onu.wanIp, note: 'sin pool/IP ACS' };
+    }
+    if (onu.wanIp === want) {
+      return { adopted: false, wanIp: onu.wanIp, note: 'ya alineada' };
+    }
+    const poolRepo = await this.tenantConnections.getIpPoolRepository(schema);
+    const pool = await poolRepo.findOne({ where: { id: onu.wanPoolId } });
+    if (!pool || pool.purpose !== 'internet') {
+      return { adopted: false, wanIp: onu.wanIp, note: 'pool WAN ausente' };
+    }
+    const net = this.poolStats(pool.gateway, pool.prefix);
+    if (!isIpInUsable(want, net)) {
+      return {
+        adopted: false,
+        wanIp: onu.wanIp,
+        note: `IP ACS ${want} fuera del pool`,
+      };
+    }
+    const allocRepo =
+      await this.tenantConnections.getIpPoolAllocationRepository(schema);
+    const taken = await allocRepo.findOne({
+      where: { poolId: pool.id, ipAddress: want },
+    });
+    if (taken && taken.onuId && taken.onuId !== onu.id) {
+      return {
+        adopted: false,
+        wanIp: onu.wanIp,
+        note: `IP ACS ${want} ocupada por otra ONU`,
+      };
+    }
+    // Liberar la IP anterior de esta ONU en el pool.
+    const mine = await allocRepo.find({
+      where: { onuId: onu.id, poolId: pool.id },
+    });
+    for (const a of mine) {
+      if (a.ipAddress !== want) await allocRepo.delete({ id: a.id });
+    }
+    if (taken && taken.onuId == null) {
+      await allocRepo.delete({ id: taken.id });
+    }
+    const existingMine = mine.find((a) => a.ipAddress === want);
+    if (!existingMine) {
+      await allocRepo.save(
+        allocRepo.create({
+          poolId: pool.id,
+          ipAddress: want,
+          onuId: onu.id,
+        }),
+      );
+    }
+    const onuRepo = await this.tenantConnections.getOnuRepository(schema);
+    onu.wanIp = want;
+    onu.wanPoolId = pool.id;
+    onu.vlan = pool.vlanId;
+    await onuRepo.save(onu);
+    void this.suspensionPortal
+      .refreshSuspendedWanIp(schema, onu.id, want)
+      .catch(() => undefined);
+    return {
+      adopted: true,
+      wanIp: want,
+      note: `adoptó IP ACS ${want} (liberó desfase de pool)`,
+    };
   }
 
   private wanAssignResult(pool: IpPool, wanIp: string) {

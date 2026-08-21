@@ -12,6 +12,9 @@ import { SmtpConfigModal } from '../components/SmtpConfigModal'
 import type { SystemPlan, SystemPlansAdmin } from '../lib/platform'
 import type { PlatformBranding } from '../lib/branding'
 import { DEFAULT_PLATFORM_BRANDING } from '../lib/branding'
+import type { PlatformAiSettings } from '../lib/modules'
+import { useAiModelsList } from '../lib/use-ai-models-list'
+import { AiModelPicker } from '../components/AiModelPicker'
 
 const inputClass =
   'rounded-lg border border-[var(--border)] bg-[var(--bg)] px-2 py-1.5 text-sm outline-none ring-[var(--accent)] focus:ring-2'
@@ -21,6 +24,7 @@ const TABS = [
   { id: 'urls', label: 'Dominio' },
   { id: 'vpn', label: 'VPN' },
   { id: 'smtp', label: 'SMTP' },
+  { id: 'ai', label: 'IA' },
   { id: 'system', label: 'Valor del sistema' },
   { id: 'backup', label: 'Respaldo' },
 ] as const
@@ -82,10 +86,195 @@ export function AdminSettingsPage() {
         </div>
       )}
 
+      {section === 'ai' && <PlatformAiPanel />}
+
       {section === 'system' && <SystemValuePanel />}
 
       {section === 'backup' && <BackupPanel />}
     </PanelShell>
+  )
+}
+
+function PlatformAiPanel() {
+  const { user } = useAuth()
+  const canWrite = user?.role === 'superadmin' || user?.role === 'admin'
+  const queryClient = useQueryClient()
+  const [enabled, setEnabled] = useState(false)
+  const [provider, setProvider] = useState('openai')
+  const [model, setModel] = useState('gpt-4.1-mini')
+  const [apiKey, setApiKey] = useState('')
+  const [hasApiKey, setHasApiKey] = useState(false)
+  const [dailyRequestLimit, setDailyRequestLimit] = useState(100)
+  const [dailyTokenLimit, setDailyTokenLimit] = useState(200_000)
+  const [msg, setMsg] = useState<string | null>(null)
+
+  const query = useQuery({
+    queryKey: ['admin', 'settings', 'ai'],
+    queryFn: () =>
+      apiFetch<PlatformAiSettings & { vendors?: Array<{ id: string; label: string; models: string[]; defaultModel: string }> }>(
+        '/admin/settings/ai',
+      ),
+  })
+
+  useEffect(() => {
+    if (!query.data) return
+    setEnabled(query.data.enabled)
+    setProvider(query.data.provider)
+    setModel(query.data.model)
+    setHasApiKey(!!query.data.hasApiKey)
+    setDailyRequestLimit(query.data.dailyRequestLimit)
+    setDailyTokenLimit(query.data.dailyTokenLimit)
+    setApiKey('')
+  }, [query.data])
+
+  const vendors = query.data?.vendors ?? []
+  const vendor = vendors.find((v) => v.id === provider)
+
+  const modelsList = useAiModelsList({
+    endpoint: '/admin/settings/ai/models',
+    provider,
+    apiKeyDraft: apiKey,
+    hasSavedApiKey: hasApiKey,
+    enabled: true,
+    presets: vendor?.models ?? [],
+  })
+
+  const mutation = useMutation({
+    mutationFn: () =>
+      apiFetch('/admin/settings/ai', {
+        method: 'PATCH',
+        body: JSON.stringify({
+          enabled,
+          provider,
+          model,
+          apiKey: apiKey || undefined,
+          dailyRequestLimit,
+          dailyTokenLimit,
+        }),
+      }),
+    onSuccess: () => {
+      setMsg('Ajustes IA guardados')
+      setApiKey('')
+      void queryClient.invalidateQueries({
+        queryKey: ['admin', 'settings', 'ai'],
+      })
+    },
+    onError: (err: Error) => setMsg(err.message),
+  })
+
+  return (
+    <div className="mt-5 max-w-xl space-y-4">
+      <p className="text-sm text-[var(--text-muted)]">
+        Proveedor interno para tenants que eligen modo «Interno» en Asistente
+        IA. Los límites diarios (UTC) solo aplican a ese modo.
+      </p>
+      {query.isLoading && (
+        <p className="text-sm text-[var(--text-muted)]">Cargando…</p>
+      )}
+      {query.error && (
+        <p className="text-sm text-[var(--danger)]">{query.error.message}</p>
+      )}
+      <label className="flex items-center gap-2 text-sm">
+        <input
+          type="checkbox"
+          checked={enabled}
+          disabled={!canWrite}
+          onChange={(e) => setEnabled(e.target.checked)}
+        />
+        Habilitar proveedor interno
+      </label>
+      <label className="block text-sm">
+        <span className="mb-1 block text-[var(--text-muted)]">Proveedor</span>
+        <select
+          className={inputClass + ' w-full'}
+          value={provider}
+          disabled={!canWrite}
+          onChange={(e) => {
+            const id = e.target.value
+            setProvider(id)
+            const v = vendors.find((x) => x.id === id)
+            if (v) setModel(v.defaultModel)
+          }}
+        >
+          {vendors.map((v) => (
+            <option key={v.id} value={v.id}>
+              {v.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="block text-sm">
+        <span className="mb-1 block text-[var(--text-muted)]">
+          API key {hasApiKey ? '(guardada)' : ''}
+        </span>
+        <input
+          type="password"
+          autoComplete="off"
+          className={inputClass + ' w-full'}
+          value={apiKey}
+          disabled={!canWrite}
+          placeholder={hasApiKey ? '••••••••' : 'sk-…'}
+          onChange={(e) => setApiKey(e.target.value)}
+          onBlur={() => modelsList.onApiKeyBlur()}
+        />
+      </label>
+      <div className="block text-sm">
+        <span className="mb-1 block text-[var(--text-muted)]">Modelo</span>
+        <AiModelPicker
+          className={inputClass + ' w-full'}
+          value={model}
+          onChange={setModel}
+          models={modelsList.models}
+          loading={modelsList.loading}
+          live={modelsList.live}
+          warning={modelsList.warning}
+          error={modelsList.error}
+          disabled={!canWrite}
+        />
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <label className="block text-sm">
+          <span className="mb-1 block text-[var(--text-muted)]">
+            Consultas / día
+          </span>
+          <input
+            type="number"
+            min={1}
+            className={inputClass + ' w-full'}
+            value={dailyRequestLimit}
+            disabled={!canWrite}
+            onChange={(e) => setDailyRequestLimit(Number(e.target.value))}
+          />
+        </label>
+        <label className="block text-sm">
+          <span className="mb-1 block text-[var(--text-muted)]">
+            Tokens / día
+          </span>
+          <input
+            type="number"
+            min={1000}
+            className={inputClass + ' w-full'}
+            value={dailyTokenLimit}
+            disabled={!canWrite}
+            onChange={(e) => setDailyTokenLimit(Number(e.target.value))}
+          />
+        </label>
+      </div>
+      {msg && <p className="text-sm text-[var(--text-muted)]">{msg}</p>}
+      {canWrite && (
+        <button
+          type="button"
+          disabled={mutation.isPending}
+          onClick={() => {
+            setMsg(null)
+            mutation.mutate()
+          }}
+          className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white hover:bg-[var(--accent-hover)] disabled:opacity-60"
+        >
+          {mutation.isPending ? 'Guardando…' : 'Guardar'}
+        </button>
+      )}
+    </div>
   )
 }
 
@@ -487,11 +676,16 @@ function SystemValuePanel() {
             <div className="min-w-[8rem]">
               <p className="text-sm font-medium">{p.label}</p>
               <p className="text-xs text-[var(--text-muted)]">
-                Cupo {p.userLimit} ONUs · mensual
+                Cupo {p.userLimit} ONUs ·{' '}
+                {p.isLifetime || p.code === 'lifetime'
+                  ? 'pago único'
+                  : 'mensual'}
               </p>
             </div>
             <label className="flex items-center gap-2 text-xs">
-              <span className="text-[var(--text-muted)]">USD/mes</span>
+              <span className="text-[var(--text-muted)]">
+                {p.isLifetime || p.code === 'lifetime' ? 'USD' : 'USD/mes'}
+              </span>
               <input
                 type="number"
                 min={0}

@@ -16,7 +16,9 @@ export function addDays(d: Date, n: number): Date {
 }
 
 export function daysInMonthUtc(d: Date): number {
-  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+  return new Date(
+    Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0),
+  ).getUTCDate();
 }
 
 export function endOfMonthUtc(d: Date): Date {
@@ -50,31 +52,82 @@ export function effectiveBillingRegime(
   return company === 'from_install' ? 'from_install' : 'calendar_month';
 }
 
+/** Día del mes en que se emite la factura (1–28), clamped al mes siguiente al cierre. */
+export function nextBillingOnCycleDay(
+  periodEndIso: string,
+  cycleDay: number,
+): string {
+  const nextStart = addDays(parseIsoDate(periodEndIso), 1);
+  const day = Math.min(Math.max(1, Math.floor(cycleDay)), daysInMonthUtc(nextStart));
+  nextStart.setUTCDate(day);
+  return formatIsoDate(nextStart);
+}
+
+export function effectiveRegimeForService(
+  companyRegime: BillingRegime,
+  billingProrate: boolean,
+): BillingRegime {
+  if (companyRegime === 'from_install' && billingProrate) {
+    return 'calendar_month';
+  }
+  return companyRegime;
+}
+
+export function cycleDayForService(
+  companyRegime: BillingRegime,
+  billingProrate: boolean,
+  companyCycleDay: number,
+): number {
+  if (companyRegime === 'from_install' && billingProrate) {
+    return 1;
+  }
+  return companyCycleDay;
+}
+
 export function computeFirstPeriod(
   activeFrom: string,
   regime: BillingRegime,
+  cycleDay = 1,
 ): { periodStart: string; periodEnd: string; nextBillingDate: string } {
   const start = parseIsoDate(activeFrom);
   if (regime === 'calendar_month') {
     const end = endOfMonthUtc(start);
+    const periodEnd = formatIsoDate(end);
     return {
       periodStart: activeFrom,
-      periodEnd: formatIsoDate(end),
-      nextBillingDate: formatIsoDate(addDays(end, 1)),
+      periodEnd,
+      nextBillingDate: nextBillingOnCycleDay(periodEnd, cycleDay),
     };
   }
   const end = addMonthsClamp(start, 1);
   end.setUTCDate(end.getUTCDate() - 1);
+  const periodEnd = formatIsoDate(end);
   return {
     periodStart: activeFrom,
-    periodEnd: formatIsoDate(end),
+    periodEnd,
     nextBillingDate: formatIsoDate(addDays(end, 1)),
   };
+}
+
+export function computeServiceFirstPeriod(
+  activeFrom: string,
+  companyRegime: BillingRegime,
+  billingProrate: boolean,
+  companyCycleDay: number,
+): { periodStart: string; periodEnd: string; nextBillingDate: string } {
+  const regime = effectiveRegimeForService(companyRegime, billingProrate);
+  const cycleDay = cycleDayForService(
+    companyRegime,
+    billingProrate,
+    companyCycleDay,
+  );
+  return computeFirstPeriod(activeFrom, regime, cycleDay);
 }
 
 export function rollPeriod(
   periodEndIso: string,
   regime: BillingRegime,
+  cycleDay = 1,
 ): { periodStart: string; periodEnd: string; nextBillingDate: string } {
   const nextStart = addDays(parseIsoDate(periodEndIso), 1);
   let periodEnd: Date;
@@ -84,9 +137,28 @@ export function rollPeriod(
     periodEnd = addMonthsClamp(nextStart, 1);
     periodEnd.setUTCDate(periodEnd.getUTCDate() - 1);
   }
+  const periodEndIsoOut = formatIsoDate(periodEnd);
   return {
     periodStart: formatIsoDate(nextStart),
-    periodEnd: formatIsoDate(periodEnd),
-    nextBillingDate: formatIsoDate(addDays(periodEnd, 1)),
+    periodEnd: periodEndIsoOut,
+    nextBillingDate:
+      regime === 'calendar_month'
+        ? nextBillingOnCycleDay(periodEndIsoOut, cycleDay)
+        : formatIsoDate(addDays(periodEnd, 1)),
   };
+}
+
+export function rollServicePeriod(
+  periodEndIso: string,
+  companyRegime: BillingRegime,
+  billingProrate: boolean,
+  companyCycleDay: number,
+): { periodStart: string; periodEnd: string; nextBillingDate: string } {
+  const regime = effectiveRegimeForService(companyRegime, billingProrate);
+  const cycleDay = cycleDayForService(
+    companyRegime,
+    billingProrate,
+    companyCycleDay,
+  );
+  return rollPeriod(periodEndIso, regime, cycleDay);
 }

@@ -42,6 +42,7 @@ import {
   internetTcontProfileOf,
   tcontProfileMatches,
 } from '../../drivers/olt/zte/shared/zte-olt-dba.util';
+import { toSystemOltProfileName } from '../../drivers/olt/zte/shared/zte-olt-speed.util';
 import {
   addLanPort,
   boundEthPortsFromWan,
@@ -80,6 +81,8 @@ import {
   applyGenericServiceSpv,
   decideModelPrepReboot,
   driverSkipsOmciServiceWan,
+  findHuaweiInternetWan,
+  listHuaweiWanIpConnections,
   mergeProgressState,
   resolveAcsModelFromDevice,
   resolveOmciPlan,
@@ -103,7 +106,10 @@ import {
 import { computeIpNetwork } from '../routers/ip-pool.util';
 import type { NetworkDevice } from '../shared/entities/network-device.entity';
 import type { Tr069Profile } from '../shared/entities/tr069-profile.entity';
-
+import {
+  findServiceWanConnection,
+  readWanConnectionState,
+} from '../../drivers/onu/infra/wan-datamodel';
 function deviceIdString(value: unknown): string {
   return typeof value === 'string' || typeof value === 'number'
     ? String(value)
@@ -2126,21 +2132,86 @@ export class OnuTr069ConfigService {
     upProfile: string;
     downProfile: string | null;
     speedProfileName: string;
+    oltBaseName: string;
+    downloadMbps: number;
+    uploadMbps: number;
   } | null> {
     const svcRepo =
       await this.tenantConnections.getClientServiceRepository(schema);
-    const svc = await svcRepo.findOne({
-      where: { onuId, status: Not('ended') },
-      relations: { servicePlan: { speedProfile: true } },
-      order: { createdAt: 'DESC' },
-    });
-    const name = svc?.servicePlan?.speedProfile?.name?.trim();
+    const svc = await svcRepo
+      .createQueryBuilder('s')
+      .leftJoinAndSelect('s.servicePlan', 'plan')
+      .leftJoinAndSelect('plan.speedProfile', 'sp')
+      .where('s.onu_id = :onuId', { onuId })
+      .orderBy(`CASE WHEN s.status = 'ended' THEN 1 ELSE 0 END`, 'ASC')
+      .addOrderBy('s.createdAt', 'DESC')
+      .getOne();
+    const sp = svc?.servicePlan?.speedProfile;
+    const name = sp?.name?.trim();
     const up = expectedInternetTcontUp(name);
-    if (!up) return null;
+    const oltBaseName = name ? toSystemOltProfileName(name) : null;
+    if (!up || !oltBaseName || !sp) return null;
     return {
       upProfile: up,
       downProfile: expectedInternetTrafficDown(name),
       speedProfileName: name!,
+      oltBaseName,
+      downloadMbps: sp.downloadMbps,
+      uploadMbps: sp.uploadMbps,
+    };
+  }
+
+  /** Crea el par UP/DOWN en la OLT si el plan lo exige y aún no está. */
+  private async ensureOltSpeedProfile(
+    olt: NetworkDevice,
+    expected: {
+      upProfile: string;
+      oltBaseName: string;
+      downloadMbps: number;
+      uploadMbps: number;
+    },
+  ): Promise<{ ok: boolean; message: string }> {
+    const protocol: 'telnet' | 'ssh' =
+      olt.mgmtProtocol === 'ssh' ? 'ssh' : 'telnet';
+    const conn = {
+      host: olt.mgmtHost!,
+      port:
+        olt.mgmtPort ??
+        (protocol === 'ssh' ? DEFAULT_OLT_PORTS.ssh : DEFAULT_OLT_PORTS.telnet),
+      protocol,
+      username: olt.mgmtUsername!,
+      password: olt.mgmtPassword!,
+    };
+    const cli = this.oltCli(olt);
+    const listed = await cli.listSpeedProfiles({
+      ...conn,
+      priority: 'interactive',
+    });
+    if (listed.ok) {
+      const hit = listed.profiles.some(
+        (p) =>
+          p.uploadProfile?.trim().toUpperCase() ===
+          expected.upProfile.trim().toUpperCase(),
+      );
+      if (hit) {
+        return { ok: true, message: `${expected.upProfile} ya en OLT` };
+      }
+    }
+    const upsert = await cli.upsertSpeedProfile({
+      ...conn,
+      name: expected.oltBaseName,
+      downloadMbps: expected.downloadMbps,
+      uploadMbps: expected.uploadMbps,
+    });
+    if (!upsert.ok) {
+      return {
+        ok: false,
+        message: upsert.error || `no se creó ${expected.upProfile} en OLT`,
+      };
+    }
+    return {
+      ok: true,
+      message: upsert.message ?? `${expected.upProfile} sincronizado a OLT`,
     };
   }
 
@@ -2206,16 +2277,6 @@ export class OnuTr069ConfigService {
         healed: false,
       };
     }
-    if (isHuaweiOltDevice(olt.type, olt.subtype)) {
-      return {
-        ok: true,
-        matched: true,
-        expected: expected.upProfile,
-        actual: null,
-        message: 'DBA Huawei MA pendiente (etapa 3.4)',
-        healed: false,
-      };
-    }
     const heal =
       opts?.heal === true && !shouldSkipOltHealWrites(olt.technicianMode);
     const protocol: 'telnet' | 'ssh' =
@@ -2252,10 +2313,33 @@ export class OnuTr069ConfigService {
         expected: expected.upProfile,
         actual,
         message: shouldSkipOltHealWrites(olt.technicianMode)
-          ? 'Técnico en OLT: no se escribe T-CONT'
+          ? 'Técnico en OLT: no escribe T-CONT'
           : `T-CONT 1 ${actual ?? '—'} ≠ ${expected.upProfile}`,
         healed: false,
       };
+    }
+    const ensured = await this.ensureOltSpeedProfile(olt, expected);
+    if (!ensured.ok) {
+      const fail = {
+        ok: false,
+        matched: false,
+        expected: expected.upProfile,
+        actual,
+        message: ensured.message,
+        healed: false,
+      };
+      await this.audit.record(schema, {
+        action: 'dba_heal',
+        actorKind: 'system',
+        ok: false,
+        durationMs: Date.now() - t0,
+        sn: onu.sn,
+        onuId: onu.id,
+        oltId: onu.oltId,
+        onuIf: onu.onuIf,
+        detail: { message: fail.message },
+      });
+      return fail;
     }
     const applied = await cli.applyOnuInternetTcont({
       ...conn,
@@ -2353,8 +2437,21 @@ export class OnuTr069ConfigService {
         notes.push('WAN liberada');
         onu = (await onuRepo.findOne({ where: { id: onuId } }))!;
       } else {
-        const wan = await this.ipPools.assignWanIp(schema, onu, dto.wanVlanId);
-        notes.push(`WAN ${wan.wanIp} (VLAN ${wan.wanVlan})`);
+        let preferIp: string | null = null;
+        if (onu.sn?.trim()) {
+          preferIp = await this.peekAcsInternetIp(onu.sn).catch(() => null);
+        }
+        const wan = await this.ipPools.assignWanIp(
+          schema,
+          onu,
+          dto.wanVlanId,
+          { preferIp },
+        );
+        notes.push(
+          preferIp && wan.wanIp === preferIp
+            ? `WAN ${wan.wanIp} (VLAN ${wan.wanVlan}, reutilizada del ACS)`
+            : `WAN ${wan.wanIp} (VLAN ${wan.wanVlan})`,
+        );
         onu = (await onuRepo.findOne({ where: { id: onuId } }))!;
       }
     }
@@ -2846,40 +2943,79 @@ export class OnuTr069ConfigService {
     onuId: string,
   ): Promise<string | null> {
     const onuRepo = await this.tenantConnections.getOnuRepository(schema);
-    const onu = await onuRepo.findOne({ where: { id: onuId } });
+    let onu = await onuRepo.findOne({ where: { id: onuId } });
     if (!onu?.wanIp || !onu.wanPoolId) return null;
     const poolRepo = await this.tenantConnections.getIpPoolRepository(schema);
-    const wanPool = await poolRepo.findOne({ where: { id: onu.wanPoolId } });
+    let wanPool = await poolRepo.findOne({ where: { id: onu.wanPoolId } });
     if (!wanPool?.dns1) return 'curación WAN: pool sin DNS';
-    const wan: OnuModelProvisionWanPlan = {
-      wanIp: onu.wanIp,
-      wanVlan: wanPool.vlanId,
-      wanGateway: wanPool.gateway,
-      wanMask: prefixToMask(wanPool.prefix),
-      wanDns1: wanPool.dns1,
-      wanDns2: wanPool.dns2,
-    };
     try {
-      if (!onu.sn?.trim()) return 'curación WAN: sin SN';
+      const sn = onu.sn?.trim();
+      if (!sn) return 'curación WAN: sin SN';
       const client = this.nbi();
-      const device = await client.findBySerial(onu.sn);
+      const device = await client.findBySerial(sn);
       if (!device?._id) return 'curación WAN: ONU aún no Informó al ACS';
       const deviceDoc = device as Record<string, unknown>;
+
+      // Si el CPE ya tiene otra IP del mismo pool (fantasma post-delete),
+      // alinear BD en lugar de SPV ExternalIPAddress (Huawei 9005 sin carrier).
+      const acsIp = this.internetIpFromDevice(deviceDoc);
+      const adoptNotes: string[] = [];
+      if (acsIp && acsIp !== onu.wanIp) {
+        const adopt = await this.ipPools.adoptWanIpIfFree(schema, onu, acsIp);
+        if (adopt.adopted) {
+          adoptNotes.push(adopt.note);
+          onu = (await onuRepo.findOne({ where: { id: onuId } }))!;
+          wanPool = onu.wanPoolId
+            ? await poolRepo.findOne({ where: { id: onu.wanPoolId } })
+            : wanPool;
+          if (!onu?.wanIp || !wanPool?.dns1) {
+            return adoptNotes.join(' · ');
+          }
+        } else if (adopt.note.includes('ocupada')) {
+          adoptNotes.push(adopt.note);
+        }
+      }
+
+      const wan: OnuModelProvisionWanPlan = {
+        wanIp: onu.wanIp!,
+        wanVlan: wanPool!.vlanId,
+        wanGateway: wanPool!.gateway,
+        wanMask: prefixToMask(wanPool!.prefix),
+        wanDns1: wanPool!.dns1!,
+        wanDns2: wanPool!.dns2,
+      };
       const acsModel = resolveAcsModelFromDevice(deviceDoc);
       const matchCtx = {
-        sn: onu.sn,
+        sn,
         onuType: onu.onuType,
         acsModel,
       };
       const driver = resolveOnuDriver(matchCtx);
       const heal = driver?.verifyHeal ?? driver?.healOne;
       if (driver && heal) {
-        this.attachWake(client, device, onu.sn);
+        this.attachWake(client, device, sn);
         const deviceId = deviceIdString(device._id);
+        const gaps =
+          driver.diagnoseGaps?.(deviceDoc, wan, {
+            mgmtIp: onu.mgmtIp,
+          }) ?? {};
+        // Checker: no re-provisionar si WAN panel ok y carrier ok/indefinido.
+        // Si falta carrier (false), sí curar L2.
+        if (
+          gaps.serviceWanOk === true &&
+          gaps.serviceCarrierOk !== false
+        ) {
+          return adoptNotes.length
+            ? adoptNotes.join(' · ')
+            : null;
+        }
+        const reachable =
+          gaps.reachable ??
+          (await this.probeConnectionRequest(device, sn)).ok;
         const ctx = this.buildModelProvisionCtx({
           schema,
           onuId: onu.id,
-          sn: onu.sn,
+          sn,
           mgmtIp: onu.mgmtIp,
           onuType: onu.onuType,
           oltId: onu.oltId,
@@ -2891,14 +3027,10 @@ export class OnuTr069ConfigService {
           wan,
           explicit: false,
         });
-        const reachable = (await this.probeConnectionRequest(device, onu.sn))
-          .ok;
-        const gaps =
-          driver.diagnoseGaps?.(deviceDoc, wan, {
-            mgmtIp: onu.mgmtIp,
-            reachable,
-          }) ?? { reachable };
-        const result = await heal({ ...ctx, gaps });
+        const result = await heal({
+          ...ctx,
+          gaps: { ...gaps, reachable },
+        });
         if (result.progress) {
           const prev = (onu.verifyDetail ?? {}) as {
             progress?: OnuProgressState;
@@ -2912,18 +3044,38 @@ export class OnuTr069ConfigService {
           await onuRepo.save(onu);
         }
         const msg = result.notes.join(' · ') || driver.id;
-        return result.ok
+        const healNote = result.ok
           ? `curación WAN: driver ${driver.id} heal: ${msg}`
           : `curación WAN: driver ${driver.id} heal falló: ${msg}`;
+        return [...adoptNotes, healNote].join(' · ');
       }
 
-      const note = await this.applyWanStaticTr069(schema, onu, wan);
-      return `curación WAN: ${note}`;
+      // Checker NUNCA re-corre provision completo (eso es Resync / apply).
+      return [
+        ...adoptNotes,
+        `curación WAN: driver ${driver?.id ?? 'desconocido'} sin verifyHeal (omitido; usar Resync para re-provisionar)`,
+      ].join(' · ');
     } catch (e) {
       return `curación WAN: ${e instanceof Error ? e.message : String(e)}`;
     }
   }
 
+  /** IP INTERNET reportada por el ACS (Huawei o genérico). */
+  private internetIpFromDevice(
+    device: Record<string, unknown>,
+  ): string | null {
+    const hw = findHuaweiInternetWan(listHuaweiWanIpConnections(device));
+    if (hw?.externalIp?.trim()) return hw.externalIp.trim();
+    const found = findServiceWanConnection(device);
+    if (!found || found.isMgmt) return null;
+    return readWanConnectionState(device, found).ip?.trim() || null;
+  }
+
+  private async peekAcsInternetIp(sn: string): Promise<string | null> {
+    const device = await this.nbi().findBySerial(sn);
+    if (!device) return null;
+    return this.internetIpFromDevice(device as Record<string, unknown>);
+  }
   /**
    * Curación TR-181: desactiva WAN SmartOLT (10.0.110.*) y reapunta
    * `0.0.0.0/0` a la WAN de servicio del pool. Sin esto el verify puede
@@ -3640,6 +3792,7 @@ export class OnuTr069ConfigService {
       isReachable: async () =>
         (await this.probeConnectionRequest(device, sn)).ok,
       ensureOmciTr069: () => this.applyOmciTr069ForOnu(schema, onuId),
+      ensureServiceL2: () => this.applyServiceL2ForOnu(schema, onuId),
       onProgress: async (partial) => {
         try {
           const onuRepo =
@@ -3746,6 +3899,93 @@ export class OnuTr069ConfigService {
         : `preload connreq status ${r.status}`;
     } catch (e) {
       return `preload connreq falló: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  /**
+   * Reaplica service-port / flow L2 de la VLAN WAN (y mgmt si hay) en la OLT.
+   * Usado por drivers Huawei ACS cuando el CPE reporta ERROR_NO_CARRIER.
+   * Siempre usa la VLAN del panel/pool (nunca la fantasma del ACS).
+   */
+  private async applyServiceL2ForOnu(
+    schema: string,
+    onuId: string,
+  ): Promise<OnuOmciTr069Result> {
+    const notes: string[] = [];
+    try {
+      const onuRepo = await this.tenantConnections.getOnuRepository(schema);
+      const onu = await onuRepo.findOne({ where: { id: onuId } });
+      if (!onu) return { ok: false, notes: ['L2: ONU no encontrada'] };
+      if (!onu.onuIf?.trim()) {
+        return { ok: false, notes: ['L2: ONU sin onuIf'] };
+      }
+      const deviceRepo =
+        await this.tenantConnections.getNetworkDeviceRepository(schema);
+      const olt = await deviceRepo.findOne({ where: { id: onu.oltId } });
+      if (!olt || !isManagedOltDevice(olt.type, olt.subtype)) {
+        return { ok: false, notes: ['L2: OLT no gestionada'] };
+      }
+      if (!olt.mgmtHost || !olt.mgmtUsername || !olt.mgmtPassword) {
+        return { ok: false, notes: ['L2: OLT sin credenciales'] };
+      }
+
+      let wanVlan: number | null = onu.vlan ?? null;
+      let mgmtVlan: number | null = null;
+      const poolRepo = await this.tenantConnections.getIpPoolRepository(schema);
+      if (onu.wanPoolId) {
+        const wanPool = await poolRepo.findOne({ where: { id: onu.wanPoolId } });
+        if (wanPool?.vlanId != null) wanVlan = wanPool.vlanId;
+      }
+      if (onu.mgmtPoolId) {
+        const mgmtPool = await poolRepo.findOne({
+          where: { id: onu.mgmtPoolId },
+        });
+        if (mgmtPool?.vlanId != null) mgmtVlan = mgmtPool.vlanId;
+      }
+      if (wanVlan == null) {
+        return { ok: false, notes: ['L2: sin VLAN WAN asignada'] };
+      }
+
+      const dba = await this.resolveInternetDba(schema, onu.id);
+      const protocol: 'telnet' | 'ssh' =
+        olt.mgmtProtocol === 'ssh' ? 'ssh' : 'telnet';
+      const port =
+        olt.mgmtPort ??
+        (protocol === 'ssh' ? DEFAULT_OLT_PORTS.ssh : DEFAULT_OLT_PORTS.telnet);
+
+      const result = await this.oltCli(olt).applyOnuServiceVlans({
+        host: olt.mgmtHost,
+        port,
+        protocol,
+        username: olt.mgmtUsername,
+        password: olt.mgmtPassword,
+        onuIf: onu.onuIf,
+        wanVlan,
+        mgmtVlan: mgmtVlan ?? undefined,
+        internetTcontProfile: dba?.upProfile ?? null,
+        subtypeHint: olt.subtype,
+        firmwareHint: oltFirmwareHint(olt),
+      });
+      if (!result.ok) {
+        return {
+          ok: false,
+          notes: [
+            `L2 service-port VLAN ${wanVlan}: ${result.error || 'falló'}`,
+          ],
+        };
+      }
+      notes.push(
+        result.message ??
+          `L2 service-port VLAN ${wanVlan} aplicado${
+            mgmtVlan != null ? ` + mgmt ${mgmtVlan}` : ''
+          }`,
+      );
+      return { ok: true, notes };
+    } catch (e) {
+      return {
+        ok: false,
+        notes: [`L2: ${e instanceof Error ? e.message : String(e)}`],
+      };
     }
   }
 

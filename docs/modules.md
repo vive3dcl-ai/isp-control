@@ -37,7 +37,9 @@ Los módulos son capacidades de plataforma. Se habilitan por empresa desde Admin
 | **Plataforma** | ISP Control → empresas | `public.platform_payment_methods` | Admin → Métodos de pago |
 | **Tenant** | ISP → clientes finales | `{schema}.module_configs` (`mercadopago`) | Facturación → Métodos de pago / Integraciones |
 
-**Nunca** se reutilizan access tokens ni public keys entre plataforma y un tenant.
+**Nunca** se reutilizan access tokens / client secrets entre plataforma y un tenant.
+
+Proveedores de plataforma (catálogo `PLATFORM_PAYMENT_PROVIDERS`): **Mercado Pago** (Checkout Pro) y **PayPal** (Checkout / Orders API). Se aseguran al listar Admin → Métodos de pago.
 Cada uno configura sandbox/producción y Checkout Pro con su propia aplicación Mercado Pago.
 
 El **precio del módulo** (lo que la plataforma cobra al ISP por el add-on) es
@@ -75,6 +77,24 @@ independiente de las credenciales y se edita en Empresas → Módulos.
 ```
 
 Secretos no se exponen; se usan `hasAccessToken` / `hasWebhookSecret`.
+
+### PayPal (plataforma)
+
+- Solo **métodos de pago de plataforma** (no es módulo tenant todavía).
+- Admin → Métodos de pago → PayPal.
+- Sandbox/producción con Client ID + Client Secret (+ Webhook ID opcional).
+
+```json
+{
+  "environment": "sandbox" | "production",
+  "integration": "checkout",
+  "clientId": "…",
+  "clientSecret": "***",
+  "webhookId": "***"
+}
+```
+
+Secretos no se exponen; se usan `hasClientSecret` / `hasWebhookId`.
 
 ### Mapa de red (`mapa_red`)
 
@@ -114,12 +134,40 @@ Secretos no se exponen; se usan `hasAccessToken` / `hasWebhookSecret`.
 }
 ```
 
+### Asistente IA (`asistente_ia`)
+
+- Opcional, de pago (`billable: true`, precio por defecto USD 29.90).
+- Config en `{schema}.module_configs` (`asistente_ia`).
+- Modos:
+  - **own**: el ISP pone API key de OpenAI, Anthropic, Grok, Gemini, DeepSeek o LatinRouter.
+    Al pegar/guardar la key se listan modelos vía API (`POST .../asistente-ia/models`) para elegir uno.
+  - **internal**: usa las keys de **Admin → Ajustes → IA** con cupos diarios
+    (consultas + tokens UTC). El modelo lo elige solo Admin (lista live con
+    `POST /admin/settings/ai/models`). Admin Empresas → Módulos puede
+    deshabilitar el modo interno por tenant (`aiInternalEnabled`).
+- Plataforma: `public.platform_ai_settings` y `public.platform_ai_usage_daily`
+  (consumo por tenant/día, solo modo internal).
+- Skills/tools agenticos: catálogo global en Admin → **IA**
+  (`platform_ai_capabilities`). Solo `enabled` se expone a tenants vía
+  `GET /app/settings/modules/asistente-ia/capabilities`. Chat UI: header +
+  modal; `POST .../asistente-ia/chat`.
+
+```json
+{
+  "mode": "own" | "internal",
+  "provider": "openai" | "anthropic" | "grok" | "gemini" | "deepseek" | "latinrouter",
+  "model": "gpt-4.1-mini",
+  "apiKey": "***",
+  "enabled": true
+}
+```
+
 ## Admin
 
 - Menú → **Módulos**: precios globales de add-ons (sin SMTP). En WhatsApp se
   muestra el cupo Baileys usado/máximo.
-- Menú → **Ajustes**: SMTP de plataforma + **Valor del sistema** (mensual /
-  trimestral / semestral / anual).
+- Menú → **Ajustes**: SMTP de plataforma, **IA** (proveedor interno + límites)
+  y **Valor del sistema** (mensual / trimestral / semestral / anual).
 - Empresas → Acciones → **Módulos**: activar/desactivar por empresa.
 - Menú → **Métodos de pago** (credenciales de la plataforma).
 
@@ -151,5 +199,6 @@ Secretos no se exponen; se usan `hasAccessToken` / `hasWebhookSecret`.
 - API: `apps/api/src/modules/`, `apps/api/src/platform/`
 - Web: `lib/modules.ts`, `lib/platform.ts`, `AdminSettingsPage`, `AdminModulesPage`,
   `SuscripcionSettingsPanel`, `ContractModuleModal`, `IntegracionesSettingsPanel`
-- Public: `platform_smtp_settings`, `platform_system_plans`,
+- Public: `platform_smtp_settings`, `platform_ai_settings`,
+  `platform_ai_usage_daily`, `platform_system_plans`,
   `platform_module_contracts`, `platform_charges`, `platform_payment_methods`

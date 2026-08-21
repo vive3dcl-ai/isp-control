@@ -9,7 +9,7 @@ import {
 
 /**
  * Historial de cobros de plataforma (prepago).
- * Renovaciones se generan 15 días antes del vencimiento (status pending).
+ * Renovaciones se generan 10 días antes del aniversario de contrato (status pending).
  */
 @Entity({ name: 'platform_charges', schema: 'public' })
 export class PlatformCharge {

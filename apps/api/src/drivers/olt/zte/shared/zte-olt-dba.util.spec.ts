@@ -2,7 +2,9 @@ import { toSystemOltProfileName } from './zte-olt-speed.util';
 import {
   decideOnuHealthBadge,
   expectedInternetTcontUp,
+  internetTcontProfileOf,
   needsMigratedHealthBackfill,
+  needsDbaProfileCheck,
   parseOnuTcontBinds,
   shouldSkipHealthPass,
   tcontProfileMatches,
@@ -36,6 +38,17 @@ describe('parseOnuTcontBinds / match', () => {
     expect(
       tcontProfileMatches(binds[0].profile, expectedInternetTcontUp('100-50')),
     ).toBe(true);
+  });
+
+  it('parsea running-config interface cuando remote-onu tcont viene vacío', () => {
+    const cfg = `
+interface gpon-onu_1/2/2:1
+  tcont 1 profile TLG-500MB-UP
+  gemport 1 tcont 1
+  service-port 1 vport 1 user-vlan 701 vlan 701
+`;
+    const binds = parseOnuTcontBinds(cfg);
+    expect(internetTcontProfileOf(binds, 1)).toBe('TLG-500MB-UP');
   });
 
   it('ok se salta sin force; mismatch de plan es check no fail', () => {
@@ -91,6 +104,55 @@ describe('parseOnuTcontBinds / match', () => {
       needsMigratedHealthBackfill({
         migratedAt: null,
         verifyStatus: 'idle',
+      }),
+    ).toBe(false);
+  });
+});
+
+describe('needsDbaProfileCheck', () => {
+  it('incluye Sin verificar si hay plan de velocidad', () => {
+    expect(
+      needsDbaProfileCheck({
+        verifyStatus: 'ok',
+        planOk: null,
+        hasSpeedPlan: true,
+      }),
+    ).toBe(true);
+  });
+
+  it('no pide check si ya está OK', () => {
+    expect(
+      needsDbaProfileCheck({
+        verifyStatus: 'ok',
+        planOk: true,
+        hasSpeedPlan: true,
+      }),
+    ).toBe(false);
+  });
+
+  it('incluye CHECK y mismatch', () => {
+    expect(
+      needsDbaProfileCheck({
+        verifyStatus: 'check',
+        planOk: true,
+        hasSpeedPlan: true,
+      }),
+    ).toBe(true);
+    expect(
+      needsDbaProfileCheck({
+        verifyStatus: 'ok',
+        planOk: false,
+        hasSpeedPlan: true,
+      }),
+    ).toBe(true);
+  });
+
+  it('sin plan ligado no cuenta como sin verificar', () => {
+    expect(
+      needsDbaProfileCheck({
+        verifyStatus: 'ok',
+        planOk: null,
+        hasSpeedPlan: false,
       }),
     ).toBe(false);
   });

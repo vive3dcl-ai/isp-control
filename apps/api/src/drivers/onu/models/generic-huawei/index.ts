@@ -11,6 +11,7 @@ import {
   detectDataModelRoot,
   connreqCredentialsTrusted,
 } from '../../infra/connreq-credentials';
+import { serviceWanCarrierOk } from '../../infra/service-carrier';
 import { genieGet, strVal } from '../../../../topology/shared/genieacs-nbi.client';
 import type {
   ApplyServiceSpvParams,
@@ -42,6 +43,7 @@ function diagnoseGaps(
       reachable: opts?.reachable,
     }),
     reachable: opts?.reachable,
+    serviceCarrierOk: serviceWanCarrierOk(device),
   };
 }
 

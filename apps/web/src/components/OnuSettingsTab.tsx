@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '../lib/api'
 import type { OnuType, OnuTypesResponse } from '../lib/onu-settings'
@@ -7,6 +7,12 @@ import { OnuOrphansPanel } from './OnuOrphansPanel'
 import { OnuFirmwarePanel } from './OnuFirmwarePanel'
 import { SettingsSubTabs } from './SettingsSubTabs'
 import { ModalPortal } from './ModalPortal'
+import {
+  DesktopTableWrap,
+  MobileList,
+  MobileListCard,
+  MobileListMeta,
+} from './MobileList'
 
 const inputClass =
   'w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 outline-none ring-[var(--accent)] focus:ring-2'
@@ -17,6 +23,7 @@ type TypeModal = 'create' | 'edit' | null
 const ETH_OPTIONS = [0, 1, 2, 3, 4, 5, 6, 7, 8]
 const WIFI_OPTIONS = [0, 1, 2, 3, 4, 5, 6, 7, 8]
 const VOIP_OPTIONS = [0, 1, 2, 3, 4]
+const MAX_ONU_IMAGE_BYTES = 3_000_000
 
 export function OnuSettingsTab({ canWrite }: { canWrite: boolean }) {
   const queryClient = useQueryClient()
@@ -41,6 +48,9 @@ export function OnuSettingsTab({ canWrite }: { canWrite: boolean }) {
     'bridging_routing',
   )
   const [useDefaultImage, setUseDefaultImage] = useState(true)
+  const [customImageUrl, setCustomImageUrl] = useState<string | null>(null)
+  const [imageError, setImageError] = useState<string | null>(null)
+  const imageFileRef = useRef<HTMLInputElement>(null)
 
   const typesQuery = useQuery({
     queryKey: ['app', 'settings', 'onus', 'types'],
@@ -88,8 +98,37 @@ export function OnuSettingsTab({ canWrite }: { canWrite: boolean }) {
     setCatv(false)
     setCapability('bridging_routing')
     setUseDefaultImage(true)
+    setCustomImageUrl(null)
+    setImageError(null)
     setDeleteConfirm('')
     setError(null)
+  }
+
+  function onTypeImageFile(file: File | undefined) {
+    setImageError(null)
+    if (!file) return
+    if (!file.type.startsWith('image/')) {
+      setImageError('El archivo debe ser una imagen')
+      return
+    }
+    if (file.size > MAX_ONU_IMAGE_BYTES) {
+      setImageError('La imagen supera 3 MB; usa una más liviana')
+      return
+    }
+    const reader = new FileReader()
+    reader.onload = () => {
+      setCustomImageUrl(String(reader.result))
+      setUseDefaultImage(false)
+    }
+    reader.onerror = () => setImageError('No se pudo leer la imagen')
+    reader.readAsDataURL(file)
+  }
+
+  function useDefaultTypeImage() {
+    setCustomImageUrl(null)
+    setUseDefaultImage(true)
+    setImageError(null)
+    if (imageFileRef.current) imageFileRef.current.value = ''
   }
 
   function openCreate() {
@@ -113,6 +152,8 @@ export function OnuSettingsTab({ canWrite }: { canWrite: boolean }) {
       t.capability === 'bridging' ? 'bridging' : 'bridging_routing',
     )
     setUseDefaultImage(t.useDefaultImage)
+    setCustomImageUrl(t.customImageUrl ?? null)
+    setImageError(null)
     setDeleteConfirm('')
     setError(null)
     setTypeModal('edit')
@@ -131,7 +172,12 @@ export function OnuSettingsTab({ canWrite }: { canWrite: boolean }) {
         voipPorts,
         catv,
         capability,
-        useDefaultImage,
+        useDefaultImage: useDefaultImage && !customImageUrl,
+        ...(customImageUrl
+          ? { imageUrl: customImageUrl }
+          : useDefaultImage
+            ? { imageUrl: null }
+            : {}),
       }
       if (typeModal === 'edit' && editing) {
         return apiFetch(`/app/settings/onus/types/${editing.id}`, {
@@ -247,9 +293,10 @@ export function OnuSettingsTab({ canWrite }: { canWrite: boolean }) {
           </div>
 
           <p className="text-xs text-[var(--text-muted)]">
-            ETH/WiFi/VoIP/CATV alimentan el template en la OLT. La columna Script
-            es el camino TR-069 real. Al abrir/refrescar se curan modelos desde el
-            ACS (p. ej. F600→HG6143D) para ONUs ya conectadas.
+            Lista de modelos con al menos una ONU asociada. ETH/WiFi/VoIP/CATV
+            alimentan el template en la OLT; la columna Script es el camino
+            TR-069. Usa «Sincronizar modelos ACS» solo cuando quieras curar
+            modelos (p. ej. F600→HG6143D) desde GenieACS.
           </p>
 
           {typesQuery.error && (
@@ -263,49 +310,26 @@ export function OnuSettingsTab({ canWrite }: { canWrite: boolean }) {
 
           {!typesQuery.isLoading && types.length === 0 && (
             <p className="rounded-lg border border-dashed border-[var(--border)] px-4 py-8 text-center text-sm text-[var(--text-muted)]">
-              Aún no hay tipos. Se agregan al importar/sincronizar ONUs, o con
-              «Agregar tipo» (ej. HG6243C, F660).
+              Aún no hay tipos con ONUs asociadas. Se listan al autorizar /
+              sincronizar ONUs, o al crear un tipo y usarlo.
             </p>
           )}
 
           {types.length > 0 && (
-            <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
-              <table className="w-full min-w-[1040px] text-left text-sm">
-                <thead>
-                  <tr className="border-b border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--text-muted)]">
-                    <th className="px-3 py-2 font-medium">Foto</th>
-                    <th className="px-3 py-2 font-medium">Fabricante</th>
-                    <th className="px-3 py-2 font-medium">Tipo PON</th>
-                    <th className="px-3 py-2 font-medium">Modelo</th>
-                    <th className="px-3 py-2 font-medium">Script</th>
-                    <th className="px-3 py-2 font-medium">ONUs</th>
-                    <th className="px-3 py-2 font-medium">ETH</th>
-                    <th className="px-3 py-2 font-medium">WiFi</th>
-                    <th className="px-3 py-2 font-medium">VoIP</th>
-                    <th className="px-3 py-2 font-medium">CATV</th>
-                    <th className="px-3 py-2 font-medium">Capacidad</th>
-                    <th className="px-3 py-2 font-medium">Acción</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {types.map((t) => (
-                    <tr
-                      key={t.id}
-                      className="border-b border-[var(--border)] last:border-0"
-                    >
-                      <td className="px-3 py-2">
-                        <img
-                          src={t.imageDisplayUrl || t.localImageUrl}
-                          alt={t.name}
-                          className="h-10 w-[96px] rounded object-contain bg-[var(--bg)]"
-                        />
-                      </td>
-                      <td className="px-3 py-2.5">{t.vendorLabel}</td>
-                      <td className="px-3 py-2.5">{t.ponTypeLabel}</td>
-                      <td className="px-3 py-2.5">
+            <>
+              <MobileList>
+                {types.map((t) => (
+                  <MobileListCard key={t.id}>
+                    <div className="flex items-start gap-3">
+                      <img
+                        src={t.imageDisplayUrl || t.localImageUrl}
+                        alt={t.name}
+                        className="h-10 w-[72px] shrink-0 rounded object-contain bg-[var(--bg)]"
+                      />
+                      <div className="min-w-0 flex-1">
                         <button
                           type="button"
-                          className="font-medium text-[var(--accent)] hover:underline"
+                          className="truncate text-sm font-semibold text-[var(--accent)] hover:underline"
                           title="Ver ONUs conectadas de este modelo"
                           onClick={() => {
                             setConnectedModelFilter(t.name)
@@ -314,39 +338,123 @@ export function OnuSettingsTab({ canWrite }: { canWrite: boolean }) {
                         >
                           {t.name}
                         </button>
-                      </td>
-                      <td className="px-3 py-2.5">
-                        <span
-                          className={
-                            t.provisionScriptKind === 'library'
-                              ? 'font-mono text-[11px] text-emerald-500'
-                              : 'font-mono text-[11px] text-[var(--text-muted)]'
-                          }
-                          title={t.provisionScriptLabel}
-                        >
-                          {t.provisionScriptId ?? '—'}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2.5 font-medium">{t.onuCount}</td>
-                      <td className="px-3 py-2.5">{t.ethernetPorts}</td>
-                      <td className="px-3 py-2.5">{t.wifiSsids}</td>
-                      <td className="px-3 py-2.5">{t.voipPorts}</td>
-                      <td className="px-3 py-2.5">{t.catv ? 1 : 0}</td>
-                      <td className="px-3 py-2.5">{t.capabilityLabel}</td>
-                      <td className="px-3 py-2.5">
-                        <button
-                          type="button"
-                          className="text-xs text-[var(--accent)] hover:underline"
-                          onClick={() => openEdit(t)}
-                        >
-                          Editar
-                        </button>
-                      </td>
+                        <MobileListMeta className="mt-0.5">
+                          <span>{t.vendorLabel}</span>
+                          <span>·</span>
+                          <span>{t.ponTypeLabel}</span>
+                          <span>·</span>
+                          <span>{t.onuCount} ONUs</span>
+                        </MobileListMeta>
+                      </div>
+                      <button
+                        type="button"
+                        className="shrink-0 text-xs text-[var(--accent)] hover:underline"
+                        onClick={() => openEdit(t)}
+                      >
+                        Editar
+                      </button>
+                    </div>
+                    <MobileListMeta>
+                      <span
+                        className={
+                          t.provisionScriptKind === 'library'
+                            ? 'font-mono text-emerald-500'
+                            : 'font-mono'
+                        }
+                        title={t.provisionScriptLabel}
+                      >
+                        {t.provisionScriptId ?? '—'}
+                      </span>
+                      <span>·</span>
+                      <span>
+                        ETH {t.ethernetPorts} · WiFi {t.wifiSsids} · VoIP{' '}
+                        {t.voipPorts} · CATV {t.catv ? 1 : 0}
+                      </span>
+                      <span>·</span>
+                      <span>{t.capabilityLabel}</span>
+                    </MobileListMeta>
+                  </MobileListCard>
+                ))}
+              </MobileList>
+              <DesktopTableWrap>
+                <table className="w-full min-w-[1040px] text-left text-sm">
+                  <thead>
+                    <tr className="border-b border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--text-muted)]">
+                      <th className="px-3 py-2 font-medium">Foto</th>
+                      <th className="px-3 py-2 font-medium">Fabricante</th>
+                      <th className="px-3 py-2 font-medium">Tipo PON</th>
+                      <th className="px-3 py-2 font-medium">Modelo</th>
+                      <th className="px-3 py-2 font-medium">Script</th>
+                      <th className="px-3 py-2 font-medium">ONUs</th>
+                      <th className="px-3 py-2 font-medium">ETH</th>
+                      <th className="px-3 py-2 font-medium">WiFi</th>
+                      <th className="px-3 py-2 font-medium">VoIP</th>
+                      <th className="px-3 py-2 font-medium">CATV</th>
+                      <th className="px-3 py-2 font-medium">Capacidad</th>
+                      <th className="px-3 py-2 font-medium">Acción</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {types.map((t) => (
+                      <tr
+                        key={t.id}
+                        className="border-b border-[var(--border)] last:border-0"
+                      >
+                        <td className="px-3 py-2">
+                          <img
+                            src={t.imageDisplayUrl || t.localImageUrl}
+                            alt={t.name}
+                            className="h-10 w-[96px] rounded object-contain bg-[var(--bg)]"
+                          />
+                        </td>
+                        <td className="px-3 py-2.5">{t.vendorLabel}</td>
+                        <td className="px-3 py-2.5">{t.ponTypeLabel}</td>
+                        <td className="px-3 py-2.5">
+                          <button
+                            type="button"
+                            className="font-medium text-[var(--accent)] hover:underline"
+                            title="Ver ONUs conectadas de este modelo"
+                            onClick={() => {
+                              setConnectedModelFilter(t.name)
+                              setView('connected')
+                            }}
+                          >
+                            {t.name}
+                          </button>
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <span
+                            className={
+                              t.provisionScriptKind === 'library'
+                                ? 'font-mono text-[11px] text-emerald-500'
+                                : 'font-mono text-[11px] text-[var(--text-muted)]'
+                            }
+                            title={t.provisionScriptLabel}
+                          >
+                            {t.provisionScriptId ?? '—'}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2.5 font-medium">{t.onuCount}</td>
+                        <td className="px-3 py-2.5">{t.ethernetPorts}</td>
+                        <td className="px-3 py-2.5">{t.wifiSsids}</td>
+                        <td className="px-3 py-2.5">{t.voipPorts}</td>
+                        <td className="px-3 py-2.5">{t.catv ? 1 : 0}</td>
+                        <td className="px-3 py-2.5">{t.capabilityLabel}</td>
+                        <td className="px-3 py-2.5">
+                          <button
+                            type="button"
+                            className="text-xs text-[var(--accent)] hover:underline"
+                            onClick={() => openEdit(t)}
+                          >
+                            Editar
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </DesktopTableWrap>
+            </>
           )}
         </div>
       )}
@@ -562,15 +670,57 @@ export function OnuSettingsTab({ canWrite }: { canWrite: boolean }) {
                   </select>
                 </label>
 
-                <label className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={useDefaultImage}
-                    onChange={(e) => setUseDefaultImage(e.target.checked)}
-                    disabled={!canWrite}
-                  />
-                  Usar imagen por defecto
-                </label>
+                <div className="space-y-2">
+                  <span className="block text-[var(--text-muted)]">
+                    Imagen del modelo
+                  </span>
+                  <div className="flex h-24 w-40 items-center justify-center overflow-hidden rounded-lg border border-dashed border-[var(--border)] bg-[var(--bg)]">
+                    <img
+                      src={
+                        customImageUrl ||
+                        (typeModal === 'edit' && editing
+                          ? editing.localImageUrl
+                          : '/onu/zte-hgu.svg')
+                      }
+                      alt={name || 'ONU'}
+                      className="max-h-full max-w-full object-contain"
+                    />
+                  </div>
+                  {canWrite && (
+                    <div className="flex flex-wrap gap-2">
+                      <input
+                        ref={imageFileRef}
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(e) => onTypeImageFile(e.target.files?.[0])}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => imageFileRef.current?.click()}
+                        className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs hover:bg-[var(--bg-elevated)]"
+                      >
+                        Subir imagen
+                      </button>
+                      {(!useDefaultImage || customImageUrl) && (
+                        <button
+                          type="button"
+                          onClick={useDefaultTypeImage}
+                          className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs hover:bg-[var(--bg-elevated)]"
+                        >
+                          Usar imagen por defecto
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  {imageError && (
+                    <p className="text-xs text-[var(--danger)]">{imageError}</p>
+                  )}
+                  <p className="text-[11px] text-[var(--text-muted)]">
+                    PNG, JPG, SVG o WebP · máx. 3 MB. Se muestra en esta lista y
+                    en el detalle de ONUs del modelo.
+                  </p>
+                </div>
 
                 {typeModal === 'edit' && canWrite && (
                   <div className="rounded-lg border border-[var(--danger)]/40 bg-[var(--danger)]/5 p-3">

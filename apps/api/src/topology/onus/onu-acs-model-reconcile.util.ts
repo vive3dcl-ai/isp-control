@@ -14,7 +14,12 @@ export function shouldApplyAcsModelToOnuType(
 ): boolean {
   const acs = usableOnuModelName(acsProductClass);
   if (!acs) return false;
-  const current = normalizeOnuModelName(currentOnuType ?? '');
-  if (isPlaceholderOnuModel(current)) return true;
-  return current.toLowerCase() !== acs.toLowerCase();
+  const currentRaw = (currentOnuType ?? '').trim();
+  const current = normalizeOnuModelName(currentRaw);
+  if (isPlaceholderOnuModel(current) || isPlaceholderOnuModel(currentRaw)) {
+    return true;
+  }
+  // Modelo distinto (F600 → HG6143D) o misma base con revisión HW (-10 → base).
+  if (current.toLowerCase() !== acs.toLowerCase()) return true;
+  return currentRaw.toLowerCase() !== acs.toLowerCase();
 }

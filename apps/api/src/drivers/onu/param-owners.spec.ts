@@ -32,7 +32,7 @@ describe('resolveParamOwners', () => {
   });
 
   it('generic-fiberhome omite WAN OMCI', () => {
-    const d = resolveOnuDriver({ sn: 'FHTT00001111', onuType: 'HG6244C' });
+    const d = resolveOnuDriver({ sn: 'FHTT00001111', onuType: 'HG6243C' });
     expect(d?.id).toBe('generic-fiberhome');
     expect(resolveOmciPlan(d).serviceWanOmci).toBe('skip');
   });

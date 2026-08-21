@@ -14,6 +14,13 @@ import {
   oltMetaClass,
   oltToolbarClass,
 } from './oltPanelUi'
+import {
+  DesktopTableWrap,
+  MobileList,
+  MobileListCard,
+  MobileListEmpty,
+  MobileListMeta,
+} from './MobileList'
 
 const inputClass =
   'w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 outline-none ring-[var(--accent)] focus:ring-2'
@@ -267,7 +274,66 @@ export function OltSpeedProfilesPanel({
         </p>
       )}
 
-      <div className="overflow-x-auto overflow-hidden rounded-xl border border-[var(--border)]">
+      <MobileList>
+        {query.isLoading && (
+          <MobileListEmpty>Sincronizando perfiles…</MobileListEmpty>
+        )}
+        {!query.isLoading && profiles.length === 0 && (
+          <MobileListEmpty>No hay perfiles (además de default).</MobileListEmpty>
+        )}
+        {profiles.map((p) => (
+          <MobileListCard key={p.name}>
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <p className="inline-flex flex-wrap items-center gap-2 text-sm font-semibold">
+                  {p.name}
+                  {/^TLG-/i.test(p.name) && (
+                    <span className="rounded-full border border-[var(--accent)]/50 bg-[var(--accent)]/10 px-2 py-0.5 text-[10px] font-medium text-[var(--accent)]">
+                      Sistema
+                    </span>
+                  )}
+                </p>
+              </div>
+              {canWrite && (
+                <div className="flex shrink-0 flex-wrap gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => openEdit(p)}
+                    className="rounded-md border border-[var(--border)] px-2.5 py-1 text-xs hover:border-[var(--accent)] hover:text-[var(--accent)]"
+                  >
+                    Editar
+                  </button>
+                  <button
+                    type="button"
+                    disabled={progressOpen}
+                    onClick={() => void startDelete(p)}
+                    className="rounded-md border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--danger)] hover:border-[var(--danger)] disabled:opacity-50"
+                  >
+                    Eliminar
+                  </button>
+                </div>
+              )}
+            </div>
+            <MobileListMeta>
+              <span>
+                ↓ {p.downloadMbps != null ? `${p.downloadMbps} Mbps` : '—'}
+              </span>
+              <span>·</span>
+              <span>
+                ↑ {p.uploadMbps != null ? `${p.uploadMbps} Mbps` : '—'}
+              </span>
+              <span>·</span>
+              <span className="line-clamp-1">
+                {[p.downloadProfile, p.uploadProfile]
+                  .filter(Boolean)
+                  .join(' · ') || '—'}
+              </span>
+            </MobileListMeta>
+          </MobileListCard>
+        ))}
+      </MobileList>
+
+      <DesktopTableWrap>
         <table className="w-full min-w-[640px] text-left text-sm">
           <thead className="bg-[var(--bg)] text-[var(--text-muted)]">
             <tr>
@@ -341,7 +407,7 @@ export function OltSpeedProfilesPanel({
             ))}
           </tbody>
         </table>
-      </div>
+      </DesktopTableWrap>
 
       {modal && (
         <ModalPortal><div className="fixed inset-0 z-[110] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/60 sm:items-center sm:p-4">

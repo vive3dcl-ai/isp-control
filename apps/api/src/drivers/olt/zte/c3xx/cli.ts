@@ -3900,9 +3900,20 @@ export class ZteC3xxOltClient {
           await send(`show pon onu tcont ${onuIf}`);
           out = this.cleanCliNoise(await read(20_000));
         }
-        return out;
+        let tconts = parseOnuTcontBinds(out);
+        if (!tconts.length) {
+          await send(`show running-config interface ${onuIf}`);
+          const cfg = this.cleanCliNoise(await read(25_000));
+          tconts = parseOnuTcontBinds(cfg);
+          if (tconts.length) out = `${out}\n--- running-config ---\n${cfg}`;
+        }
+        return { out, tconts };
       });
-      return { ok: true, tconts: parseOnuTcontBinds(raw), raw };
+      return {
+        ok: true,
+        tconts: raw.tconts,
+        raw: typeof raw === 'string' ? raw : raw.out,
+      };
     } catch (err) {
       return {
         ok: false,
@@ -3945,6 +3956,7 @@ export class ZteC3xxOltClient {
           );
         }
         const out = await step(`tcont 1 profile ${up}`, 8_000);
+        await step(`gemport 1 tcont 1`, 8_000).catch(() => '');
         if (params.downProfile?.trim()) {
           await step(
             `gemport 1 traffic-limit ${params.downProfile.trim()}`,
@@ -3955,6 +3967,8 @@ export class ZteC3xxOltClient {
         if (/%Error|Invalid|Failed|Unknown/i.test(out)) {
           throw new Error(`tcont 1 profile ${up}: ${out.slice(0, 160)}`);
         }
+        await step('exit', 5_000);
+        await this.persistRunningConfig(send, read);
         return {
           ok: true,
           message: `tcont 1 profile ${up}`,

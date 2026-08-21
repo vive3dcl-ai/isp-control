@@ -107,3 +107,15 @@ export function needsMigratedHealthBackfill(onu: {
       : new Date(onu.verifyCheckedAt).getTime();
   return !Number.isFinite(checked) || checked < migrated;
 }
+
+/** Perfil de velocidad: CHECK, mismatch, o aún sin leer T-CONT. */
+export function needsDbaProfileCheck(opts: {
+  verifyStatus?: string | null;
+  planOk?: boolean | null;
+  hasSpeedPlan: boolean;
+}): boolean {
+  if (opts.verifyStatus === 'check') return true;
+  if (opts.planOk === false) return true;
+  if (opts.hasSpeedPlan && opts.planOk !== true) return true;
+  return false;
+}

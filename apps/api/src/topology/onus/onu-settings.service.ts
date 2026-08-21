@@ -1,7 +1,6 @@
 import {
   BadRequestException,
   Injectable,
-  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import type { AuthUser } from '../../auth/auth.types';
@@ -17,8 +16,12 @@ import { OnuCatalogAdminService } from './onu-catalog-admin.service';
 import {
   imageKeyForVendorCapability,
   inferOnuVendor,
+  isCustomOnuImageUrl,
+  isPlaceholderOnuModel,
   normalizeOnuModelName,
   resolveOnuImageUrl,
+  resolveOnuTypeDisplayImage,
+  sanitizeOnuImageInput,
 } from './onu-model-catalog';
 import { resolveOnuDriverForModel } from '../../drivers/onu';
 
@@ -84,8 +87,6 @@ const GENERIC_SEEDS: Array<{
 
 @Injectable()
 export class OnuSettingsService {
-  private readonly logger = new Logger(OnuSettingsService.name);
-
   constructor(
     private readonly tenantConnections: TenantConnectionService,
     private readonly onuCatalog: OnuCatalogAdminService,
@@ -145,17 +146,8 @@ export class OnuSettingsService {
   async listTypes(user: AuthUser) {
     const schema = this.requireSchema(user);
     await this.ensureGenericProfiles(schema);
-    // Curar onu_type desde ACS (F600→HG6143D, etc.) antes de armar la lista.
-    try {
-      await this.onuCatalog.reconcileConnectedModelsFromAcs(schema);
-    } catch (err) {
-      this.logger.warn(
-        `reconcileConnectedModelsFromAcs: ${err instanceof Error ? err.message : err}`,
-      );
-    }
+    // Agrupa HG8145X6 / HG8145X6-10 (y similares) sin bloquear con ACS.
     await this.onuCatalog.dedupeTenantModelNames(schema);
-    await this.onuCatalog.pruneUndetectedCatalogTypes(schema);
-    await this.onuCatalog.enrichTenantExistingTypes(schema);
     const typeRepo = await this.tenantConnections.getOnuTypeRepository(schema);
     const profileRepo =
       await this.tenantConnections.getOnuProfileRepository(schema);
@@ -167,7 +159,7 @@ export class OnuSettingsService {
     const profileById = new Map(profiles.map((p) => [p.id, p]));
     const onuCounts = await this.onuCatalog.countOnusByModel(schema);
     return {
-      types: types.map((t) =>
+      types: this.collapseTypesForList(types, onuCounts).map((t) =>
         this.serializeType(
           t,
           profileById.get(t.defaultProfileId ?? ''),
@@ -197,7 +189,7 @@ export class OnuSettingsService {
     const onuCounts = await this.onuCatalog.countOnusByModel(schema);
     return {
       ...result,
-      types: types.map((t) =>
+      types: this.collapseTypesForList(types, onuCounts).map((t) =>
         this.serializeType(
           t,
           profileById.get(t.defaultProfileId ?? ''),
@@ -231,6 +223,11 @@ export class OnuSettingsService {
     const typeRepo = await this.tenantConnections.getOnuTypeRepository(schema);
     const name = normalizeOnuModelName(dto.name);
     if (!name) throw new BadRequestException('Nombre requerido');
+    if (isPlaceholderOnuModel(name)) {
+      throw new BadRequestException(
+        `«${name}» no es un modelo válido (placeholder ACS/OLT)`,
+      );
+    }
     const dup = await typeRepo.findOne({ where: { name } });
     if (dup) {
       throw new BadRequestException(`Ya existe el tipo de ONU «${name}»`);
@@ -240,6 +237,24 @@ export class OnuSettingsService {
     if (dto.defaultProfileId) {
       const p = await this.requireProfile(schema, dto.defaultProfileId);
       defaultProfileCode = p.code;
+    }
+
+    const useDefaultImage = dto.useDefaultImage ?? true;
+    const defaultImageUrl = resolveOnuImageUrl(
+      imageKeyForVendorCapability(
+        inferOnuVendor(name),
+        dto.capability ?? 'bridging_routing',
+      ),
+    );
+    let imageUrl = defaultImageUrl;
+    if (!useDefaultImage && dto.imageUrl) {
+      try {
+        imageUrl = sanitizeOnuImageInput(dto.imageUrl);
+      } catch (e) {
+        throw new BadRequestException(
+          e instanceof Error ? e.message : 'Imagen inválida',
+        );
+      }
     }
 
     const catalogItem = await this.onuCatalog.registerTenantCreatedType({
@@ -254,6 +269,7 @@ export class OnuSettingsService {
       capability: dto.capability ?? 'bridging_routing',
       allowCustomProfiles: dto.allowCustomProfiles ?? true,
       defaultProfileCode,
+      imageUrl: !useDefaultImage && isCustomOnuImageUrl(imageUrl) ? imageUrl : null,
     });
 
     if (catalogItem.registrationStatus === 'approved') {
@@ -271,14 +287,6 @@ export class OnuSettingsService {
     }
 
     const channel = dto.channel?.trim() || (dto.ponType === 'epon' ? 'E' : 'G');
-    const imageUrl =
-      dto.imageUrl ??
-      resolveOnuImageUrl(
-        imageKeyForVendorCapability(
-          catalogItem.vendor,
-          dto.capability ?? 'bridging_routing',
-        ),
-      );
     const row = typeRepo.create({
       ponType: dto.ponType,
       channel,
@@ -296,7 +304,7 @@ export class OnuSettingsService {
       allowCustomProfiles: dto.allowCustomProfiles ?? true,
       defaultProfileId: dto.defaultProfileId ?? null,
       capability: dto.capability ?? 'bridging_routing',
-      useDefaultImage: dto.useDefaultImage ?? true,
+      useDefaultImage: useDefaultImage || !isCustomOnuImageUrl(imageUrl),
       imageUrl,
     });
     await typeRepo.save(row);
@@ -338,11 +346,60 @@ export class OnuSettingsService {
       row.defaultProfileId = dto.defaultProfileId;
     }
     if (dto.capability !== undefined) row.capability = dto.capability;
-    if (dto.useDefaultImage !== undefined) {
-      row.useDefaultImage = dto.useDefaultImage;
+    if (dto.imageUrl !== undefined) {
+      if (dto.imageUrl == null || dto.imageUrl === '') {
+        row.imageUrl = resolveOnuImageUrl(
+          imageKeyForVendorCapability(row.vendor, row.capability),
+        );
+        row.useDefaultImage = true;
+      } else {
+        try {
+          row.imageUrl = sanitizeOnuImageInput(dto.imageUrl);
+        } catch (e) {
+          throw new BadRequestException(
+            e instanceof Error ? e.message : 'Imagen inválida',
+          );
+        }
+        row.useDefaultImage = false;
+      }
+    } else if (dto.useDefaultImage === true) {
+      row.useDefaultImage = true;
+      row.imageUrl = resolveOnuImageUrl(
+        imageKeyForVendorCapability(row.vendor, row.capability),
+      );
+    } else if (dto.useDefaultImage === false) {
+      row.useDefaultImage = false;
     }
-    if (dto.imageUrl !== undefined) row.imageUrl = dto.imageUrl;
     await typeRepo.save(row);
+
+    let defaultProfileCode: string | null | undefined = undefined;
+    if (row.defaultProfileId) {
+      try {
+        const p = await this.requireProfile(schema, row.defaultProfileId);
+        defaultProfileCode = p.code;
+      } catch {
+        defaultProfileCode = null;
+      }
+    }
+
+    await this.onuCatalog.registerTenantCreatedType({
+      schemaName: schema,
+      name: row.name,
+      vendor: row.vendor,
+      ponType: row.ponType,
+      ethernetPorts: row.ethernetPorts,
+      wifiSsids: row.wifiSsids,
+      voipPorts: row.voipPorts,
+      catv: row.catv,
+      capability: row.capability,
+      allowCustomProfiles: row.allowCustomProfiles,
+      defaultProfileCode,
+      imageUrl:
+        !row.useDefaultImage && isCustomOnuImageUrl(row.imageUrl)
+          ? row.imageUrl
+          : null,
+    });
+
     return this.getType(user, row.id);
   }
 
@@ -377,6 +434,35 @@ export class OnuSettingsService {
     };
   }
 
+  private collapseTypesForList(
+    types: OnuType[],
+    onuCounts: Map<string, number>,
+  ): OnuType[] {
+    const byNorm = new Map<string, OnuType>();
+    for (const t of types) {
+      const norm = normalizeOnuModelName(t.name);
+      if (!norm || isPlaceholderOnuModel(norm)) continue;
+      const key = norm.toLowerCase();
+      const count = onuCounts.get(key) ?? 0;
+      if (count <= 0) continue;
+      const prev = byNorm.get(key);
+      if (!prev) {
+        byNorm.set(key, t);
+        continue;
+      }
+      const prevExact = prev.name.trim().toLowerCase() === key;
+      const curExact = t.name.trim().toLowerCase() === key;
+      if (curExact && !prevExact) byNorm.set(key, t);
+    }
+    return [...byNorm.values()].sort((a, b) =>
+      normalizeOnuModelName(a.name).localeCompare(
+        normalizeOnuModelName(b.name),
+        undefined,
+        { sensitivity: 'base' },
+      ),
+    );
+  }
+
   private serializeType(
     t: OnuType,
     defaultProfile?: OnuProfile | null,
@@ -385,11 +471,16 @@ export class OnuSettingsService {
     const localFallback = resolveOnuImageUrl(
       imageKeyForVendorCapability(t.vendor, t.capability),
     );
-    const imageDisplayUrl =
-      t.imageUrl && t.imageUrl.startsWith('/onu/') ? t.imageUrl : localFallback;
+    const imageDisplayUrl = resolveOnuTypeDisplayImage(t);
+    const stored = t.imageUrl?.trim() || null;
+    const customImageUrl =
+      !t.useDefaultImage && stored && !stored.startsWith('/onu/')
+        ? stored
+        : null;
+    const displayName = normalizeOnuModelName(t.name) || t.name;
     const script = resolveOnuDriverForModel({
       vendor: t.vendor,
-      model: t.name,
+      model: displayName,
     });
     return {
       id: t.id,
@@ -399,7 +490,7 @@ export class OnuSettingsService {
       channelGpon: t.channelGpon,
       channelXgpon: t.channelXgpon,
       channelXgspon: t.channelXgspon,
-      name: t.name,
+      name: displayName,
       vendor: t.vendor,
       vendorLabel:
         t.vendor === 'zte'
@@ -428,6 +519,7 @@ export class OnuSettingsService {
       capabilityLabel:
         t.capability === 'bridging' ? 'Bridging' : 'Bridging/Routing',
       useDefaultImage: t.useDefaultImage,
+      customImageUrl,
       imageUrl: imageDisplayUrl,
       imageDisplayUrl,
       localImageUrl: localFallback,

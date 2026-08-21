@@ -104,12 +104,15 @@
       return
     }
     var free = opt.getAttribute('data-free') === '1'
+    var lifetime = opt.getAttribute('data-lifetime') === '1'
     var price = opt.getAttribute('data-price')
     var limit = opt.getAttribute('data-limit')
     planHint.hidden = false
     planHint.textContent = free
       ? 'Plan gratis · hasta ' + limit + ' ONUs'
-      : money(price) + ' USD / mes · hasta ' + limit + ' ONUs'
+      : lifetime
+        ? money(price) + ' USD pago único · hasta ' + limit + ' ONUs'
+        : money(price) + ' USD / mes · hasta ' + limit + ' ONUs'
   }
 
   function fillPlans(plans) {
@@ -121,14 +124,21 @@
     planSelect.innerHTML = plans
       .map(function (p) {
         var free = !!p.isFree
+        var lifetime = !!(p.isLifetime || p.code === 'lifetime')
         var label =
           (p.label || p.code) +
-          (free ? ' — Gratis' : ' — ' + money(p.priceUsd) + '/mes')
+          (free
+            ? ' — Gratis'
+            : lifetime
+              ? ' — ' + money(p.priceUsd) + ' pago único'
+              : ' — ' + money(p.priceUsd) + '/mes')
         return (
           '<option value="' +
           String(p.code).replace(/"/g, '&quot;') +
           '" data-free="' +
           (free ? '1' : '0') +
+          '" data-lifetime="' +
+          (lifetime ? '1' : '0') +
           '" data-price="' +
           String(p.priceUsd != null ? p.priceUsd : '') +
           '" data-limit="' +

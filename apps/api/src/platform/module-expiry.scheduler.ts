@@ -10,12 +10,14 @@ import { Tenant } from '../tenants/entities/tenant.entity';
 import { getModuleDefinition } from '../modules/module-catalog';
 import { PlatformSubscriptionService } from './platform-subscription.service';
 import { PlatformMailerService } from './platform-mailer.service';
+import { SUBSCRIPTION_GRACE_DAYS } from './billing-cycles';
 
 const TICK_MS = 60 * 60 * 1000; // 1h
 
 /**
- * - Renovaciones pending 15 días antes del vencimiento.
- * - Avisos al admin del tenant 5 y 2 días antes (cobro pending).
+ * - Renovaciones pending 10 días antes del aniversario de contrato.
+ * - Avisos al admin del tenant 5 y 2 días antes del vencimiento (cobro pending).
+ * - Tras vencimiento: 5 días de gracia; luego past_due / bloqueo de panel.
  * - Vencimiento de módulos de pago único (+ avisos a platform admins).
  */
 @Injectable()
@@ -87,7 +89,7 @@ export class ModuleExpiryScheduler implements OnModuleInit, OnModuleDestroy {
         ``,
         `Entra a Ajustes → Empresa → Suscripción y pulsa Pagar para renovar.`,
         ``,
-        `Si no se paga a tiempo, el acceso puede quedar en mora.`,
+        `Si no se paga a tiempo, tras ${SUBSCRIPTION_GRACE_DAYS} días de gracia el acceso al panel queda bloqueado.`,
       ].join('\n');
       try {
         await this.mailer.sendMail(

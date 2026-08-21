@@ -18,6 +18,12 @@ import {
 } from './OperationProgressModal'
 import { useNotify } from './NotifyProvider'
 import { ModalPortal } from './ModalPortal'
+import {
+  DesktopTableWrap,
+  MobileList,
+  MobileListCard,
+  MobileListMeta,
+} from './MobileList'
 
 
 const inputClass =
@@ -712,61 +718,106 @@ export function VlansSettingsTab({ canWrite }: { canWrite: boolean }) {
       )}
 
       {vlans.length > 0 && (
-        <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
-          <table className="w-full min-w-[720px] text-left text-sm">
-            <thead className="border-b border-[var(--border)] bg-[var(--bg)] text-[var(--text-muted)]">
-              <tr>
-                <th className="px-3 py-2 font-medium">VLAN</th>
-                <th className="px-3 py-2 font-medium">Tipo</th>
-                <th className="px-3 py-2 font-medium">Descripción</th>
-                <th className="px-3 py-2 font-medium">OLT</th>
-                <th className="px-3 py-2 font-medium">Router</th>
-                <th className="px-3 py-2 font-medium">Switch</th>
-                <th className="px-3 py-2 font-medium">Acción</th>
-              </tr>
-            </thead>
-            <tbody>
-              {vlans.map((v) => (
-                <tr
-                  key={v.id ?? `disc-${v.vlanId}`}
-                  className="border-b border-[var(--border)] last:border-0"
-                >
-                  <td className="px-3 py-2.5 font-medium">
-                    {v.vlanId}
-                    {v.discovered && (
-                      <span className="ml-2 text-[10px] uppercase tracking-wide text-[var(--text-muted)]">
-                        detectada
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-3 py-2.5">
-                    {PURPOSE_LABELS[v.purpose ?? 'internet']}
-                    {v.purpose === 'tv' && v.igmpWorkMode && (
-                      <span className="ml-1.5 text-[10px] uppercase tracking-wide text-[var(--text-muted)]">
-                        {IGMP_MODE_LABELS[v.igmpWorkMode]}
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-3 py-2.5">{v.description || '—'}</td>
-                  <td className="px-3 py-2.5 text-xs">{v.olt || '—'}</td>
-                  <td className="px-3 py-2.5 text-xs">{v.router || '—'}</td>
-                  <td className="px-3 py-2.5 text-xs">{v.switch || '—'}</td>
-                  <td className="px-3 py-2.5">
-                    {canWrite && (
-                      <button
-                        type="button"
-                        className="text-xs text-[var(--accent)] hover:underline"
-                        onClick={() => openEdit(v)}
-                      >
-                        Editar
-                      </button>
-                    )}
-                  </td>
+        <>
+          <MobileList>
+            {vlans.map((v) => (
+              <MobileListCard key={v.id ?? `disc-${v.vlanId}`}>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold">
+                      VLAN {v.vlanId}
+                      {v.discovered && (
+                        <span className="ml-2 text-[10px] uppercase tracking-wide text-[var(--text-muted)]">
+                          detectada
+                        </span>
+                      )}
+                    </p>
+                    <p className="text-xs text-[var(--text-muted)]">
+                      {PURPOSE_LABELS[v.purpose ?? 'internet']}
+                      {v.purpose === 'tv' && v.igmpWorkMode
+                        ? ` · ${IGMP_MODE_LABELS[v.igmpWorkMode]}`
+                        : ''}
+                    </p>
+                  </div>
+                  {canWrite && (
+                    <button
+                      type="button"
+                      className="shrink-0 text-xs text-[var(--accent)] hover:underline"
+                      onClick={() => openEdit(v)}
+                    >
+                      Editar
+                    </button>
+                  )}
+                </div>
+                <MobileListMeta>
+                  <span className="line-clamp-1">{v.description || '—'}</span>
+                  <span>·</span>
+                  <span>OLT: {v.olt || '—'}</span>
+                  <span>·</span>
+                  <span>Router: {v.router || '—'}</span>
+                  <span>·</span>
+                  <span>Switch: {v.switch || '—'}</span>
+                </MobileListMeta>
+              </MobileListCard>
+            ))}
+          </MobileList>
+
+          <DesktopTableWrap>
+            <table className="w-full min-w-[720px] text-left text-sm">
+              <thead className="border-b border-[var(--border)] bg-[var(--bg)] text-[var(--text-muted)]">
+                <tr>
+                  <th className="px-3 py-2 font-medium">VLAN</th>
+                  <th className="px-3 py-2 font-medium">Tipo</th>
+                  <th className="px-3 py-2 font-medium">Descripción</th>
+                  <th className="px-3 py-2 font-medium">OLT</th>
+                  <th className="px-3 py-2 font-medium">Router</th>
+                  <th className="px-3 py-2 font-medium">Switch</th>
+                  <th className="px-3 py-2 font-medium">Acción</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {vlans.map((v) => (
+                  <tr
+                    key={v.id ?? `disc-${v.vlanId}`}
+                    className="border-b border-[var(--border)] last:border-0"
+                  >
+                    <td className="px-3 py-2.5 font-medium">
+                      {v.vlanId}
+                      {v.discovered && (
+                        <span className="ml-2 text-[10px] uppercase tracking-wide text-[var(--text-muted)]">
+                          detectada
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2.5">
+                      {PURPOSE_LABELS[v.purpose ?? 'internet']}
+                      {v.purpose === 'tv' && v.igmpWorkMode && (
+                        <span className="ml-1.5 text-[10px] uppercase tracking-wide text-[var(--text-muted)]">
+                          {IGMP_MODE_LABELS[v.igmpWorkMode]}
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2.5">{v.description || '—'}</td>
+                    <td className="px-3 py-2.5 text-xs">{v.olt || '—'}</td>
+                    <td className="px-3 py-2.5 text-xs">{v.router || '—'}</td>
+                    <td className="px-3 py-2.5 text-xs">{v.switch || '—'}</td>
+                    <td className="px-3 py-2.5">
+                      {canWrite && (
+                        <button
+                          type="button"
+                          className="text-xs text-[var(--accent)] hover:underline"
+                          onClick={() => openEdit(v)}
+                        >
+                          Editar
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </DesktopTableWrap>
+        </>
       )}
 
       {modal && (

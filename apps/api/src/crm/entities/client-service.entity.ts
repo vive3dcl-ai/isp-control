@@ -140,6 +140,13 @@ export class ClientService {
   @Column({ name: 'onu_name_synced_at', type: 'timestamptz', nullable: true })
   onuNameSyncedAt: Date | null;
 
+  /**
+   * Cobro proporcional hasta fin de mes (solo régimen desde instalación).
+   * Luego factura mensual el día 1 con plazo/corte de la empresa.
+   */
+  @Column({ name: 'billing_prorate', type: 'boolean', default: false })
+  billingProrate: boolean;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

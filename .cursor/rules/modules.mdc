@@ -1,6 +1,6 @@
 ---
-description: Estructura del sistema de módulos (SMTP, Mercado Pago, pagos plataforma)
-globs: apps/api/src/modules/**/*,apps/web/src/components/*Module*,apps/web/src/components/Integraciones*,apps/web/src/components/Smtp*,apps/web/src/components/MercadoPago*,apps/web/src/pages/AdminPaymentMethodsPage.tsx,apps/web/src/pages/AdminModulesPage.tsx,apps/web/src/lib/modules.ts
+description: Estructura del sistema de módulos (SMTP, Mercado Pago, PayPal, pagos plataforma)
+globs: apps/api/src/modules/**/*,apps/web/src/components/*Module*,apps/web/src/components/Integraciones*,apps/web/src/components/Smtp*,apps/web/src/components/MercadoPago*,apps/web/src/components/PayPal*,apps/web/src/pages/AdminPaymentMethodsPage.tsx,apps/web/src/pages/AdminModulesPage.tsx,apps/web/src/lib/modules.ts
 alwaysApply: false
 ---
 
@@ -16,7 +16,7 @@ alwaysApply: false
 
 ## Pagos: independientes por diseño
 
-- **Plataforma** → `platform_payment_methods` (Admin → Métodos de pago).
+- **Plataforma** → `platform_payment_methods` (Admin → Métodos de pago): Mercado Pago + PayPal.
 - **Tenant** → `module_configs.mercadopago` (Facturación → Métodos de pago).
 - Credenciales, entorno y webhooks **nunca se comparten**.
 - Precio del add-on: USD en `platform_module_pricing`; ref. CLP con tasa diaria (`platform_fx_rates` ← mindicador.cl).
@@ -26,13 +26,15 @@ alwaysApply: false
 ## Reglas
 
 - `alwaysEnabled` (smtp): siempre ON; checkbox bloqueado.
-- `billable` (mercadopago, mapa_red, whatsapp): opcional; mostrar precio en Admin.
-- Secretos: nunca devolver; `hasAccessToken` / `hasPassword` + vacío = no cambiar.
+- `billable` (mercadopago, mapa_red, whatsapp, asistente_ia, …): opcional; mostrar precio en Admin.
+- Secretos: nunca devolver; `hasAccessToken` / `hasClientSecret` / `hasPassword` / `hasApiKey` + vacío = no cambiar.
 - Entorno: `sandbox` | `production`.
 - Mercado Pago: integración **Checkout Pro** (`integration: checkout_pro`).
+- PayPal (plataforma): integración **Checkout** (`integration: checkout`; Client ID + Secret).
 - Módulo Mercado Pago disponible solo si el país del tenant está en la lista Checkout Pro.
 - `mapa_red`: sin config; menú tenant siempre visible; gate por `enabled_modules`.
 - `whatsapp`: Cloud API o Baileys; cupo global 30 Baileys (`WHATSAPP_BAILEYS_MAX_SLOTS`); Cloud API no resta.
+- `asistente_ia`: modo `own` (key tenant) o `internal` (keys Admin → Ajustes → IA + cupos diarios requests/tokens). Proveedores: openai, anthropic, grok, gemini, deepseek, latinrouter (OpenAI-compat `https://llm.latinrouter.ai/v1`). Admin Empresas → Módulos: flag `aiInternalEnabled` por tenant (default ON).
 
 ## Endpoints
 
@@ -41,8 +43,11 @@ alwaysApply: false
 | Admin | `GET /admin/modules/catalog`, `PATCH /admin/modules/:id/pricing` |
 | Admin | `GET/PATCH /admin/tenants/:id/modules` |
 | Admin | `GET/PATCH /admin/payment-methods`, `GET/PATCH /admin/payment-methods/:id` |
+| Admin | `GET/PATCH /admin/settings/ai`, `POST /admin/settings/ai/models` |
+| Admin | `GET/POST/PATCH/DELETE /admin/ai/capabilities` (tools & skills) |
 | Tenant | `GET /app/settings/modules` |
 | Tenant | `GET/PATCH /app/settings/modules/smtp` |
 | Tenant | `GET/PATCH /app/settings/modules/mercadopago` |
 | Tenant | `GET/PATCH /app/settings/modules/whatsapp` |
+| Tenant | `GET/PATCH /app/settings/modules/asistente-ia`, `POST .../asistente-ia/test`, `POST .../asistente-ia/models`, `POST .../asistente-ia/chat`, `GET .../asistente-ia/capabilities` |
 | Tenant | `POST .../whatsapp/baileys/start|logout`, `GET .../whatsapp/baileys/status` |

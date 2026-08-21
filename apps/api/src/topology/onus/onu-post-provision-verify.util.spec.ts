@@ -7,6 +7,11 @@ import {
   shouldCloseVerifyWindow,
   shouldRunVerifyTick,
   summarizeVerifyDetail,
+  summarizeVerifyFailures,
+  arpSoftenedByTraffic,
+  assessInternetEvidence,
+  countPublicDsts,
+  isPublicIpv4,
   VERIFY_HEAL_MAX_ATTEMPTS,
   VERIFY_INTERVAL_MS,
   VERIFY_MAX_CONCURRENCY_PER_TENANT,
@@ -99,6 +104,46 @@ describe('criterio de pase/fallo', () => {
     );
   });
 
+  it('ARP incompleta no tumba si hay conexiones en el gateway', () => {
+    expect(
+      arpSoftenedByTraffic('ARP incompleta', {
+        ok: true,
+        message: '4 conexiones en Router Core 4011',
+        meta: { connCount: 4 },
+      }),
+    ).toBe(true);
+    expect(
+      arpSoftenedByTraffic('ARP incompleta', {
+        ok: false,
+        message: 'sin conexiones',
+      }),
+    ).toBe(false);
+  });
+
+  it('summarizeVerifyFailures solo lista required fallidos', () => {
+    expect(
+      summarizeVerifyFailures(
+        {
+          arp: { ok: false, message: 'ARP incompleta' },
+          wan: { ok: true, message: 'ok' },
+          connreq: { ok: false, message: '401' },
+          traffic: { ok: true, message: '4 conexiones' },
+        },
+        {
+          checks: {
+            arp: 'required',
+            connreq: 'optional',
+            wan: 'required',
+            dns: 'required',
+            route: 'skip',
+            uplinkVlan: 'required',
+            traffic: 'optional',
+          },
+        },
+      ),
+    ).toBe('arp: ARP incompleta');
+  });
+
   it('pasa al cerrar la ventana si lo esencial está bien aunque no haya tráfico', () => {
     expect(
       decideVerifyOutcome({
@@ -169,9 +214,8 @@ describe('criterio de pase/fallo', () => {
     expect(
       decideVerifyOutcome({
         detail: {
-          arp: { ok: false, message: 'ausente' },
           connreq: { ok: true, message: 'acs' },
-          wan: { ok: true, message: 'coincide' },
+          wan: { ok: false, message: 'vlan' },
           traffic: { ok: false, message: 'sin tráfico' },
         },
         windowExpired: false,
@@ -183,9 +227,8 @@ describe('criterio de pase/fallo', () => {
     expect(
       decideVerifyOutcome({
         detail: {
-          arp: { ok: false, message: 'ausente' },
           connreq: { ok: true, message: 'acs' },
-          wan: { ok: true, message: 'coincide' },
+          wan: { ok: false, message: 'vlan' },
         },
         windowExpired: true,
       }),
@@ -212,6 +255,21 @@ describe('criterio de pase/fallo', () => {
           route: {
             ok: false,
             message: 'WAN legacy activa 10.0.110.16',
+          },
+        },
+        windowExpired: true,
+      }),
+    ).toBe('fail');
+  });
+
+  it('considera el bind LAN/Wi‑Fi una comprobación esencial', () => {
+    expect(
+      decideVerifyOutcome({
+        detail: {
+          ...good,
+          lanBind: {
+            ok: false,
+            message: 'bind inválido (true)',
           },
         },
         windowExpired: true,
@@ -299,6 +357,34 @@ describe('criterio de pase/fallo', () => {
   it('expone el presupuesto de despertar del Resync forzado', () => {
     expect(RESYNC_WAKE_MAX_ATTEMPTS).toBe(10);
     expect(RESYNC_WAKE_DELAY_MS).toBe(15_000);
+  });
+});
+
+describe('evidencia de Internet', () => {
+  it('rechaza pocas conexiones sin destinos públicos', () => {
+    expect(
+      assessInternetEvidence({ connCount: 4, publicDstCount: 0, bytesRecv: 1200 })
+        .ok,
+    ).toBe(false);
+  });
+
+  it('acepta varios destinos públicos', () => {
+    expect(
+      assessInternetEvidence({ connCount: 5, publicDstCount: 2 }).ok,
+    ).toBe(true);
+  });
+
+  it('acepta volumen WAN significativo', () => {
+    expect(assessInternetEvidence({ bytesRecv: 90_000 }).ok).toBe(true);
+  });
+
+  it('isPublicIpv4 filtra RFC1918', () => {
+    expect(isPublicIpv4('8.8.8.8')).toBe(true);
+    expect(isPublicIpv4('192.168.1.1')).toBe(false);
+    expect(isPublicIpv4('10.0.0.1')).toBe(false);
+    expect(countPublicDsts(['8.8.8.8:53', '1.1.1.1:443', '10.0.0.1:80'])).toBe(
+      2,
+    );
   });
 });
 

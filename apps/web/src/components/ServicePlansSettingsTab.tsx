@@ -7,6 +7,13 @@ import { ServicePlanFormModal } from './ServicePlanFormModal'
 import { SpeedProfilesSettingsTab } from './SpeedProfilesSettingsTab'
 import { useNotify } from './NotifyProvider'
 import { SettingsSubTabs } from './SettingsSubTabs'
+import {
+  DesktopTableWrap,
+  MobileList,
+  MobileListCard,
+  MobileListEmpty,
+  MobileListMeta,
+} from './MobileList'
 
 type PlansSection = 'plans' | 'speed_profiles'
 
@@ -73,7 +80,75 @@ export function ServicePlansSettingsTab({ canWrite }: { canWrite: boolean }) {
             </p>
           )}
 
-          <div className="overflow-x-auto overflow-hidden rounded-xl border border-[var(--border)]">
+          <MobileList>
+            {plansQuery.isLoading && (
+              <p className="text-sm text-[var(--text-muted)]">Cargando…</p>
+            )}
+            {!plansQuery.isLoading && plans.length === 0 && (
+              <MobileListEmpty>No hay planes todavía.</MobileListEmpty>
+            )}
+            {plans.map((p) => (
+              <MobileListCard key={p.id}>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold">{p.name}</p>
+                    <p className="text-xs text-[var(--text-muted)]">{p.type}</p>
+                  </div>
+                  <span className="shrink-0 text-sm font-medium">
+                    {money(p.price)}
+                  </span>
+                </div>
+                <MobileListMeta>
+                  <span>
+                    {p.speedProfile
+                      ? `${p.speedProfile.name} · ↓${p.speedProfile.downloadMbps}/↑${p.speedProfile.uploadMbps} Mbps`
+                      : `${p.downloadSpeed}/${p.uploadSpeed} Mbps (sin perfil)`}
+                  </span>
+                  <span>·</span>
+                  <span>{p.isActive ? 'Activo' : 'Inactivo'}</span>
+                  {Number(p.installationFee) > 0 && (
+                    <>
+                      <span>·</span>
+                      <span>
+                        Inst. {money(p.installationFee)}
+                        {p.installationFeeOnFirstInvoice
+                          ? ' · 1.ª factura'
+                          : ' · inmediata'}
+                      </span>
+                    </>
+                  )}
+                </MobileListMeta>
+                {canWrite && (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setEditPlan(p)}
+                      className="rounded-md border border-[var(--border)] px-2.5 py-1 text-xs hover:border-[var(--accent)] hover:text-[var(--accent)]"
+                    >
+                      Editar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void confirm(`¿Eliminar el plan ${p.name}?`, {
+                          title: 'Eliminar plan',
+                          danger: true,
+                          confirmLabel: 'Eliminar',
+                        }).then((ok) => {
+                          if (ok) deleteMutation.mutate(p.id)
+                        })
+                      }}
+                      className="rounded-md border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--danger)] hover:border-[var(--danger)]"
+                    >
+                      Eliminar
+                    </button>
+                  </div>
+                )}
+              </MobileListCard>
+            ))}
+          </MobileList>
+
+          <DesktopTableWrap>
             <table className="w-full min-w-[720px] text-left text-sm">
               <thead className="bg-[var(--bg)] text-[var(--text-muted)]">
                 <tr>
@@ -179,7 +254,7 @@ export function ServicePlansSettingsTab({ canWrite }: { canWrite: boolean }) {
                 ))}
               </tbody>
             </table>
-          </div>
+          </DesktopTableWrap>
 
           <ServicePlanFormModal
             open={createOpen}

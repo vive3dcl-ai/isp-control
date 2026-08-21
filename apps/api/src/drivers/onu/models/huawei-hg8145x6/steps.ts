@@ -10,6 +10,8 @@ import {
   detectDataModelRoot,
   shouldWriteConnReqCredentials,
 } from '../../infra/connreq-credentials';
+import { huaweiInternetCarrierOk } from '../../infra/huawei-carrier';
+import { healServiceWanVlanToPanel } from '../../infra/service-wan-vlan';
 import {
   genieChildIndices,
   genieGet,
@@ -359,6 +361,45 @@ export async function ensureOmciTr069(
   }
 }
 
+/** service-port / flow L2 de la VLAN de servicio en la OLT (sin reboot). */
+export async function ensureServiceL2(
+  ctx: OnuModelProvisionCtx,
+): Promise<Hg8145StepResult> {
+  const carrier = huaweiInternetCarrierOk(ctx.device);
+  if (carrier === true) {
+    return { ok: true, notes: ['ensure_service_l2: carrier Connected'] };
+  }
+  if (!ctx.ensureServiceL2) {
+    return {
+      ok: carrier !== false,
+      notes: [
+        carrier === false
+          ? 'ensure_service_l2: ERROR_NO_CARRIER y callback no cableado'
+          : 'ensure_service_l2: sin callback (omitido)',
+      ],
+      halt: carrier === false,
+    };
+  }
+  try {
+    const r = await ctx.ensureServiceL2();
+    return {
+      ok: r.ok,
+      notes: ['ensure_service_l2', ...r.notes],
+      // Un tick: dejar que el CPE renegocie carrier tras el service-port.
+      halt: true,
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      notes: [
+        'ensure_service_l2',
+        e instanceof Error ? e.message : String(e),
+      ],
+      halt: true,
+    };
+  }
+}
+
 export async function ensureReachable(
   ctx: OnuModelProvisionCtx,
 ): Promise<Hg8145StepResult> {
@@ -561,6 +602,34 @@ export async function ensureServiceSpv(
   if (isServiceWanApplied(device, ctx.wan)) {
     return { ok: true, notes: ['ensure_service_spv: ya aplicada'] };
   }
+  // VLAN del panel ≠ CPE: SPV bajo ERROR_NO_CARRIER falla (9005).
+  // Hay que borrar/recrear la WAN con la VLAN del panel.
+  const internet = findHuaweiInternetWan(listHuaweiWanIpConnections(device));
+  if (
+    internet?.vlan != null &&
+    Number.isFinite(internet.vlan) &&
+    internet.vlan !== ctx.wan.wanVlan
+  ) {
+    return {
+      ok: false,
+      notes: [
+        `ensure_service_spv: diferido (CPE vlan ${internet.vlan} ≠ panel ${ctx.wan.wanVlan}; reset WAN)`,
+      ],
+      halt: true,
+    };
+  }
+  // Sin carrier L2 y VLAN ya alineada: Huawei rechaza SPV IP (9005).
+  // El tick debe pasar por ensure_service_l2 (VLAN panel en OLT).
+  const carrier = huaweiInternetCarrierOk(device);
+  if (carrier === false && internet) {
+    return {
+      ok: false,
+      notes: [
+        'ensure_service_spv: diferido (ERROR_NO_CARRIER; primero ensure_service_l2)',
+      ],
+      halt: true,
+    };
+  }
   const conns = listHuaweiWanIpConnections(device);
   const target =
     findHuaweiInternetWan(conns) ?? findReusableBlankHuaweiWan(conns);
@@ -574,7 +643,13 @@ export async function ensureServiceSpv(
   // Sin CR: encolar SPV para el próximo Inform (nuevas/migradas con acs fábrica).
   const reachable = await ctx.isReachable();
   try {
-    const params = buildHuaweiServiceWanParams(target.conn, ctx.wan);
+    // Si la IP ya está en el CPE, no reescribir ExternalIPAddress: Huawei
+    // responde 9005 (Invalid parameter name) con ERROR_NO_CARRIER.
+    const omitIpAddress =
+      !!target.externalIp?.trim() && target.externalIp.trim() === ctx.wan.wanIp;
+    const params = buildHuaweiServiceWanParams(target.conn, ctx.wan, {
+      omitIpAddress,
+    });
     const r = await ctx.client.setParameterValues(ctx.deviceId, params, {
       wait: reachable,
     });
@@ -586,7 +661,9 @@ export async function ensureServiceSpv(
       ok: applied || queued,
       notes: [
         applied
-          ? `ensure_service_spv: INTERNET ${ctx.wan.wanIp} vlan=${ctx.wan.wanVlan}`
+          ? `ensure_service_spv: INTERNET ${ctx.wan.wanIp} vlan=${ctx.wan.wanVlan}${
+              omitIpAddress ? ' (IP ya en CPE)' : ''
+            }`
           : queued
             ? `ensure_service_spv: encolado ${ctx.wan.wanIp} vlan=${ctx.wan.wanVlan}${
                 reachable ? '' : ' (sin CR → próximo Inform)'
@@ -603,4 +680,22 @@ export async function ensureServiceSpv(
       ],
     };
   }
+}
+
+/**
+ * Borra la WAN INTERNET del CPE cuando su VLAN ≠ panel.
+ * Huawei bloquea SPV (9005) con ERROR_NO_CARRIER; recrear es la vía
+ * para aplicar la VLAN/IP elegidas en el panel.
+ */
+export async function ensureServiceWanReset(
+  ctx: OnuModelProvisionCtx,
+): Promise<Hg8145StepResult> {
+  const r = await healServiceWanVlanToPanel(ctx, {
+    family: 'huawei_hg8145',
+    prefer: 'recreate',
+  });
+  if (!r) {
+    return { ok: true, notes: ['ensure_service_wan_reset: sin mismatch'] };
+  }
+  return { ok: r.ok, notes: r.notes, halt: true };
 }

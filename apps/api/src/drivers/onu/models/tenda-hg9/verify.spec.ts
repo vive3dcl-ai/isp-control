@@ -43,6 +43,18 @@ describe('pickTendaHg9VerifyAction', () => {
       ),
     ).toBe('noop');
   });
+
+  it('sin carrier L2 → l2 antes que SPV', () => {
+    expect(
+      pickTendaHg9VerifyAction(
+        gaps({
+          informAlive: true,
+          serviceWanOk: true,
+          serviceCarrierOk: false,
+        }),
+      ),
+    ).toBe('l2');
+  });
 });
 
 describe('verifyHealTendaHg9 reboot cap', () => {

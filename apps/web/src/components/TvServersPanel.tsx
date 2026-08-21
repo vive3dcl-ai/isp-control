@@ -36,6 +36,12 @@ import {
 } from '../lib/tv-servers'
 import { ModalPortal } from './ModalPortal'
 import {
+  DesktopTableWrap,
+  MobileList,
+  MobileListCard,
+  MobileListMeta,
+} from './MobileList'
+import {
   OperationProgressModal,
   runProgressSteps,
   type ProgressStep,
@@ -798,166 +804,296 @@ function ServerRow({
                 </p>
               )}
               {channels.length > 0 && (
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[640px] text-left text-xs">
-                    <thead className="text-[var(--text-muted)]">
-                      <tr>
-                        <th className="py-1 pr-2">Canal</th>
-                        <th className="py-1 pr-2">Fuente</th>
-                        <th className="py-1 pr-2">Salida</th>
-                        <th className="py-1 pr-2">Link</th>
-                        <th className="py-1 pr-2">Velocidad</th>
-                        <th className="py-1 pr-2">Pérdida</th>
-                        <th className="py-1 pr-2">Reconn.</th>
-                        <th className="py-1"> </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {channels.map(({ channel: ch, status: st }) => {
-                        const rawLink =
-                          st.link ?? (st.state === 'running' ? 'up' : 'down')
-                        if (rawLink === 'up') {
-                          lastLinkUpAt.current.set(ch.id, Date.now())
-                        }
-                        const heldUp =
-                          rawLink !== 'up' &&
-                          (st.state === 'running' || st.state === 'starting') &&
-                          Date.now() - (lastLinkUpAt.current.get(ch.id) ?? 0) <
-                            LINK_HOLD_MS
-                        return (
-                        <tr
-                          key={ch.id}
-                          className="border-t border-[var(--border)]"
-                        >
-                          <td className="py-2 pr-2">
-                            <div className="flex items-center gap-2">
-                              {ch.logoUrl ? (
-                                <img
-                                  src={tvLogoUrl(server.id, ch.id)}
-                                  alt=""
-                                  className="h-7 w-7 rounded object-cover"
-                                />
-                              ) : (
-                                <span className="flex h-7 w-7 items-center justify-center rounded bg-[var(--bg)] text-[10px] text-[var(--text-muted)]">
-                                  TV
-                                </span>
-                              )}
-                              <div>
-                                <span className="font-medium">{ch.name}</span>
-                                <div className="text-[10px] text-[var(--text-muted)]">
-                                  {channelStateLabel(st.state)}
-                                </div>
-                              </div>
+                <>
+                  <MobileList>
+                    {channels.map(({ channel: ch, status: st }) => {
+                      const rawLink =
+                        st.link ?? (st.state === 'running' ? 'up' : 'down')
+                      if (rawLink === 'up') {
+                        lastLinkUpAt.current.set(ch.id, Date.now())
+                      }
+                      const heldUp =
+                        rawLink !== 'up' &&
+                        (st.state === 'running' || st.state === 'starting') &&
+                        Date.now() - (lastLinkUpAt.current.get(ch.id) ?? 0) <
+                          LINK_HOLD_MS
+                      return (
+                        <MobileListCard key={ch.id}>
+                          <div className="flex items-start gap-2">
+                            {ch.logoUrl ? (
+                              <img
+                                src={tvLogoUrl(server.id, ch.id)}
+                                alt=""
+                                className="h-8 w-8 shrink-0 rounded object-cover"
+                              />
+                            ) : (
+                              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded bg-[var(--bg)] text-[10px] text-[var(--text-muted)]">
+                                TV
+                              </span>
+                            )}
+                            <div className="min-w-0 flex-1">
+                              <p className="truncate text-sm font-semibold">
+                                {ch.name}
+                              </p>
+                              <p className="text-[10px] text-[var(--text-muted)]">
+                                {channelStateLabel(st.state)}
+                              </p>
                             </div>
-                          </td>
-                          <td
-                            className="max-w-[160px] truncate py-2 pr-2 text-[var(--text-muted)]"
-                            title={
-                              (ch.sources?.length
-                                ? ch.sources
-                                : [ch.source]
-                              ).join('\n') +
-                              (st.activeSource
-                                ? `\nactiva: ${st.activeSource}`
-                                : '')
-                            }
-                          >
-                            <div className="truncate">{ch.source}</div>
+                            {linkBadge(st, { heldUp })}
+                          </div>
+                          <MobileListMeta>
+                            <span className="truncate" title={ch.source}>
+                              {ch.source}
+                            </span>
                             {(ch.sources?.length ?? 0) > 1 && (
-                              <div className="text-[10px]">
+                              <span>
                                 +{(ch.sources!.length - 1)} respaldo
                                 {ch.sources!.length > 2 ? 's' : ''}
-                                {(st.activeSourceIndex ?? 0) > 0
-                                  ? ` · usando #${(st.activeSourceIndex ?? 0) + 1}`
-                                  : ''}
-                              </div>
+                              </span>
                             )}
-                          </td>
-                          <td
-                            className="max-w-[120px] truncate py-2 pr-2 font-mono"
-                            title={ch.output}
-                          >
-                            {ch.output}
-                          </td>
-                          <td className="py-2 pr-2">
-                            {linkBadge(st, { heldUp })}
-                          </td>
-                          <td
-                            className="py-2 pr-2 font-mono"
-                            title={
-                              st.speed != null
-                                ? `ffmpeg speed ${st.speed.toFixed(2)}x`
-                                : undefined
-                            }
-                          >
-                            {formatBitrate(st.bitrateKbps)}
-                          </td>
-                          <td className="py-2 pr-2">
-                            {st.packetLossPercent != null
-                              ? `${st.packetLossPercent.toFixed(2)}%`
-                              : st.dropFrames != null
-                                ? `${st.dropFrames} drops`
-                                : '—'}
-                          </td>
-                          <td className="py-2 pr-2">{st.reconnects ?? 0}</td>
-                          <td className="py-2">
-                            {canWrite && (
-                              <div className="flex gap-1">
+                            <span>·</span>
+                            <span className="font-mono truncate" title={ch.output}>
+                              {ch.output}
+                            </span>
+                            <span>·</span>
+                            <span className="font-mono">
+                              {formatBitrate(st.bitrateKbps)}
+                            </span>
+                            <span>·</span>
+                            <span>
+                              {st.packetLossPercent != null
+                                ? `${st.packetLossPercent.toFixed(2)}%`
+                                : st.dropFrames != null
+                                  ? `${st.dropFrames} drops`
+                                  : '—'}
+                            </span>
+                            <span>·</span>
+                            <span>Reconn. {st.reconnects ?? 0}</span>
+                          </MobileListMeta>
+                          {canWrite && (
+                            <div className="mt-2 flex flex-wrap gap-1">
+                              <button
+                                type="button"
+                                className="rounded border border-[var(--border)] px-1.5 py-0.5"
+                                onClick={() => onEditChannel(ch)}
+                              >
+                                Editar
+                              </button>
+                              {st.state === 'running' ? (
                                 <button
                                   type="button"
                                   className="rounded border border-[var(--border)] px-1.5 py-0.5"
-                                  onClick={() => onEditChannel(ch)}
-                                >
-                                  Editar
-                                </button>
-                                {st.state === 'running' ? (
-                                  <button
-                                    type="button"
-                                    className="rounded border border-[var(--border)] px-1.5 py-0.5"
-                                    onClick={() =>
-                                      void stopTvChannel(server.id, ch.id).then(
-                                        () => channelsQ.refetch(),
-                                      )
-                                    }
-                                  >
-                                    Stop
-                                  </button>
-                                ) : (
-                                  <button
-                                    type="button"
-                                    className="rounded border border-[var(--border)] px-1.5 py-0.5"
-                                    onClick={() =>
-                                      void startTvChannel(
-                                        server.id,
-                                        ch.id,
-                                      ).then(() => channelsQ.refetch())
-                                    }
-                                  >
-                                    Start
-                                  </button>
-                                )}
-                                <button
-                                  type="button"
-                                  className="rounded border border-red-500/40 px-1.5 py-0.5 text-red-400"
-                                  onClick={() => {
-                                    if (!confirm(`¿Eliminar canal ${ch.name}?`))
-                                      return
-                                    void deleteTvChannel(server.id, ch.id).then(
+                                  onClick={() =>
+                                    void stopTvChannel(server.id, ch.id).then(
                                       () => channelsQ.refetch(),
                                     )
-                                  }}
+                                  }
                                 >
-                                  ×
+                                  Stop
                                 </button>
-                              </div>
-                            )}
-                          </td>
+                              ) : (
+                                <button
+                                  type="button"
+                                  className="rounded border border-[var(--border)] px-1.5 py-0.5"
+                                  onClick={() =>
+                                    void startTvChannel(server.id, ch.id).then(
+                                      () => channelsQ.refetch(),
+                                    )
+                                  }
+                                >
+                                  Start
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                className="rounded border border-red-500/40 px-1.5 py-0.5 text-red-400"
+                                onClick={() => {
+                                  if (!confirm(`¿Eliminar canal ${ch.name}?`))
+                                    return
+                                  void deleteTvChannel(server.id, ch.id).then(
+                                    () => channelsQ.refetch(),
+                                  )
+                                }}
+                              >
+                                ×
+                              </button>
+                            </div>
+                          )}
+                        </MobileListCard>
+                      )
+                    })}
+                  </MobileList>
+
+                  <DesktopTableWrap bordered={false}>
+                    <table className="w-full min-w-[640px] text-left text-xs">
+                      <thead className="text-[var(--text-muted)]">
+                        <tr>
+                          <th className="py-1 pr-2">Canal</th>
+                          <th className="py-1 pr-2">Fuente</th>
+                          <th className="py-1 pr-2">Salida</th>
+                          <th className="py-1 pr-2">Link</th>
+                          <th className="py-1 pr-2">Velocidad</th>
+                          <th className="py-1 pr-2">Pérdida</th>
+                          <th className="py-1 pr-2">Reconn.</th>
+                          <th className="py-1"> </th>
                         </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
-                </div>
+                      </thead>
+                      <tbody>
+                        {channels.map(({ channel: ch, status: st }) => {
+                          const rawLink =
+                            st.link ?? (st.state === 'running' ? 'up' : 'down')
+                          if (rawLink === 'up') {
+                            lastLinkUpAt.current.set(ch.id, Date.now())
+                          }
+                          const heldUp =
+                            rawLink !== 'up' &&
+                            (st.state === 'running' || st.state === 'starting') &&
+                            Date.now() -
+                              (lastLinkUpAt.current.get(ch.id) ?? 0) <
+                              LINK_HOLD_MS
+                          return (
+                            <tr
+                              key={ch.id}
+                              className="border-t border-[var(--border)]"
+                            >
+                              <td className="py-2 pr-2">
+                                <div className="flex items-center gap-2">
+                                  {ch.logoUrl ? (
+                                    <img
+                                      src={tvLogoUrl(server.id, ch.id)}
+                                      alt=""
+                                      className="h-7 w-7 rounded object-cover"
+                                    />
+                                  ) : (
+                                    <span className="flex h-7 w-7 items-center justify-center rounded bg-[var(--bg)] text-[10px] text-[var(--text-muted)]">
+                                      TV
+                                    </span>
+                                  )}
+                                  <div>
+                                    <span className="font-medium">{ch.name}</span>
+                                    <div className="text-[10px] text-[var(--text-muted)]">
+                                      {channelStateLabel(st.state)}
+                                    </div>
+                                  </div>
+                                </div>
+                              </td>
+                              <td
+                                className="max-w-[160px] truncate py-2 pr-2 text-[var(--text-muted)]"
+                                title={
+                                  (ch.sources?.length
+                                    ? ch.sources
+                                    : [ch.source]
+                                  ).join('\n') +
+                                  (st.activeSource
+                                    ? `\nactiva: ${st.activeSource}`
+                                    : '')
+                                }
+                              >
+                                <div className="truncate">{ch.source}</div>
+                                {(ch.sources?.length ?? 0) > 1 && (
+                                  <div className="text-[10px]">
+                                    +{(ch.sources!.length - 1)} respaldo
+                                    {ch.sources!.length > 2 ? 's' : ''}
+                                    {(st.activeSourceIndex ?? 0) > 0
+                                      ? ` · usando #${(st.activeSourceIndex ?? 0) + 1}`
+                                      : ''}
+                                  </div>
+                                )}
+                              </td>
+                              <td
+                                className="max-w-[120px] truncate py-2 pr-2 font-mono"
+                                title={ch.output}
+                              >
+                                {ch.output}
+                              </td>
+                              <td className="py-2 pr-2">
+                                {linkBadge(st, { heldUp })}
+                              </td>
+                              <td
+                                className="py-2 pr-2 font-mono"
+                                title={
+                                  st.speed != null
+                                    ? `ffmpeg speed ${st.speed.toFixed(2)}x`
+                                    : undefined
+                                }
+                              >
+                                {formatBitrate(st.bitrateKbps)}
+                              </td>
+                              <td className="py-2 pr-2">
+                                {st.packetLossPercent != null
+                                  ? `${st.packetLossPercent.toFixed(2)}%`
+                                  : st.dropFrames != null
+                                    ? `${st.dropFrames} drops`
+                                    : '—'}
+                              </td>
+                              <td className="py-2 pr-2">
+                                {st.reconnects ?? 0}
+                              </td>
+                              <td className="py-2">
+                                {canWrite && (
+                                  <div className="flex gap-1">
+                                    <button
+                                      type="button"
+                                      className="rounded border border-[var(--border)] px-1.5 py-0.5"
+                                      onClick={() => onEditChannel(ch)}
+                                    >
+                                      Editar
+                                    </button>
+                                    {st.state === 'running' ? (
+                                      <button
+                                        type="button"
+                                        className="rounded border border-[var(--border)] px-1.5 py-0.5"
+                                        onClick={() =>
+                                          void stopTvChannel(
+                                            server.id,
+                                            ch.id,
+                                          ).then(() => channelsQ.refetch())
+                                        }
+                                      >
+                                        Stop
+                                      </button>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        className="rounded border border-[var(--border)] px-1.5 py-0.5"
+                                        onClick={() =>
+                                          void startTvChannel(
+                                            server.id,
+                                            ch.id,
+                                          ).then(() => channelsQ.refetch())
+                                        }
+                                      >
+                                        Start
+                                      </button>
+                                    )}
+                                    <button
+                                      type="button"
+                                      className="rounded border border-red-500/40 px-1.5 py-0.5 text-red-400"
+                                      onClick={() => {
+                                        if (
+                                          !confirm(
+                                            `¿Eliminar canal ${ch.name}?`,
+                                          )
+                                        )
+                                          return
+                                        void deleteTvChannel(
+                                          server.id,
+                                          ch.id,
+                                        ).then(() => channelsQ.refetch())
+                                      }}
+                                    >
+                                      ×
+                                    </button>
+                                  </div>
+                                )}
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </DesktopTableWrap>
+                </>
               )}
 
               <div className="flex flex-wrap items-center justify-between gap-2 pt-2">

@@ -220,6 +220,93 @@ describe('pickHg8145VerifyStep', () => {
     expect(step).toBe('ensure_service_spv');
   });
 
+  it('ERROR_NO_CARRIER pide L2 OLT antes que SPV', () => {
+    const device = mgmtDevice({ connreq: true, inform: 120 }) as ReturnType<
+      typeof mgmtDevice
+    > & {
+      InternetGatewayDevice: {
+        WANDevice: {
+          1: {
+            WANConnectionDevice: Record<string, unknown>;
+          };
+        };
+      };
+    };
+    device.InternetGatewayDevice.WANDevice[1].WANConnectionDevice['3'] = {
+      WANIPConnection: {
+        1: {
+          Name: leaf('ISPCTRL_INTERNET_701'),
+          X_HW_SERVICELIST: leaf('INTERNET'),
+          X_HW_VLAN: leaf(701),
+          ExternalIPAddress: leaf('40.40.20.35'),
+          DNSServers: leaf('8.8.8.8,8.8.4.4'),
+          ConnectionStatus: leaf('Connecting'),
+          LastConnectionError: leaf('ERROR_NO_CARRIER'),
+        },
+      },
+    };
+    const step = pickHg8145VerifyStep(
+      baseCtx(device, {
+        connreqOurs: true,
+        informOk: true,
+        informAlive: true,
+        reachable: true,
+        mgmtReady: true,
+        hasServiceWan: true,
+        serviceWanOk: false,
+        serviceCarrierOk: false,
+      }),
+    );
+    expect(step).toBe('ensure_service_l2');
+  });
+
+  it('CPE VLAN ≠ panel → reset WAN (no puente ACS)', () => {
+    const device = mgmtDevice({ connreq: true, inform: 120 }) as ReturnType<
+      typeof mgmtDevice
+    > & {
+      InternetGatewayDevice: {
+        WANDevice: {
+          1: {
+            WANConnectionDevice: Record<string, unknown>;
+          };
+        };
+      };
+    };
+    device.InternetGatewayDevice.WANDevice[1].WANConnectionDevice['3'] = {
+      WANIPConnection: {
+        1: {
+          Name: leaf('ISPCTRL_INTERNET_701'),
+          X_HW_SERVICELIST: leaf('INTERNET'),
+          X_HW_VLAN: leaf(701),
+          ExternalIPAddress: leaf('40.40.20.54'),
+          DNSServers: leaf('8.8.8.8,8.8.4.4'),
+          ConnectionStatus: leaf('Connecting'),
+          LastConnectionError: leaf('ERROR_NO_CARRIER'),
+        },
+      },
+    };
+    const step = pickHg8145VerifyStep({
+      ...baseCtx(device, {
+        connreqOurs: true,
+        informOk: true,
+        informAlive: true,
+        reachable: true,
+        mgmtReady: true,
+        hasServiceWan: true,
+        serviceWanOk: false,
+        serviceCarrierOk: false,
+      }),
+      wan: {
+        ...WAN,
+        wanIp: '40.40.21.96',
+        wanVlan: 702,
+        wanGateway: '40.40.21.1',
+      },
+      serviceVlan: 702,
+    });
+    expect(step).toBe('ensure_service_wan_reset');
+  });
+
   it('WCD vacío pide WANIP antes que WCD nuevo', () => {
     const device = mgmtDevice({ connreq: true, inform: 120 }) as ReturnType<
       typeof mgmtDevice

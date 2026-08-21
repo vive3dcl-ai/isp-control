@@ -70,8 +70,16 @@ export class BillingSettings {
   @Column({ name: 'send_last_run_at', type: 'timestamptz', nullable: true })
   sendLastRunAt: Date | null;
 
-  @Column({ name: 'default_due_days', type: 'int', default: 10 })
+  @Column({ name: 'default_due_days', type: 'int', default: 5 })
   defaultDueDays: number;
+
+  /** Días tras el vencimiento antes del corte automático del servicio. */
+  @Column({ name: 'grace_days_after_due', type: 'int', default: 2 })
+  graceDaysAfterDue: number;
+
+  /** Día del mes (1–28) en que se genera la factura en régimen mensual. */
+  @Column({ name: 'billing_cycle_day', type: 'smallint', default: 1 })
+  billingCycleDay: number;
 
   /**
    * calendar_month = cobro fijo de calendario (1.er mes prorrateado).

@@ -1,9 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { In, MoreThan, Repository } from 'typeorm';
 import { TenantConnectionService } from '../../database/tenant-connection.service';
 import { SupportService } from '../../support/support.service';
 import { Tenant } from '../../tenants/entities/tenant.entity';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
 import {
   GenieAcsNbiClient,
   deviceIdMatchesSerial,
@@ -12,6 +12,8 @@ import {
 import type { Onu } from '../shared/entities/onu.entity';
 import type { NetworkAlarm } from '../shared/entities/network-alarm.entity';
 import {
+  RX_CHANGE_WINDOW_MS,
+  RX_POOR_DBM,
   alarmBody,
   alarmTitle,
   classifyAccessAlarms,
@@ -48,6 +50,7 @@ export class NetworkAlarmService {
         'online',
         'phaseState',
         'status',
+        'adminState',
         'signalDbm',
         'mgmtIp',
         'tr069ProfileId',
@@ -56,9 +59,10 @@ export class NetworkAlarmService {
     if (!rows.length) return;
 
     const informBySn = await this.loadAcsInformMap(rows);
+    const rxByOnu = await this.loadRecentSignalByOnu(schema, rows);
     for (const onu of rows) {
       try {
-        await this.syncOnu(schema, onu, informBySn);
+        await this.syncOnu(schema, onu, informBySn, rxByOnu);
       } catch (err) {
         this.logger.debug(
           `alarm ${onu.sn ?? onu.id}: ${err instanceof Error ? err.message : err}`,
@@ -108,10 +112,49 @@ export class NetworkAlarmService {
     return map;
   }
 
+  private async loadRecentSignalByOnu(
+    schema: string,
+    onus: Onu[],
+  ): Promise<Map<string, number[]>> {
+    const out = new Map<string, number[]>();
+    const poor = onus.filter(
+      (o) =>
+        o.online &&
+        o.signalDbm != null &&
+        Number.isFinite(o.signalDbm) &&
+        o.signalDbm < RX_POOR_DBM,
+    );
+    if (!poor.length) return out;
+    try {
+      const samples = await this.tenants.getOnuMetricSampleRepository(schema);
+      const since = new Date(Date.now() - RX_CHANGE_WINDOW_MS);
+      const rows = await samples.find({
+        where: {
+          onuId: In(poor.map((o) => o.id)),
+          kind: 'signal',
+          sampledAt: MoreThan(since),
+        },
+        select: ['onuId', 'value'],
+        order: { sampledAt: 'ASC' },
+      });
+      for (const row of rows) {
+        const list = out.get(row.onuId) ?? [];
+        list.push(row.value);
+        out.set(row.onuId, list);
+      }
+    } catch (err) {
+      this.logger.debug(
+        `RX samples: ${err instanceof Error ? err.message : err}`,
+      );
+    }
+    return out;
+  }
+
   private async syncOnu(
     schema: string,
     onu: Onu,
     informBySn: Map<string, { at: Date | null; inAcs: boolean }>,
+    rxByOnu: Map<string, number[]>,
   ) {
     const snKey = onu.sn?.trim().toUpperCase() ?? '';
     const acs = snKey ? informBySn.get(snKey) : undefined;
@@ -120,9 +163,12 @@ export class NetworkAlarmService {
         online: onu.online,
         phaseState: onu.phaseState,
         status: onu.status,
+        adminState: onu.adminState,
         signalDbm: onu.signalDbm,
+        recentSignalDbms: rxByOnu.get(onu.id) ?? [],
         lastInformAt: acs?.at ?? null,
         hadAcsRecord: acs?.inAcs === true,
+        acsExpected: !!(onu.mgmtIp?.trim() || onu.tr069ProfileId),
       }),
     );
 
@@ -181,7 +227,9 @@ export class NetworkAlarmService {
             type: 'network_alarm',
             title: alarmTitle(kind, sn),
             body: alarmBody(kind),
-            link: '/app/onus',
+            link: alarm.onuId
+              ? `/app/settings?tab=onus&onuId=${alarm.onuId}`
+              : '/app/settings?tab=onus',
             meta: {
               kind,
               onuId: alarm.onuId,

@@ -4,9 +4,13 @@ import { Repository } from 'typeorm';
 import { PlatformPaymentMethod } from './entities/platform-payment-method.entity';
 import {
   EMPTY_MERCADOPAGO_CONFIG,
+  EMPTY_PAYPAL_CONFIG,
+  emptyPlatformPaymentConfig,
   isMercadoPagoConfigured,
+  isPayPalConfigured,
   PLATFORM_PAYMENT_PROVIDERS,
   type MercadoPagoModuleConfig,
+  type PayPalModuleConfig,
   type PlatformPaymentProviderId,
 } from './module-catalog';
 import { UpdatePlatformPaymentMethodDto } from './dto/modules.dto';
@@ -34,7 +38,7 @@ export class PlatformPaymentsService {
             enabled: false,
             environment: 'sandbox',
             integration: p.integration,
-            config: { ...EMPTY_MERCADOPAGO_CONFIG },
+            config: emptyPlatformPaymentConfig(p.id),
           }),
         );
       }
@@ -76,6 +80,28 @@ export class PlatformPaymentsService {
       row.environment = next.environment;
       row.integration = 'checkout_pro';
       row.config = next;
+    } else if (row.provider === 'paypal') {
+      const prev = {
+        ...EMPTY_PAYPAL_CONFIG,
+        ...(row.config as Partial<PayPalModuleConfig>),
+      };
+      const next: PayPalModuleConfig = {
+        environment: dto.environment ?? prev.environment ?? row.environment,
+        integration: 'checkout',
+        clientId:
+          dto.clientId !== undefined ? dto.clientId.trim() : prev.clientId,
+        clientSecret:
+          dto.clientSecret != null && dto.clientSecret !== ''
+            ? dto.clientSecret
+            : prev.clientSecret,
+        webhookId:
+          dto.webhookId !== undefined
+            ? dto.webhookId.trim()
+            : prev.webhookId,
+      };
+      row.environment = next.environment;
+      row.integration = 'checkout';
+      row.config = next;
     }
 
     await this.methods.save(row);
@@ -101,7 +127,7 @@ export class PlatformPaymentsService {
         description,
         enabled: row.enabled,
         environment: row.environment,
-        integration: 'checkout_pro',
+        integration: 'checkout_pro' as const,
         configured: isMercadoPagoConfigured(cfg),
         publicKey: cfg.publicKey,
         hasAccessToken: !!cfg.accessToken,
@@ -111,6 +137,30 @@ export class PlatformPaymentsService {
         updatedAt: row.updatedAt,
       };
     }
+
+    if (row.provider === 'paypal') {
+      const cfg = {
+        ...EMPTY_PAYPAL_CONFIG,
+        ...(row.config as Partial<PayPalModuleConfig>),
+      };
+      return {
+        id: row.id,
+        provider: row.provider as PlatformPaymentProviderId,
+        name: row.name,
+        description,
+        enabled: row.enabled,
+        environment: row.environment,
+        integration: 'checkout' as const,
+        configured: isPayPalConfigured(cfg),
+        clientId: cfg.clientId,
+        hasClientSecret: !!cfg.clientSecret,
+        hasWebhookId: !!cfg.webhookId,
+        clientSecret: '',
+        webhookId: '',
+        updatedAt: row.updatedAt,
+      };
+    }
+
     return {
       id: row.id,
       provider: row.provider,

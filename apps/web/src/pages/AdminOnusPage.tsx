@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '../lib/api'
 import { PanelShell } from '../components/PanelShell'
@@ -28,12 +28,14 @@ type CatalogItem = {
   allowCustomProfiles: boolean
   defaultProfileCode: string | null
   imageKey: string
+  customImageUrl: string | null
   imageUrl: string
   note: string
   isActive: boolean
   registrationStatus: 'approved' | 'pending'
 }
 
+const MAX_ONU_IMAGE_BYTES = 3_000_000
 const ETH = [0, 1, 2, 3, 4, 5, 6, 7, 8]
 const WIFI = [0, 1, 2, 3, 4]
 const VOIP = [0, 1, 2, 3, 4]
@@ -74,6 +76,9 @@ export function AdminOnusPage() {
   const [allowCustomProfiles, setAllowCustomProfiles] = useState(true)
   const [defaultProfileCode, setDefaultProfileCode] = useState('generic_6')
   const [imageKey, setImageKey] = useState('zte-hgu')
+  const [customImageUrl, setCustomImageUrl] = useState<string | null>(null)
+  const [imageError, setImageError] = useState<string | null>(null)
+  const imageFileRef = useRef<HTMLInputElement>(null)
   const [note, setNote] = useState('')
   const [isActive, setIsActive] = useState(true)
   const [deleteConfirm, setDeleteConfirm] = useState('')
@@ -88,6 +93,29 @@ export function AdminOnusPage() {
     void queryClient.invalidateQueries({ queryKey: ['admin', 'onus'] })
   }
 
+  function onCatalogImageFile(file: File | undefined) {
+    setImageError(null)
+    if (!file) return
+    if (!file.type.startsWith('image/')) {
+      setImageError('El archivo debe ser una imagen')
+      return
+    }
+    if (file.size > MAX_ONU_IMAGE_BYTES) {
+      setImageError('La imagen supera 3 MB; usa una más liviana')
+      return
+    }
+    const reader = new FileReader()
+    reader.onload = () => setCustomImageUrl(String(reader.result))
+    reader.onerror = () => setImageError('No se pudo leer la imagen')
+    reader.readAsDataURL(file)
+  }
+
+  function clearCustomImage() {
+    setCustomImageUrl(null)
+    setImageError(null)
+    if (imageFileRef.current) imageFileRef.current.value = ''
+  }
+
   function resetForm() {
     setVendor('zte')
     setName('')
@@ -100,6 +128,8 @@ export function AdminOnusPage() {
     setAllowCustomProfiles(true)
     setDefaultProfileCode('generic_6')
     setImageKey('zte-hgu')
+    setCustomImageUrl(null)
+    setImageError(null)
     setNote('')
     setIsActive(true)
     setDeleteConfirm('')
@@ -127,6 +157,8 @@ export function AdminOnusPage() {
     setAllowCustomProfiles(item.allowCustomProfiles)
     setDefaultProfileCode(item.defaultProfileCode ?? '')
     setImageKey(item.imageKey)
+    setCustomImageUrl(item.customImageUrl ?? null)
+    setImageError(null)
     setNote(item.note ?? '')
     setIsActive(item.isActive)
     setDeleteConfirm('')
@@ -146,6 +178,7 @@ export function AdminOnusPage() {
     allowCustomProfiles,
     defaultProfileCode: defaultProfileCode || null,
     imageKey,
+    customImageUrl,
     note,
     isActive,
   })
@@ -166,8 +199,8 @@ export function AdminOnusPage() {
     onSuccess: () => {
       setMsg(
         modal === 'edit'
-          ? 'Modelo actualizado y propagado a los tenants'
-          : 'Modelo creado y cargado en todos los tenants',
+          ? 'Modelo actualizado (se propaga a tenants que ya lo tienen)'
+          : 'Modelo creado (disponible al detectar/crear el tipo)',
       )
       setModal(null)
       invalidate()
@@ -446,12 +479,46 @@ export function AdminOnusPage() {
               </button>
             </div>
             <div className="max-h-[70vh] space-y-3 overflow-y-auto px-5 py-4 text-sm">
-              <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] p-3">
+              <div className="space-y-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] p-3">
                 <img
-                  src={`/onu/${imageKey}.svg`}
+                  src={customImageUrl || `/onu/${imageKey}.svg`}
                   alt=""
                   className="mx-auto h-[90px] object-contain"
                 />
+                <div className="flex flex-wrap justify-center gap-2">
+                  <input
+                    ref={imageFileRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => onCatalogImageFile(e.target.files?.[0])}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => imageFileRef.current?.click()}
+                    className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs hover:bg-[var(--bg-elevated)]"
+                  >
+                    Subir foto real
+                  </button>
+                  {customImageUrl && (
+                    <button
+                      type="button"
+                      onClick={clearCustomImage}
+                      className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs hover:bg-[var(--bg-elevated)]"
+                    >
+                      Usar SVG por defecto
+                    </button>
+                  )}
+                </div>
+                {imageError && (
+                  <p className="text-center text-xs text-[var(--danger)]">
+                    {imageError}
+                  </p>
+                )}
+                <p className="text-center text-[11px] text-[var(--text-muted)]">
+                  PNG, JPG, SVG o WebP · máx. 3 MB. Al aprobar, la foto queda
+                  disponible para los tenants que usen este modelo.
+                </p>
               </div>
 
               <label className="block">
@@ -637,7 +704,7 @@ export function AdminOnusPage() {
 
               <label className="block">
                 <span className="mb-1 block text-[var(--text-muted)]">
-                  Imagen
+                  Imagen SVG (fallback)
                 </span>
                 <select
                   className={inputClass}

@@ -5,6 +5,13 @@ import { apiFetch } from '../lib/api'
 import { adoptOrphanMapZones } from '../lib/adopt-map-zones'
 import { useNotify } from './NotifyProvider'
 import { ModalPortal } from './ModalPortal'
+import {
+  DesktopTableWrap,
+  MobileList,
+  MobileListCard,
+  MobileListEmpty,
+  MobileListMeta,
+} from './MobileList'
 
 
 const inputClass =
@@ -248,7 +255,59 @@ export function ZonasSettingsTab({ canWrite }: { canWrite: boolean }) {
         <p className="text-sm text-[var(--accent)]">{syncNote}</p>
       )}
 
-      <div className="overflow-x-auto overflow-hidden rounded-xl border border-[var(--border)]">
+      <MobileList>
+        {zonesQuery.isLoading && (
+          <p className="text-sm text-[var(--text-muted)]">Cargando…</p>
+        )}
+        {!zonesQuery.isLoading && zones.length === 0 && (
+          <MobileListEmpty>
+            No hay zonas todavía. Crea una para asignarla a clientes.
+          </MobileListEmpty>
+        )}
+        {zones.map((z) => (
+          <MobileListCard key={z.id}>
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold">{z.name}</p>
+                <p className="line-clamp-2 text-xs text-[var(--text-muted)]">
+                  {z.description || '—'}
+                </p>
+              </div>
+              <span className="shrink-0 tabular-nums text-sm">
+                {z.clientCount}
+              </span>
+            </div>
+            <MobileListMeta>
+              <span>
+                {z.clientCount === 1
+                  ? '1 cliente'
+                  : `${z.clientCount} clientes`}
+              </span>
+            </MobileListMeta>
+            {canWrite && (
+              <div className="mt-2 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => openEdit(z)}
+                  className="rounded-md border border-[var(--border)] px-2.5 py-1 text-xs hover:bg-[var(--bg)]"
+                >
+                  Editar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void remove(z)}
+                  disabled={deleteMutation.isPending}
+                  className="rounded-md border border-red-500/40 px-2.5 py-1 text-xs text-red-300 hover:bg-red-500/10 disabled:opacity-50"
+                >
+                  Eliminar
+                </button>
+              </div>
+            )}
+          </MobileListCard>
+        ))}
+      </MobileList>
+
+      <DesktopTableWrap>
         <table className="w-full min-w-[640px] text-left text-sm">
           <thead className="bg-[var(--bg)] text-[var(--text-muted)]">
             <tr>
@@ -311,7 +370,7 @@ export function ZonasSettingsTab({ canWrite }: { canWrite: boolean }) {
             ))}
           </tbody>
         </table>
-      </div>
+      </DesktopTableWrap>
 
       {modal && (
         <ModalPortal><div className="fixed inset-0 z-[600] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/60 sm:items-center sm:p-4">

@@ -2921,7 +2921,7 @@ export class TopologyService {
             type: 'device_down',
             title,
             body,
-            link: '/app/topology',
+            link: `/app/topology?deviceId=${device.id}`,
             meta: {
               deviceId: device.id,
               deviceType: device.type,

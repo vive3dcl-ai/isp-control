@@ -1,7 +1,8 @@
-import { type ReactNode } from 'react'
+import { type ReactNode, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { useAuth } from '../auth/AuthContext'
+import { useSubscriptionAccess } from '../auth/useSubscriptionAccess'
 import { PanelShell } from '../components/PanelShell'
 import { EmpresaSettingsTab } from '../components/EmpresaSettingsTab'
 import { Tr069SettingsTab } from '../components/Tr069SettingsTab'
@@ -87,6 +88,7 @@ export function SettingsPage() {
   const canWriteNet = canWriteTopology(user?.tenantRole)
   const canWriteCrmFields = canWriteCrm(user?.tenantRole)
   const [searchParams, setSearchParams] = useSearchParams()
+  const { blocked: subscriptionLocked } = useSubscriptionAccess()
 
   const companyQuery = useQuery({
     queryKey: ['app', 'settings', 'company'],
@@ -94,16 +96,35 @@ export function SettingsPage() {
   })
   const portalEnabled = !!companyQuery.data?.suspensionPortalEnabled
 
-  const tabs = portalEnabled
-    ? [
-        ...BASE_TABS,
-        { id: 'suspension_portal' as const, label: 'Portal de suspensión' },
-      ]
-    : BASE_TABS
+  const tabs = subscriptionLocked
+    ? [{ id: 'empresa' as const, label: 'Empresa' }]
+    : portalEnabled
+      ? [
+          ...BASE_TABS,
+          { id: 'suspension_portal' as const, label: 'Portal de suspensión' },
+        ]
+      : BASE_TABS
 
-  const tab = parseTab(searchParams.get('tab'), portalEnabled)
+  const tab = subscriptionLocked
+    ? 'empresa'
+    : parseTab(searchParams.get('tab'), portalEnabled)
+
+  useEffect(() => {
+    if (!subscriptionLocked) return
+    const params = new URLSearchParams(searchParams)
+    if (
+      params.get('tab') !== 'empresa' ||
+      params.get('section') !== 'suscripcion'
+    ) {
+      setSearchParams(
+        { tab: 'empresa', section: 'suscripcion' },
+        { replace: true },
+      )
+    }
+  }, [subscriptionLocked, searchParams, setSearchParams])
 
   function setTab(next: SettingsTab) {
+    if (subscriptionLocked) return
     setSearchParams(next === 'empresa' ? {} : { tab: next }, { replace: true })
   }
 

@@ -241,7 +241,7 @@ export function UsersPage() {
           type="button"
           onClick={() => setCreateOpen(true)}
           aria-label="Nuevo usuario"
-          className="fixed bottom-20 right-5 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-[var(--accent)] text-white shadow-lg shadow-black/25 hover:bg-[var(--accent-hover)] md:hidden"
+          className="app-fab-mobile fixed z-40 flex h-14 w-14 items-center justify-center rounded-full bg-[var(--accent)] text-white shadow-lg shadow-black/25 hover:bg-[var(--accent-hover)] md:hidden"
         >
           <svg
             width="28"

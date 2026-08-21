@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { canInstallField } from '../lib/crm'
+import { useAsistenteChatOptional } from '../asistente/AsistenteChatContext'
 
 const TILES = [
   {
@@ -35,10 +36,17 @@ const TILES = [
 export function MobileHomePage() {
   const { user } = useAuth()
   const canInstall = canInstallField(user?.tenantRole)
+  const asistente = useAsistenteChatOptional()
+  const showAsistente =
+    !!asistente?.moduleEnabled && !asistente.moduleLoading
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="grid flex-1 grid-cols-1 grid-rows-3 gap-3">
+      <div
+        className={`grid flex-1 grid-cols-1 gap-3 ${
+          showAsistente ? 'grid-rows-4' : 'grid-rows-3'
+        }`}
+      >
         {TILES.map((tile) => {
           const enabled = tile.ready && (!tile.requiresInstall || canInstall)
           const baseClass = `mobile-tile group relative flex min-h-0 flex-1 items-center gap-4 overflow-hidden rounded-2xl border border-[var(--border)] bg-gradient-to-br ${tile.accent} px-5 py-5`
@@ -88,6 +96,30 @@ export function MobileHomePage() {
             </div>
           )
         })}
+
+        {showAsistente && (
+          <button
+            type="button"
+            onClick={() => {
+              if (asistente?.minimized) asistente.expand()
+              else asistente?.setOpen(true)
+            }}
+            className="mobile-tile group relative flex min-h-0 flex-1 items-center gap-4 overflow-hidden rounded-2xl border border-[var(--border)] bg-gradient-to-br from-amber-500/20 to-orange-600/5 px-5 py-5 text-left transition active:scale-[0.98]"
+          >
+            <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-[var(--bg)]/60 text-2xl text-[var(--accent)] shadow-sm">
+              ✦
+            </span>
+            <div className="min-w-0">
+              <p className="text-xl font-semibold tracking-tight">Asistente</p>
+              <p className="text-sm text-[var(--text-muted)]">
+                Chat con la IA del ISP
+              </p>
+            </div>
+            <span className="ml-auto text-2xl text-[var(--text-muted)] opacity-60">
+              ›
+            </span>
+          </button>
+        )}
       </div>
     </div>
   )

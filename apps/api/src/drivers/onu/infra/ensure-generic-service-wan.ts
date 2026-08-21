@@ -12,6 +12,9 @@ import {
 import {
   assessServiceRoute,
 } from '../models/generic-zte/route';
+import { assessServiceLanBind } from './lan-bind';
+import { healServiceL2IfNeeded } from './service-carrier';
+import { healServiceWanVlanToPanel } from './service-wan-vlan';
 
 function ownersFor(family: GenericPlaybookFamily) {
   if (family === 'zte_bridge' || family === 'unknown_bridge') {
@@ -44,6 +47,26 @@ export async function ensureGenericServiceWan(
     return {
       ok: true,
       notes: [...notes, 'WAN de servicio: OMCI (puente)'],
+    };
+  }
+
+  // VLAN panel primero: change o delete+recreate (nunca adoptar VLAN fantasma).
+  const vlanHeal = await healServiceWanVlanToPanel(ctx, { family });
+  if (vlanHeal) {
+    return {
+      ok: vlanHeal.ok,
+      notes: [...notes, ...vlanHeal.notes],
+      progress: vlanHeal.progress,
+    };
+  }
+
+  // ACS puede tener IP/VLAN bien y aun así ERROR_NO_CARRIER sin service-port.
+  const l2 = await healServiceL2IfNeeded(ctx);
+  if (l2) {
+    return {
+      ok: l2.ok,
+      notes: [...notes, ...l2.notes],
+      progress: l2.progress,
     };
   }
 
@@ -107,12 +130,11 @@ export async function ensureGenericServiceWan(
     });
     notes.push(msg);
 
-    if (plan.bindLeaf) {
+    const bind = assessServiceLanBind(ctx.device, found.conn);
+    if (!bind.ok && bind.heal?.length) {
       try {
-        await ctx.client.setParameterValues(ctx.deviceId, [
-          [plan.bindLeaf, true, 'xsd:boolean'],
-        ]);
-        notes.push(`bind ${plan.bindLeaf}`);
+        await ctx.client.setParameterValues(ctx.deviceId, bind.heal);
+        notes.push(`bind ${bind.message}`);
       } catch (e) {
         notes.push(
           `bind omitido: ${e instanceof Error ? e.message : String(e)}`,

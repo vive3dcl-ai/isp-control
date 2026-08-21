@@ -7,6 +7,13 @@ import {
   portalPayInvoice,
   type PortalInvoice,
 } from '../lib/client-portal'
+import {
+  DesktopTableWrap,
+  MobileList,
+  MobileListCard,
+  MobileListEmpty,
+  MobileListMeta,
+} from '../components/MobileList'
 import { ModalPortal } from '../components/ModalPortal'
 
 const STATUS_LABEL: Record<string, string> = {
@@ -69,7 +76,76 @@ export function PortalInvoicesPage() {
       {payError && (
         <p className="mb-4 text-sm text-red-400">{payError}</p>
       )}
-      <div className="overflow-x-auto rounded-2xl border border-[var(--portal-border)]">
+      <MobileList>
+        {query.isLoading && (
+          <p className="text-sm text-[var(--portal-muted)]">Cargando…</p>
+        )}
+        {!query.isLoading && !invoices.length && (
+          <MobileListEmpty>No hay facturas</MobileListEmpty>
+        )}
+        {invoices.map((inv) => (
+          <MobileListCard
+            key={inv.id}
+            className="border-[var(--portal-border)] bg-[var(--portal-elevated)]"
+          >
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold">{inv.number}</p>
+                <p
+                  className={
+                    inv.status === 'overdue'
+                      ? 'text-xs text-red-400'
+                      : inv.status === 'paid'
+                        ? 'text-xs text-emerald-400'
+                        : 'text-xs text-[var(--portal-muted)]'
+                  }
+                >
+                  {STATUS_LABEL[inv.status] ?? inv.status}
+                </p>
+              </div>
+              <p className="shrink-0 text-sm font-medium">
+                {money(inv.total, inv.currency)}
+              </p>
+            </div>
+            <MobileListMeta className="text-[var(--portal-muted)]">
+              <span>Emisión {inv.issueDate}</span>
+              <span>Vence {inv.dueDate || '—'}</span>
+            </MobileListMeta>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => setView(inv)}
+                className="rounded-lg border border-[var(--portal-border)] px-2.5 py-1 text-xs hover:bg-[var(--portal-elevated)]"
+              >
+                Ver
+              </button>
+              {inv.payable && (
+                <button
+                  type="button"
+                  disabled={!mpReady || payMutation.isPending}
+                  title={
+                    mpReady
+                      ? 'Pagar con Mercado Pago'
+                      : 'Sin métodos de pago activos'
+                  }
+                  onClick={() => {
+                    setPayError('')
+                    payMutation.mutate(inv.id)
+                  }}
+                  className="rounded-lg bg-[var(--portal-accent)] px-2.5 py-1 text-xs font-medium text-white disabled:opacity-40"
+                >
+                  Pagar
+                </button>
+              )}
+            </div>
+          </MobileListCard>
+        ))}
+      </MobileList>
+
+      <DesktopTableWrap
+        bordered={false}
+        className="rounded-2xl border border-[var(--portal-border)]"
+      >
         <table className="w-full min-w-[640px] text-left text-sm">
           <thead className="bg-[var(--portal-elevated)] text-[var(--portal-muted)]">
             <tr>
@@ -153,7 +229,7 @@ export function PortalInvoicesPage() {
             )}
           </tbody>
         </table>
-      </div>
+      </DesktopTableWrap>
 
       {view && (
         <ModalPortal><div className="modal-backdrop fixed inset-0 z-[100] flex items-stretch justify-center overflow-hidden bg-black/50 sm:items-center sm:p-4">

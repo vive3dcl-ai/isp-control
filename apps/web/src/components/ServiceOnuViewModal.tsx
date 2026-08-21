@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '../lib/api'
 import {
@@ -41,10 +41,15 @@ export function ServiceOnuViewModal({
 }) {
   const queryClient = useQueryClient()
   const [liveOpen, setLiveOpen] = useState(false)
+  const [wifiSsids, setWifiSsids] = useState<Record<number, string>>({})
   const [wifiKeys, setWifiKeys] = useState<Record<number, string>>({})
+  const [wifiDraftsSeeded, setWifiDraftsSeeded] = useState(false)
   const [wifiMsg, setWifiMsg] = useState<string | null>(null)
   const [wifiError, setWifiError] = useState<string | null>(null)
+  const [wifiFetching, setWifiFetching] = useState(false)
   const [chartWindow, setChartWindow] = useState<MetricWindowKey>('1h')
+  const wifiFetchGen = useRef(0)
+  const wifiFetchStartedFor = useRef<string | null>(null)
 
   const onusQuery = useQuery({
     queryKey: ['app', 'onus'],
@@ -93,34 +98,122 @@ export function ServiceOnuViewModal({
   useEffect(() => {
     if (!open) {
       setLiveOpen(false)
+      setWifiSsids({})
       setWifiKeys({})
+      setWifiDraftsSeeded(false)
       setWifiMsg(null)
       setWifiError(null)
+      setWifiFetching(false)
+      wifiFetchGen.current += 1
+      wifiFetchStartedFor.current = null
     }
   }, [open])
 
+  // SSID editable; contraseña siempre vacía (nunca mostrar la antigua).
   useEffect(() => {
     const c = tr069Query.data
-    if (!c) return
-    // Leave password fields empty (only send when user types a new one).
+    if (!c?.inAcs || wifiDraftsSeeded) return
+    if (c.wifi.length === 0) return
+    const next: Record<number, string> = {}
+    for (const r of c.wifi) next[r.index] = r.ssid ?? ''
+    setWifiSsids(next)
     setWifiKeys({})
-  }, [tr069Query.data])
+    setWifiDraftsSeeded(true)
+  }, [tr069Query.data, wifiDraftsSeeded])
 
-  // Pull WiFi tree once if empty but ACS is present.
-  useEffect(() => {
-    const c = tr069Query.data
-    if (!c?.inAcs || !onuDbId) return
-    if (c.wifi.length > 0) return
-    void apiFetch<ApplyTr069OnuConfigResponse>(
-      `/app/onus/${onuDbId}/tr069-config`,
-      { method: 'POST', body: JSON.stringify({ refresh: true }) },
-    ).then((r) => {
+  /** Pide el árbol Wi‑Fi al ACS y reintenta hasta que aparezcan radios. */
+  async function fetchWifiRadios(force = false) {
+    if (!onuDbId) return
+    if (!force && wifiFetchStartedFor.current === onuDbId && wifiFetching) {
+      return
+    }
+    wifiFetchStartedFor.current = onuDbId
+    const gen = ++wifiFetchGen.current
+    setWifiFetching(true)
+    setWifiError(null)
+    setWifiMsg('Obteniendo radios Wi‑Fi desde la ONU…')
+
+    const stillActive = () => gen === wifiFetchGen.current
+
+    const publish = (cfg: Tr069OnuConfig) => {
       void queryClient.setQueryData(
         ['app', 'onus', onuDbId, 'tr069-config'],
-        r.config,
+        cfg,
       )
-    })
-  }, [tr069Query.data, onuDbId, queryClient])
+      if (cfg.wifi.length > 0) {
+        setWifiDraftsSeeded(false)
+      }
+    }
+
+    try {
+      // 1) refreshObject + GPV en el ACS (puede tardar / encolar).
+      const refreshed = await apiFetch<ApplyTr069OnuConfigResponse>(
+        `/app/onus/${onuDbId}/tr069-config`,
+        { method: 'POST', body: JSON.stringify({ refresh: true }) },
+      )
+      if (!stillActive()) return
+      publish(refreshed.config)
+      if (refreshed.config.wifi.length > 0) {
+        setWifiMsg(refreshed.message || 'Radios Wi‑Fi listas')
+        return
+      }
+
+      // 2) El CPE a veces solo rellena en el Inform: reconsultar + 2º refresh.
+      for (let i = 0; i < 6; i++) {
+        await new Promise((r) => setTimeout(r, 2_500))
+        if (!stillActive()) return
+        if (i === 2) {
+          try {
+            const again = await apiFetch<ApplyTr069OnuConfigResponse>(
+              `/app/onus/${onuDbId}/tr069-config`,
+              { method: 'POST', body: JSON.stringify({ refresh: true }) },
+            )
+            if (!stillActive()) return
+            publish(again.config)
+            if (again.config.wifi.length > 0) {
+              setWifiMsg(again.message || 'Radios Wi‑Fi listas')
+              return
+            }
+          } catch {
+            /* seguir con GET */
+          }
+        }
+        const cfg = await apiFetch<Tr069OnuConfig>(
+          `/app/onus/${onuDbId}/tr069-config`,
+        )
+        if (!stillActive()) return
+        publish(cfg)
+        if (cfg.wifi.length > 0) {
+          setWifiMsg('Radios Wi‑Fi listas')
+          return
+        }
+        setWifiMsg(`Esperando radios Wi‑Fi del ACS… (${i + 1}/6)`)
+      }
+
+      if (!stillActive()) return
+      setWifiMsg(null)
+      setWifiError(
+        'No aparecieron radios Wi‑Fi. Comprueba que la ONU esté online en el ACS e inténtalo de nuevo.',
+      )
+    } catch (e) {
+      if (!stillActive()) return
+      setWifiMsg(null)
+      setWifiError(e instanceof Error ? e.message : String(e))
+    } finally {
+      if (stillActive()) setWifiFetching(false)
+    }
+  }
+
+  // Al abrir: si está en ACS y no hay radios, obtenerlas solas.
+  useEffect(() => {
+    if (!open || !onuDbId) return
+    const c = tr069Query.data
+    if (!c?.inAcs) return
+    if (c.wifi.length > 0) return
+    if (wifiFetchStartedFor.current === onuDbId) return
+    void fetchWifiRadios()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one auto-fetch per ONU open
+  }, [open, onuDbId, tr069Query.data?.inAcs, tr069Query.data?.wifi.length])
 
   const wifiMutation = useMutation({
     mutationFn: (body: ApplyTr069OnuConfigBody) =>
@@ -128,10 +221,27 @@ export function ServiceOnuViewModal({
         `/app/onus/${onuDbId}/tr069-config`,
         { method: 'POST', body: JSON.stringify(body) },
       ),
-    onSuccess: (r) => {
-      setWifiMsg(r.message || 'Contraseña Wi‑Fi actualizada')
+    onSuccess: (r, vars) => {
+      const changedSsid = (vars.wifi ?? []).some((w) => w.ssid != null)
+      const changedKey = (vars.wifi ?? []).some((w) => w.key != null)
+      setWifiMsg(
+        r.message ||
+          (changedSsid && changedKey
+            ? 'Wi‑Fi actualizado'
+            : changedSsid
+              ? 'Nombre Wi‑Fi actualizado'
+              : 'Contraseña Wi‑Fi actualizada'),
+      )
       setWifiError(null)
       setWifiKeys({})
+      // Mantener SSID escrito; alinear con lo enviado (ACS puede tardar Inform).
+      setWifiSsids((prev) => {
+        const next = { ...prev }
+        for (const w of vars.wifi ?? []) {
+          if (w.ssid != null) next[w.index] = w.ssid
+        }
+        return next
+      })
       void queryClient.setQueryData(
         ['app', 'onus', onuDbId, 'tr069-config'],
         r.config,
@@ -271,9 +381,23 @@ export function ServiceOnuViewModal({
                 </div>
 
                 <section className="rounded-lg border border-[var(--border)] p-3">
-                  <h3 className="mb-2 text-sm font-semibold">
-                    Contraseña Wi‑Fi (TR069)
-                  </h3>
+                  <div className="mb-2 flex items-start justify-between gap-2">
+                    <h3 className="text-sm font-semibold">Ajustes wifi</h3>
+                    {tr069Query.data?.inAcs &&
+                      (tr069Query.data.wifi.length === 0 || wifiFetching) && (
+                        <button
+                          type="button"
+                          disabled={wifiFetching || !onuDbId}
+                          onClick={() => {
+                            wifiFetchStartedFor.current = null
+                            void fetchWifiRadios(true)
+                          }}
+                          className="shrink-0 rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-xs disabled:opacity-50"
+                        >
+                          {wifiFetching ? 'Obteniendo…' : 'Reintentar'}
+                        </button>
+                      )}
+                  </div>
                   {tr069Query.isLoading && (
                     <p className="text-xs text-[var(--text-muted)]">
                       Consultando ACS…
@@ -288,70 +412,121 @@ export function ServiceOnuViewModal({
                   {tr069Query.data?.inAcs &&
                     tr069Query.data.wifi.length === 0 && (
                       <p className="text-xs text-[var(--text-muted)]">
-                        Sin radios Wi‑Fi detectadas todavía. Espera un Inform o
-                        abre Configurar ONU en Conectadas.
+                        {wifiFetching
+                          ? 'Leyendo radios Wi‑Fi desde la ONU…'
+                          : 'Sin radios Wi‑Fi todavía. Pulsa Reintentar para pedirlas al ACS.'}
                       </p>
                     )}
                   {tr069Query.data?.inAcs &&
-                    tr069Query.data.wifi.map((r) => (
-                      <div
-                        key={r.index}
-                        className="mb-3 grid gap-2 border-b border-[var(--border)] pb-3 last:mb-0 last:border-0 last:pb-0 sm:grid-cols-[1fr_1fr_auto]"
-                      >
-                        <div>
+                    tr069Query.data.wifi.map((r) => {
+                      const ssidDraft = wifiSsids[r.index] ?? r.ssid ?? ''
+                      const keyDraft = wifiKeys[r.index] ?? ''
+                      const ssidChanged =
+                        ssidDraft.trim() !== (r.ssid ?? '').trim()
+                      const keyChanged = keyDraft.trim().length > 0
+                      const canApply =
+                        canWrite &&
+                        (ssidChanged || keyChanged) &&
+                        (!ssidChanged || !!r.ssidPath) &&
+                        (!keyChanged || !!r.keyPath) &&
+                        !wifiMutation.isPending &&
+                        !wifiFetching
+                      return (
+                        <div
+                          key={r.index}
+                          className="mb-3 space-y-2 border-b border-[var(--border)] pb-3 last:mb-0 last:border-0 last:pb-0"
+                        >
                           <p className="text-xs text-[var(--text-muted)]">
                             WLAN {r.index}
                           </p>
-                          <p className="text-sm font-medium">
-                            {r.ssid || 'Sin SSID'}
-                          </p>
+                          <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
+                            <label className="block text-sm">
+                              <span className="mb-1 block text-[11px] text-[var(--text-muted)]">
+                                Nombre (SSID)
+                              </span>
+                              <input
+                                className={inputClass}
+                                type="text"
+                                maxLength={32}
+                                value={ssidDraft}
+                                disabled={
+                                  !canWrite ||
+                                  !r.ssidPath ||
+                                  wifiMutation.isPending ||
+                                  wifiFetching
+                                }
+                                onChange={(e) =>
+                                  setWifiSsids((prev) => ({
+                                    ...prev,
+                                    [r.index]: e.target.value,
+                                  }))
+                                }
+                              />
+                            </label>
+                            <label className="block text-sm">
+                              <span className="mb-1 block text-[11px] text-[var(--text-muted)]">
+                                Nueva contraseña
+                              </span>
+                              <input
+                                className={inputClass}
+                                type="password"
+                                autoComplete="new-password"
+                                placeholder="Vacío = no cambiar"
+                                value={keyDraft}
+                                disabled={
+                                  !canWrite ||
+                                  !r.keyPath ||
+                                  wifiMutation.isPending ||
+                                  wifiFetching
+                                }
+                                onChange={(e) =>
+                                  setWifiKeys((prev) => ({
+                                    ...prev,
+                                    [r.index]: e.target.value,
+                                  }))
+                                }
+                              />
+                            </label>
+                            <div className="flex items-end">
+                              <button
+                                type="button"
+                                disabled={!canApply}
+                                onClick={() => {
+                                  const patch: NonNullable<
+                                    ApplyTr069OnuConfigBody['wifi']
+                                  >[number] = { index: r.index }
+                                  if (ssidChanged) {
+                                    const ssid = ssidDraft.trim()
+                                    if (!ssid) {
+                                      setWifiError(
+                                        'El SSID no puede quedar vacío',
+                                      )
+                                      return
+                                    }
+                                    patch.ssid = ssid
+                                  }
+                                  if (keyChanged) {
+                                    const key = keyDraft.trim()
+                                    if (key.length < 8) {
+                                      setWifiError(
+                                        'La contraseña debe tener al menos 8 caracteres',
+                                      )
+                                      return
+                                    }
+                                    patch.key = key
+                                  }
+                                  setWifiError(null)
+                                  wifiMutation.mutate({ wifi: [patch] })
+                                }}
+                                className="rounded-lg bg-[var(--accent)] px-3 py-2 text-sm font-medium text-white hover:bg-[var(--accent-hover)] disabled:opacity-50"
+                              >
+                                Aplicar
+                              </button>
+                            </div>
+                          </div>
                         </div>
-                        <label className="block text-sm">
-                          <span className="mb-1 block text-[11px] text-[var(--text-muted)]">
-                            Nueva contraseña
-                          </span>
-                          <input
-                            className={inputClass}
-                            type="text"
-                            placeholder="Dejar vacío para no cambiar"
-                            value={wifiKeys[r.index] ?? ''}
-                            disabled={
-                              !canWrite ||
-                              !r.keyPath ||
-                              wifiMutation.isPending
-                            }
-                            onChange={(e) =>
-                              setWifiKeys((prev) => ({
-                                ...prev,
-                                [r.index]: e.target.value,
-                              }))
-                            }
-                          />
-                        </label>
-                        <div className="flex items-end">
-                          <button
-                            type="button"
-                            disabled={
-                              !canWrite ||
-                              !r.keyPath ||
-                              !(wifiKeys[r.index] ?? '').trim() ||
-                              wifiMutation.isPending
-                            }
-                            onClick={() => {
-                              const key = (wifiKeys[r.index] ?? '').trim()
-                              if (!key) return
-                              setWifiError(null)
-                              wifiMutation.mutate({
-                                wifi: [{ index: r.index, key }],
-                              })
-                            }}
-                            className="rounded-lg bg-[var(--accent)] px-3 py-2 text-sm font-medium text-white hover:bg-[var(--accent-hover)] disabled:opacity-50"
-                          >
-                            Aplicar
-                          </button>
-                        </div>
-                      </div>
-                    ))}
+                      )
+                    })}
                   {wifiMsg && (
                     <p className="mt-2 text-xs text-emerald-400">{wifiMsg}</p>
                   )}

@@ -6,6 +6,7 @@ import {
   formatClp,
   formatModulePrice,
   type TenantModuleAdmin,
+  type TenantModulesAdminResponse,
 } from '../lib/modules'
 import {
   ModalShell,
@@ -23,6 +24,7 @@ export function TenantModulesModal({
 }) {
   const queryClient = useQueryClient()
   const [local, setLocal] = useState<TenantModuleAdmin[]>([])
+  const [aiInternalEnabled, setAiInternalEnabled] = useState(true)
   const [msg, setMsg] = useState<string | null>(null)
 
   const open = !!tenant
@@ -30,28 +32,38 @@ export function TenantModulesModal({
   const query = useQuery({
     queryKey: ['admin', 'tenants', tenant?.id, 'modules'],
     queryFn: () =>
-      apiFetch<TenantModuleAdmin[]>(`/admin/tenants/${tenant!.id}/modules`),
+      apiFetch<TenantModulesAdminResponse>(
+        `/admin/tenants/${tenant!.id}/modules`,
+      ),
     enabled: open,
   })
 
   useEffect(() => {
-    if (query.data) setLocal(query.data)
+    if (!query.data) return
+    setLocal(query.data.modules)
+    setAiInternalEnabled(query.data.aiInternalEnabled !== false)
   }, [query.data])
+
+  const asistenteEnabled = !!local.find(
+    (m) => m.id === 'asistente_ia' && m.enabled,
+  )
 
   const mutation = useMutation({
     mutationFn: async () => {
-      return apiFetch<TenantModuleAdmin[]>(
+      return apiFetch<TenantModulesAdminResponse>(
         `/admin/tenants/${tenant!.id}/modules`,
         {
           method: 'PATCH',
           body: JSON.stringify({
             enabledModules: local.filter((m) => m.enabled).map((m) => m.id),
+            aiInternalEnabled,
           }),
         },
       )
     },
     onSuccess: (data) => {
-      setLocal(data)
+      setLocal(data.modules)
+      setAiInternalEnabled(data.aiInternalEnabled !== false)
       setMsg('Módulos actualizados')
       void queryClient.invalidateQueries({
         queryKey: ['admin', 'tenants', tenant?.id, 'modules'],
@@ -177,11 +189,41 @@ export function TenantModulesModal({
                       )}
                     </p>
                   )}
+                  {m.id === 'asistente_ia' && m.enabled && !blocked && (
+                    <label className="mt-3 flex items-start gap-2 rounded-md border border-[var(--border)] bg-[var(--bg)] px-2.5 py-2 text-xs">
+                      <input
+                        type="checkbox"
+                        className="mt-0.5"
+                        checked={aiInternalEnabled}
+                        disabled={mutation.isPending}
+                        onChange={(e) => {
+                          setMsg(null)
+                          setAiInternalEnabled(e.target.checked)
+                        }}
+                      />
+                      <span>
+                        <span className="font-medium text-[var(--text)]">
+                          Proveedor interno
+                        </span>
+                        <span className="mt-0.5 block text-[var(--text-muted)]">
+                          Si está activo, la empresa puede usar las keys y cupos
+                          de Admin → Ajustes → IA. Si no, solo API propia.
+                        </span>
+                      </span>
+                    </label>
+                  )}
                 </div>
               </li>
             )
           })}
         </ul>
+
+        {asistenteEnabled && !aiInternalEnabled && (
+          <p className="text-xs text-amber-300">
+            Con el proveedor interno desactivado, el tenant solo podrá configurar
+            API propia en Asistente IA.
+          </p>
+        )}
 
         {msg && (
           <p

@@ -9,6 +9,12 @@ import {
   oltMetaClass,
   oltToolbarClass,
 } from './oltPanelUi'
+import {
+  DesktopTableWrap,
+  MobileList,
+  MobileListCard,
+  MobileListMeta,
+} from './MobileList'
 
 
 const inputClass =
@@ -150,94 +156,154 @@ export function OltUplinksPanel({
       )}
 
       {uplinks.length > 0 && (
-        <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
-          <table className="w-full min-w-[1100px] text-left text-sm">
-            <thead>
-              <tr className="border-b border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--text-muted)]">
-                <th className="px-3 py-2 font-medium">Puerto uplink</th>
-                <th className="px-3 py-2 font-medium">Descripción</th>
-                <th className="px-3 py-2 font-medium">Tipo</th>
-                <th className="px-3 py-2 font-medium">Estado admin.</th>
-                <th className="px-3 py-2 font-medium">Status</th>
-                <th className="px-3 py-2 font-medium">Negociación</th>
-                <th className="px-3 py-2 font-medium">MTU</th>
-                <th className="px-3 py-2 font-medium">Long. onda</th>
-                <th className="px-3 py-2 font-medium">Señal dBm</th>
-                <th className="px-3 py-2 font-medium">Temp.</th>
-                <th className="px-3 py-2 font-medium">PVID untag</th>
-                <th className="px-3 py-2 font-medium">
-                  Modo: VLANs etiquetadas
-                </th>
-                <th className="px-3 py-2 font-medium">Acción</th>
-              </tr>
-            </thead>
-            <tbody>
-              {uplinks.map((u) => (
-                <tr
-                  key={u.ifName}
-                  className="border-b border-[var(--border)] last:border-0"
-                >
-                  <td className="px-3 py-2.5">
+        <>
+          <MobileList>
+            {uplinks.map((u) => (
+              <MobileListCard key={u.ifName}>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
                     <button
                       type="button"
-                      className="font-mono text-xs text-[var(--accent)] hover:underline"
+                      className="font-mono text-sm font-semibold text-[var(--accent)] hover:underline"
                       onClick={() => openConfigure(u)}
                     >
                       {u.ifName}
                     </button>
-                  </td>
-                  <td className="px-3 py-2.5 text-xs">
-                    {u.description || '—'}
-                  </td>
-                  <td className="px-3 py-2.5">{u.mediaTypeLabel}</td>
-                  <td
-                    className={[
-                      'px-3 py-2.5',
-                      u.adminEnabled
-                        ? ''
-                        : 'font-medium text-[var(--danger)]',
-                    ].join(' ')}
+                    <p className="text-xs text-[var(--text-muted)]">
+                      {u.mediaTypeLabel}
+                      {u.description ? ` · ${u.description}` : ''}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="shrink-0 text-xs text-[var(--accent)] hover:underline"
+                    onClick={() => openConfigure(u)}
+                  >
+                    Configurar
+                  </button>
+                </div>
+                <MobileListMeta>
+                  <span
+                    className={
+                      u.adminEnabled ? undefined : 'font-medium text-[var(--danger)]'
+                    }
                   >
                     {u.adminEnabled ? 'Habilitado' : 'Deshabilitado'}
-                  </td>
-                  <td
-                    className={`px-3 py-2.5 ${statusClass(u.status, u.adminEnabled)}`}
-                  >
+                  </span>
+                  <span>·</span>
+                  <span className={statusClass(u.status, u.adminEnabled)}>
                     {u.status}
-                  </td>
-                  <td className="px-3 py-2.5 text-xs">
-                    {u.negotiation ?? '—'}
-                  </td>
-                  <td className="px-3 py-2.5">{u.mtu ?? '—'}</td>
-                  <td className="px-3 py-2.5">
-                    {u.wavelengthNm != null ? u.wavelengthNm : 'N/A'}
-                  </td>
-                  <td className="px-3 py-2.5 font-mono text-xs">
-                    {u.signalDbm != null ? u.signalDbm.toFixed(2) : '—'}
-                  </td>
-                  <td className="px-3 py-2.5">
-                    {u.tempC != null ? u.tempC.toFixed(1) : 'N/A'}
-                  </td>
-                  <td className="px-3 py-2.5">
-                    {u.pvidUntag ?? '—'}
-                  </td>
-                  <td className="px-3 py-2.5 text-xs">
-                    {u.modeVlansLabel}
-                  </td>
-                  <td className="px-3 py-2.5">
-                    <button
-                      type="button"
-                      className="text-xs text-[var(--accent)] hover:underline"
-                      onClick={() => openConfigure(u)}
-                    >
-                      Configurar
-                    </button>
-                  </td>
+                  </span>
+                  <span>·</span>
+                  <span>{u.negotiation ?? '—'}</span>
+                  <span>·</span>
+                  <span>MTU {u.mtu ?? '—'}</span>
+                  <span>·</span>
+                  <span className="font-mono">
+                    {u.signalDbm != null ? `${u.signalDbm.toFixed(2)} dBm` : '—'}
+                  </span>
+                  <span>·</span>
+                  <span>
+                    Temp {u.tempC != null ? `${u.tempC.toFixed(1)}` : 'N/A'}
+                  </span>
+                  <span>·</span>
+                  <span>PVID {u.pvidUntag ?? '—'}</span>
+                  <span>·</span>
+                  <span className="line-clamp-1">{u.modeVlansLabel}</span>
+                </MobileListMeta>
+              </MobileListCard>
+            ))}
+          </MobileList>
+
+          <DesktopTableWrap>
+            <table className="w-full min-w-[1100px] text-left text-sm">
+              <thead>
+                <tr className="border-b border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--text-muted)]">
+                  <th className="px-3 py-2 font-medium">Puerto uplink</th>
+                  <th className="px-3 py-2 font-medium">Descripción</th>
+                  <th className="px-3 py-2 font-medium">Tipo</th>
+                  <th className="px-3 py-2 font-medium">Estado admin.</th>
+                  <th className="px-3 py-2 font-medium">Status</th>
+                  <th className="px-3 py-2 font-medium">Negociación</th>
+                  <th className="px-3 py-2 font-medium">MTU</th>
+                  <th className="px-3 py-2 font-medium">Long. onda</th>
+                  <th className="px-3 py-2 font-medium">Señal dBm</th>
+                  <th className="px-3 py-2 font-medium">Temp.</th>
+                  <th className="px-3 py-2 font-medium">PVID untag</th>
+                  <th className="px-3 py-2 font-medium">
+                    Modo: VLANs etiquetadas
+                  </th>
+                  <th className="px-3 py-2 font-medium">Acción</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {uplinks.map((u) => (
+                  <tr
+                    key={u.ifName}
+                    className="border-b border-[var(--border)] last:border-0"
+                  >
+                    <td className="px-3 py-2.5">
+                      <button
+                        type="button"
+                        className="font-mono text-xs text-[var(--accent)] hover:underline"
+                        onClick={() => openConfigure(u)}
+                      >
+                        {u.ifName}
+                      </button>
+                    </td>
+                    <td className="px-3 py-2.5 text-xs">
+                      {u.description || '—'}
+                    </td>
+                    <td className="px-3 py-2.5">{u.mediaTypeLabel}</td>
+                    <td
+                      className={[
+                        'px-3 py-2.5',
+                        u.adminEnabled
+                          ? ''
+                          : 'font-medium text-[var(--danger)]',
+                      ].join(' ')}
+                    >
+                      {u.adminEnabled ? 'Habilitado' : 'Deshabilitado'}
+                    </td>
+                    <td
+                      className={`px-3 py-2.5 ${statusClass(u.status, u.adminEnabled)}`}
+                    >
+                      {u.status}
+                    </td>
+                    <td className="px-3 py-2.5 text-xs">
+                      {u.negotiation ?? '—'}
+                    </td>
+                    <td className="px-3 py-2.5">{u.mtu ?? '—'}</td>
+                    <td className="px-3 py-2.5">
+                      {u.wavelengthNm != null ? u.wavelengthNm : 'N/A'}
+                    </td>
+                    <td className="px-3 py-2.5 font-mono text-xs">
+                      {u.signalDbm != null ? u.signalDbm.toFixed(2) : '—'}
+                    </td>
+                    <td className="px-3 py-2.5">
+                      {u.tempC != null ? u.tempC.toFixed(1) : 'N/A'}
+                    </td>
+                    <td className="px-3 py-2.5">
+                      {u.pvidUntag ?? '—'}
+                    </td>
+                    <td className="px-3 py-2.5 text-xs">
+                      {u.modeVlansLabel}
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <button
+                        type="button"
+                        className="text-xs text-[var(--accent)] hover:underline"
+                        onClick={() => openConfigure(u)}
+                      >
+                        Configurar
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </DesktopTableWrap>
+        </>
       )}
 
       {cfg && (

@@ -112,6 +112,8 @@ export function OnuTr069ConfigModal({
   const [userDraft, setUserDraft] = useState<
     Record<number, { username: string; password: string }>
   >({})
+  /** Solo sembrar drafts al abrir / al refrescar — no en cada refetch ACS. */
+  const draftsSeeded = useRef(false)
 
   const markTabDirty = (id: ApplyTab) => {
     setTabStatus((prev) => {
@@ -120,32 +122,7 @@ export function OnuTr069ConfigModal({
     })
   }
 
-  const configQuery = useQuery({
-    queryKey: ['app', 'onus', onuId, 'tr069-config'],
-    queryFn: () =>
-      apiFetch<Tr069OnuConfig>(`/app/onus/${onuId}/tr069-config`),
-  })
-  const tvVlansQuery = useQuery({
-    queryKey: ['app', 'settings', 'vlans', 'tv'],
-    queryFn: () =>
-      apiFetch<{
-        vlans: Array<{
-          vlanId: number
-          description: string | null
-          purpose?: string
-        }>
-      }>('/app/settings/vlans?purpose=tv'),
-    staleTime: 60_000,
-  })
-  const modulesQuery = useQuery({
-    queryKey: ['app', 'settings', 'modules'],
-    queryFn: () => apiFetch<TenantModuleCard[]>('/app/settings/modules'),
-    staleTime: 60_000,
-  })
-
-  useEffect(() => {
-    const c = configQuery.data
-    if (!c) return
+  function seedDraftsFromConfig(c: Tr069OnuConfig) {
     const w: typeof wifiDraft = {}
     for (const r of c.wifi) {
       w[r.index] = {
@@ -172,6 +149,42 @@ export function OnuTr069ConfigModal({
       }
     }
     setUserDraft(u)
+    draftsSeeded.current = true
+  }
+
+  const configQuery = useQuery({
+    queryKey: ['app', 'onus', onuId, 'tr069-config'],
+    queryFn: () =>
+      apiFetch<Tr069OnuConfig>(`/app/onus/${onuId}/tr069-config`),
+  })
+  const tvVlansQuery = useQuery({
+    queryKey: ['app', 'settings', 'vlans', 'tv'],
+    queryFn: () =>
+      apiFetch<{
+        vlans: Array<{
+          vlanId: number
+          description: string | null
+          purpose?: string
+        }>
+      }>('/app/settings/vlans?purpose=tv'),
+    staleTime: 60_000,
+  })
+  const modulesQuery = useQuery({
+    queryKey: ['app', 'settings', 'modules'],
+    queryFn: () => apiFetch<TenantModuleCard[]>('/app/settings/modules'),
+    staleTime: 60_000,
+  })
+
+  useEffect(() => {
+    draftsSeeded.current = false
+  }, [onuId])
+
+  // Primera carga del modal: rellenar campos una sola vez.
+  // Tras Aplicar el ACS aún tiene valores viejos; no pisar lo que el usuario escribió.
+  useEffect(() => {
+    const c = configQuery.data
+    if (!c || draftsSeeded.current) return
+    seedDraftsFromConfig(c)
   }, [configQuery.data])
 
   const applyMutation = useMutation({
@@ -191,6 +204,8 @@ export function OnuTr069ConfigModal({
         queryKey: ['app', 'onus', onuId, 'tr069-config'],
       })
       if (vars.refresh) {
+        // Lectura explícita: sí alinear drafts con la ONU.
+        seedDraftsFromConfig(r.config)
         setMsg(r.message || 'Lectura desde ONU completada')
         // Confirmación: lo encolado pasa a aplicado tras leer de la ONU.
         setTabStatus((prev) => {

@@ -9,6 +9,12 @@ import {
   oltMetaClass,
   oltToolbarClass,
 } from './oltPanelUi'
+import {
+  DesktopTableWrap,
+  MobileList,
+  MobileListCard,
+  MobileListMeta,
+} from './MobileList'
 
 
 const inputClass =
@@ -191,60 +197,104 @@ export function OltVlansPanel({
       )}
 
       {vlans.length > 0 && (
-        <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
-          <table className="w-full min-w-[560px] text-left text-sm">
-            <thead>
-              <tr className="border-b border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--text-muted)]">
-                <th className="px-3 py-2 font-medium">VLAN-ID</th>
-                <th className="px-3 py-2 font-medium">Tipo</th>
-                <th className="px-3 py-2 font-medium">Descripción</th>
-                <th className="px-3 py-2 font-medium">Aislada</th>
-                <th className="px-3 py-2 font-medium">ONUs</th>
-                <th className="px-3 py-2 font-medium">Acción</th>
-              </tr>
-            </thead>
-            <tbody>
-              {vlans.map((v) => (
-                <tr
-                  key={v.vlanId}
-                  className="border-b border-[var(--border)] last:border-0"
-                >
-                  <td className="px-3 py-2.5">
+        <>
+          <MobileList>
+            {vlans.map((v) => (
+              <MobileListCard key={v.vlanId}>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
                     <button
                       type="button"
-                      className="font-medium text-[var(--accent)] underline-offset-2 hover:underline"
+                      className="text-sm font-semibold text-[var(--accent)] underline-offset-2 hover:underline"
                       onClick={() => openEdit(v)}
                     >
-                      {v.vlanId}
+                      VLAN {v.vlanId}
+                      {v.isSystem && (
+                        <span className="ml-2 text-[10px] uppercase tracking-wide text-[var(--text-muted)]">
+                          sistema
+                        </span>
+                      )}
                     </button>
-                    {v.isSystem && (
-                      <span className="ml-2 text-[10px] uppercase tracking-wide text-[var(--text-muted)]">
-                        sistema
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-3 py-2.5 text-xs">{v.typeLabel}</td>
-                  <td className="px-3 py-2.5">{v.description || '—'}</td>
-                  <td className="px-3 py-2.5 text-center">
-                    <input type="checkbox" checked={v.isolated} readOnly />
-                  </td>
-                  <td className="px-3 py-2.5">
-                    <span className="text-[var(--accent)]">{v.onuCount}</span>
-                  </td>
-                  <td className="px-3 py-2.5">
-                    <button
-                      type="button"
-                      className="text-xs text-[var(--accent)] hover:underline"
-                      onClick={() => openEdit(v)}
-                    >
-                      Editar
-                    </button>
-                  </td>
+                    <p className="text-xs text-[var(--text-muted)]">
+                      {v.typeLabel}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="shrink-0 text-xs text-[var(--accent)] hover:underline"
+                    onClick={() => openEdit(v)}
+                  >
+                    Editar
+                  </button>
+                </div>
+                <MobileListMeta>
+                  <span className="line-clamp-1">{v.description || '—'}</span>
+                  <span>·</span>
+                  <span>{v.isolated ? 'Aislada' : 'No aislada'}</span>
+                  <span>·</span>
+                  <span className="text-[var(--accent)]">
+                    ONUs {v.onuCount}
+                  </span>
+                </MobileListMeta>
+              </MobileListCard>
+            ))}
+          </MobileList>
+
+          <DesktopTableWrap>
+            <table className="w-full min-w-[560px] text-left text-sm">
+              <thead>
+                <tr className="border-b border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--text-muted)]">
+                  <th className="px-3 py-2 font-medium">VLAN-ID</th>
+                  <th className="px-3 py-2 font-medium">Tipo</th>
+                  <th className="px-3 py-2 font-medium">Descripción</th>
+                  <th className="px-3 py-2 font-medium">Aislada</th>
+                  <th className="px-3 py-2 font-medium">ONUs</th>
+                  <th className="px-3 py-2 font-medium">Acción</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {vlans.map((v) => (
+                  <tr
+                    key={v.vlanId}
+                    className="border-b border-[var(--border)] last:border-0"
+                  >
+                    <td className="px-3 py-2.5">
+                      <button
+                        type="button"
+                        className="font-medium text-[var(--accent)] underline-offset-2 hover:underline"
+                        onClick={() => openEdit(v)}
+                      >
+                        {v.vlanId}
+                      </button>
+                      {v.isSystem && (
+                        <span className="ml-2 text-[10px] uppercase tracking-wide text-[var(--text-muted)]">
+                          sistema
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2.5 text-xs">{v.typeLabel}</td>
+                    <td className="px-3 py-2.5">{v.description || '—'}</td>
+                    <td className="px-3 py-2.5 text-center">
+                      <input type="checkbox" checked={v.isolated} readOnly />
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <span className="text-[var(--accent)]">{v.onuCount}</span>
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <button
+                        type="button"
+                        className="text-xs text-[var(--accent)] hover:underline"
+                        onClick={() => openEdit(v)}
+                      >
+                        Editar
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </DesktopTableWrap>
+        </>
       )}
 
       {modal && (

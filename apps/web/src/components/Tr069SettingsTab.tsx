@@ -7,6 +7,12 @@ import { Tr069StatusView } from './Tr069StatusView'
 import { useNotify } from './NotifyProvider'
 import { SettingsSubTabs } from './SettingsSubTabs'
 import { ModalPortal } from './ModalPortal'
+import {
+  DesktopTableWrap,
+  MobileList,
+  MobileListCard,
+  MobileListMeta,
+} from './MobileList'
 
 
 const inputClass =
@@ -256,113 +262,206 @@ export function Tr069SettingsTab({ canWrite }: { canWrite: boolean }) {
                 </p>
               )}
               {profiles.length > 0 && (
-                <div className="mb-4 overflow-x-auto">
-                  <table className="w-full min-w-[720px] text-left text-sm">
-                    <thead>
-                      <tr className="border-b border-[var(--border)] text-[var(--text-muted)]">
-                        <th className="px-2 py-2 font-medium">Profile name</th>
-                        <th className="px-2 py-2 font-medium">CWMP ACS</th>
-                        <th className="px-2 py-2 font-medium">Status</th>
-                        <th className="px-2 py-2 font-medium">OLTs</th>
-                        <th className="px-2 py-2 font-medium">Action</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {profiles.map((p) => (
-                        <tr
-                          key={p.id}
-                          className="border-b border-[var(--border)] last:border-0"
-                        >
-                          <td className="px-2 py-3 font-medium">{p.name}</td>
-                          <td className="px-2 py-3 font-mono text-xs">
-                            {p.acsUrl}
-                          </td>
-                          <td className="px-2 py-3">
-                            <span className="inline-flex items-center gap-1.5 text-xs">
-                              CWMP:
-                              <span
-                                className={[
-                                  'inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold text-white',
-                                  p.cwmpStatus === 'online'
-                                    ? 'bg-emerald-600'
-                                    : p.cwmpStatus === 'unknown'
-                                      ? 'bg-[var(--text-muted)]'
-                                      : 'bg-[var(--danger)]',
-                                ].join(' ')}
-                                title={
-                                  p.cwmpStatus === 'online'
-                                    ? 'ACS CWMP online'
-                                    : p.cwmpStatus === 'unknown'
-                                      ? 'ACS CWMP desconocido'
-                                      : 'ACS CWMP offline'
-                                }
-                              >
-                                {p.cwmpStatus === 'online' ? '✓' : '✕'}
-                              </span>
+                <>
+                  <MobileList className="mb-4">
+                    {profiles.map((p) => (
+                      <MobileListCard key={p.id}>
+                        <div className="flex items-start justify-between gap-2">
+                          <p className="min-w-0 text-sm font-semibold">
+                            {p.name}
+                          </p>
+                          <span className="inline-flex shrink-0 items-center gap-1.5 text-xs">
+                            CWMP:
+                            <span
+                              className={[
+                                'inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold text-white',
+                                p.cwmpStatus === 'online'
+                                  ? 'bg-emerald-600'
+                                  : p.cwmpStatus === 'unknown'
+                                    ? 'bg-[var(--text-muted)]'
+                                    : 'bg-[var(--danger)]',
+                              ].join(' ')}
+                              title={
+                                p.cwmpStatus === 'online'
+                                  ? 'ACS CWMP online'
+                                  : p.cwmpStatus === 'unknown'
+                                    ? 'ACS CWMP desconocido'
+                                    : 'ACS CWMP offline'
+                              }
+                            >
+                              {p.cwmpStatus === 'online' ? '✓' : '✕'}
                             </span>
-                          </td>
-                          <td className="px-2 py-3">
-                            {p.olts.length === 0 ? (
-                              <span className="text-xs text-[var(--text-muted)]">
-                                —
-                              </span>
-                            ) : (
-                              <select
-                                className="max-w-[160px] rounded border border-[var(--border)] bg-[var(--bg-elevated)] px-2 py-1 text-xs"
-                                defaultValue={p.olts[0]?.id}
-                                aria-label="OLTs adjuntas"
-                              >
-                                {p.olts.map((o, i) => (
-                                  <option key={o.id} value={o.id}>
-                                    {i + 1} - {o.name}
-                                  </option>
-                                ))}
-                              </select>
-                            )}
-                          </td>
-                          <td className="px-2 py-3">
-                            <div className="flex flex-wrap gap-1">
-                              {canWrite && (
-                                <button
-                                  type="button"
-                                  className="rounded border border-[var(--border)] px-2 py-1 text-xs hover:bg-[var(--bg-elevated)]"
-                                  onClick={() => openOlts(p)}
-                                >
-                                  Set OLTs
-                                </button>
-                              )}
-                              <button
-                                type="button"
-                                className="rounded bg-[var(--accent)] px-2 py-1 text-xs font-medium text-white"
-                                onClick={() => openView(p)}
-                              >
-                                View
-                              </button>
-                              <button
-                                type="button"
-                                disabled
-                                title="Próximamente"
-                                className="rounded border border-[var(--border)] px-2 py-1 text-xs opacity-50"
-                              >
-                                Files
-                              </button>
-                              {canWrite && (
-                                <button
-                                  type="button"
-                                  className="rounded bg-[var(--danger)] px-2 py-1 text-xs font-medium text-white"
-                                  onClick={() => onDelete(p)}
-                                  disabled={deleteMutation.isPending}
-                                >
-                                  Del
-                                </button>
-                              )}
-                            </div>
-                          </td>
+                          </span>
+                        </div>
+                        <MobileListMeta>
+                          <span className="truncate font-mono">{p.acsUrl}</span>
+                        </MobileListMeta>
+                        <div className="mt-2">
+                          {p.olts.length === 0 ? (
+                            <span className="text-xs text-[var(--text-muted)]">
+                              OLTs: —
+                            </span>
+                          ) : (
+                            <select
+                              className="max-w-full rounded border border-[var(--border)] bg-[var(--bg-elevated)] px-2 py-1 text-xs"
+                              defaultValue={p.olts[0]?.id}
+                              aria-label="OLTs adjuntas"
+                            >
+                              {p.olts.map((o, i) => (
+                                <option key={o.id} value={o.id}>
+                                  {i + 1} - {o.name}
+                                </option>
+                              ))}
+                            </select>
+                          )}
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          {canWrite && (
+                            <button
+                              type="button"
+                              className="rounded border border-[var(--border)] px-2 py-1 text-xs hover:bg-[var(--bg-elevated)]"
+                              onClick={() => openOlts(p)}
+                            >
+                              Set OLTs
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            className="rounded bg-[var(--accent)] px-2 py-1 text-xs font-medium text-white"
+                            onClick={() => openView(p)}
+                          >
+                            View
+                          </button>
+                          <button
+                            type="button"
+                            disabled
+                            title="Próximamente"
+                            className="rounded border border-[var(--border)] px-2 py-1 text-xs opacity-50"
+                          >
+                            Files
+                          </button>
+                          {canWrite && (
+                            <button
+                              type="button"
+                              className="rounded bg-[var(--danger)] px-2 py-1 text-xs font-medium text-white"
+                              onClick={() => onDelete(p)}
+                              disabled={deleteMutation.isPending}
+                            >
+                              Del
+                            </button>
+                          )}
+                        </div>
+                      </MobileListCard>
+                    ))}
+                  </MobileList>
+                  <DesktopTableWrap bordered={false} className="mb-4">
+                    <table className="w-full min-w-[720px] text-left text-sm">
+                      <thead>
+                        <tr className="border-b border-[var(--border)] text-[var(--text-muted)]">
+                          <th className="px-2 py-2 font-medium">Profile name</th>
+                          <th className="px-2 py-2 font-medium">CWMP ACS</th>
+                          <th className="px-2 py-2 font-medium">Status</th>
+                          <th className="px-2 py-2 font-medium">OLTs</th>
+                          <th className="px-2 py-2 font-medium">Action</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                      </thead>
+                      <tbody>
+                        {profiles.map((p) => (
+                          <tr
+                            key={p.id}
+                            className="border-b border-[var(--border)] last:border-0"
+                          >
+                            <td className="px-2 py-3 font-medium">{p.name}</td>
+                            <td className="px-2 py-3 font-mono text-xs">
+                              {p.acsUrl}
+                            </td>
+                            <td className="px-2 py-3">
+                              <span className="inline-flex items-center gap-1.5 text-xs">
+                                CWMP:
+                                <span
+                                  className={[
+                                    'inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold text-white',
+                                    p.cwmpStatus === 'online'
+                                      ? 'bg-emerald-600'
+                                      : p.cwmpStatus === 'unknown'
+                                        ? 'bg-[var(--text-muted)]'
+                                        : 'bg-[var(--danger)]',
+                                  ].join(' ')}
+                                  title={
+                                    p.cwmpStatus === 'online'
+                                      ? 'ACS CWMP online'
+                                      : p.cwmpStatus === 'unknown'
+                                        ? 'ACS CWMP desconocido'
+                                        : 'ACS CWMP offline'
+                                  }
+                                >
+                                  {p.cwmpStatus === 'online' ? '✓' : '✕'}
+                                </span>
+                              </span>
+                            </td>
+                            <td className="px-2 py-3">
+                              {p.olts.length === 0 ? (
+                                <span className="text-xs text-[var(--text-muted)]">
+                                  —
+                                </span>
+                              ) : (
+                                <select
+                                  className="max-w-[160px] rounded border border-[var(--border)] bg-[var(--bg-elevated)] px-2 py-1 text-xs"
+                                  defaultValue={p.olts[0]?.id}
+                                  aria-label="OLTs adjuntas"
+                                >
+                                  {p.olts.map((o, i) => (
+                                    <option key={o.id} value={o.id}>
+                                      {i + 1} - {o.name}
+                                    </option>
+                                  ))}
+                                </select>
+                              )}
+                            </td>
+                            <td className="px-2 py-3">
+                              <div className="flex flex-wrap gap-1">
+                                {canWrite && (
+                                  <button
+                                    type="button"
+                                    className="rounded border border-[var(--border)] px-2 py-1 text-xs hover:bg-[var(--bg-elevated)]"
+                                    onClick={() => openOlts(p)}
+                                  >
+                                    Set OLTs
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  className="rounded bg-[var(--accent)] px-2 py-1 text-xs font-medium text-white"
+                                  onClick={() => openView(p)}
+                                >
+                                  View
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled
+                                  title="Próximamente"
+                                  className="rounded border border-[var(--border)] px-2 py-1 text-xs opacity-50"
+                                >
+                                  Files
+                                </button>
+                                {canWrite && (
+                                  <button
+                                    type="button"
+                                    className="rounded bg-[var(--danger)] px-2 py-1 text-xs font-medium text-white"
+                                    onClick={() => onDelete(p)}
+                                    disabled={deleteMutation.isPending}
+                                  >
+                                    Del
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </DesktopTableWrap>
+                </>
               )}
               {canWrite && (
                 <button

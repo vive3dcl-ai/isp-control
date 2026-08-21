@@ -41,7 +41,7 @@ export function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-dvh items-start justify-center overflow-x-hidden px-4 pb-6 pt-8 sm:items-center sm:pt-0">
+    <div className="app-safe-page flex min-h-dvh items-start justify-center overflow-x-hidden sm:items-center">
       <div className="w-full max-w-md">
         <div className="mb-5 text-center sm:mb-8">
           <div className="mb-3 flex justify-center sm:mb-4">

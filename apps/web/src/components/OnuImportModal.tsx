@@ -2,6 +2,11 @@ import { useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '../lib/api'
 import type { OnuDiscoverResponse, OnuDiscoverOnu } from '../lib/onu-connected'
+import {
+  DesktopTableWrap,
+  MobileList,
+  MobileListCard,
+} from './MobileList'
 import { ModalPortal } from './ModalPortal'
 
 type Phase = 'loading' | 'prompt' | 'importing' | 'done' | 'error'
@@ -140,34 +145,53 @@ export function OnuImportModal({
                   <strong>{discover.ports.length}</strong> puertos (
                   {discover.online} online).
                 </p>
-                <div className="max-h-40 overflow-auto rounded-lg border border-[var(--border)]">
-                  <table className="w-full text-xs">
-                    <thead className="sticky top-0 bg-[var(--bg)] text-[var(--text-muted)]">
-                      <tr>
-                        <th className="px-2 py-1.5 text-left font-medium">
-                          Puerto
-                        </th>
-                        <th className="px-2 py-1.5 text-right font-medium">
-                          ONUs
-                        </th>
-                        <th className="px-2 py-1.5 text-right font-medium">
-                          Online
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {discover.ports.map((p) => (
-                        <tr
-                          key={p.ifName}
-                          className="border-t border-[var(--border)]"
-                        >
-                          <td className="px-2 py-1 font-mono">{p.ifName}</td>
-                          <td className="px-2 py-1 text-right">{p.count}</td>
-                          <td className="px-2 py-1 text-right">{p.online}</td>
+                <div className="max-h-48 overflow-auto rounded-lg border border-[var(--border)] p-2 md:p-0">
+                  <MobileList className="space-y-1.5">
+                    {discover.ports.map((p) => (
+                      <MobileListCard
+                        key={p.ifName}
+                        className="px-2.5 py-2"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="min-w-0 truncate font-mono text-xs">
+                            {p.ifName}
+                          </span>
+                          <span className="shrink-0 text-xs text-[var(--text-muted)]">
+                            {p.count} ONUs · {p.online} online
+                          </span>
+                        </div>
+                      </MobileListCard>
+                    ))}
+                  </MobileList>
+                  <DesktopTableWrap bordered={false}>
+                    <table className="w-full text-xs">
+                      <thead className="sticky top-0 bg-[var(--bg)] text-[var(--text-muted)]">
+                        <tr>
+                          <th className="px-2 py-1.5 text-left font-medium">
+                            Puerto
+                          </th>
+                          <th className="px-2 py-1.5 text-right font-medium">
+                            ONUs
+                          </th>
+                          <th className="px-2 py-1.5 text-right font-medium">
+                            Online
+                          </th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody>
+                        {discover.ports.map((p) => (
+                          <tr
+                            key={p.ifName}
+                            className="border-t border-[var(--border)]"
+                          >
+                            <td className="px-2 py-1 font-mono">{p.ifName}</td>
+                            <td className="px-2 py-1 text-right">{p.count}</td>
+                            <td className="px-2 py-1 text-right">{p.online}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </DesktopTableWrap>
                 </div>
               </>
             )}

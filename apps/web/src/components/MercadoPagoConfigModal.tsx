@@ -129,7 +129,10 @@ function MercadoPagoConfigForm({
           method: 'PATCH',
           body: JSON.stringify(body),
         },
-      )
+      ).then((m) => ({
+        hasAccessToken: !!m.hasAccessToken,
+        hasWebhookSecret: !!m.hasWebhookSecret,
+      }))
     },
     onSuccess: (data) => {
       void queryClient.invalidateQueries({ queryKey: [...queryKey] })
@@ -142,8 +145,8 @@ function MercadoPagoConfigForm({
           queryKey: ['admin', 'payment-methods'],
         })
       }
-      setHasAccessToken(data.hasAccessToken)
-      setHasWebhookSecret(data.hasWebhookSecret)
+      setHasAccessToken(!!data.hasAccessToken)
+      setHasWebhookSecret(!!data.hasWebhookSecret)
       setAccessToken('')
       setWebhookSecret('')
       onClose()

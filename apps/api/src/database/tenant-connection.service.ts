@@ -1079,10 +1079,18 @@ const TOPOLOGY_ALTER = (schema: string) => `
     ADD COLUMN IF NOT EXISTS "billing_regime" varchar(32) NOT NULL DEFAULT 'calendar_month';
   ALTER TABLE "${schema}"."clients"
     ADD COLUMN IF NOT EXISTS "install_day" smallint NULL;
+
+  -- v58: cobro proporcional por servicio + día de ciclo y gracia en facturación
+  ALTER TABLE "${schema}"."client_services"
+    ADD COLUMN IF NOT EXISTS "billing_prorate" boolean NOT NULL DEFAULT false;
+  ALTER TABLE "${schema}"."billing_settings"
+    ADD COLUMN IF NOT EXISTS "billing_cycle_day" smallint NOT NULL DEFAULT 1;
+  ALTER TABLE "${schema}"."billing_settings"
+    ADD COLUMN IF NOT EXISTS "grace_days_after_due" smallint NOT NULL DEFAULT 2;
 `;
 
 /** Bump when tenant DDL adds new tables/columns so existing processes re-apply. */
-const TENANT_SCHEMA_VERSION = 57;
+const TENANT_SCHEMA_VERSION = 58;
 
 @Injectable()
 export class TenantConnectionService implements OnModuleDestroy {

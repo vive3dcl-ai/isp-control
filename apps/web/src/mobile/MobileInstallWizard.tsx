@@ -1409,7 +1409,7 @@ export function MobileInstallWizard() {
         )}
       </div>
 
-      <div className="sticky bottom-0 -mx-4 mt-6 border-t border-[var(--border)] bg-[var(--bg)]/95 px-4 py-3 backdrop-blur">
+      <div className="sticky bottom-0 -mx-[max(1rem,var(--safe-left))] mt-6 border-t border-[var(--border)] bg-[var(--bg)]/95 px-[max(1rem,var(--safe-left))] pr-[max(1rem,var(--safe-right))] pt-3 pb-[max(0.75rem,var(--safe-bottom))] backdrop-blur">
         <div className="mx-auto flex max-w-lg gap-2">
           {step === 0 ? (
             <Link

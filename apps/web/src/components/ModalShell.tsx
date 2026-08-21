@@ -83,10 +83,10 @@ export function ModalShell({
 }
 
 export const modalHeaderClass =
-  'flex shrink-0 flex-wrap items-start justify-between gap-2 border-b border-[var(--border)] px-4 py-3 sm:px-5 sm:py-4'
+  'modal-safe-header flex shrink-0 flex-wrap items-start justify-between gap-2 border-b border-[var(--border)] px-4 py-3 sm:px-5 sm:py-4'
 
 export const modalBodyClass =
   'min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4 sm:px-5'
 
 export const modalFooterClass =
-  'flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-[var(--border)] px-4 py-3 sm:px-5'
+  'modal-safe-footer flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-[var(--border)] px-4 py-3 sm:px-5'

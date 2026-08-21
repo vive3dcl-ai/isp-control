@@ -5,6 +5,13 @@ import { apiFetch } from "../lib/api";
 import { clientDisplayName, type Client } from "../lib/crm";
 import { useNotify } from "./NotifyProvider";
 import { SettingsSubTabs } from "./SettingsSubTabs";
+import {
+  DesktopTableWrap,
+  MobileList,
+  MobileListCard,
+  MobileListEmpty,
+  MobileListMeta,
+} from "./MobileList";
 
 type Section = "options" | "archived";
 
@@ -97,7 +104,81 @@ function ArchivedClients({ canWrite }: { canWrite: boolean }) {
         </p>
       )}
 
-      <div className="overflow-x-auto overflow-hidden rounded-xl border border-[var(--border)]">
+      <MobileList>
+        {clientsQuery.isLoading && (
+          <p className="text-sm text-[var(--text-muted)]">Cargando…</p>
+        )}
+        {!clientsQuery.isLoading && archived.length === 0 && (
+          <MobileListEmpty>No hay clientes archivados.</MobileListEmpty>
+        )}
+        {archived.map((client) => (
+          <MobileListCard key={client.id}>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-semibold">
+                {clientDisplayName(client)}
+              </p>
+              <p className="text-xs text-[var(--text-muted)]">
+                {client.email || "—"}
+                {client.phone ? ` · ${client.phone}` : ""}
+              </p>
+            </div>
+            <MobileListMeta>
+              <span>{client.city || "—"}</span>
+            </MobileListMeta>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <Link
+                to={`/app/clients/${client.id}`}
+                className="rounded-md bg-[var(--accent)] px-2.5 py-1 text-xs font-medium text-white hover:bg-[var(--accent-hover)]"
+              >
+                Ver
+              </Link>
+              {canWrite && (
+                <>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => {
+                      void confirm(
+                        `¿Restaurar a ${clientDisplayName(client)}?`,
+                        {
+                          title: "Restaurar cliente",
+                          confirmLabel: "Restaurar",
+                        },
+                      ).then((ok) => {
+                        if (ok) restoreMutation.mutate(client.id);
+                      });
+                    }}
+                    className="rounded-md border border-emerald-500/50 px-2.5 py-1 text-xs text-emerald-300 hover:bg-emerald-500/10 disabled:opacity-60"
+                  >
+                    Restaurar
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => {
+                      void confirm(
+                        `¿Eliminar para siempre a ${clientDisplayName(client)}? Se borrarán sus servicios y facturas de esta empresa. Esta acción no se puede deshacer.`,
+                        {
+                          title: "Eliminar cliente",
+                          confirmLabel: "Eliminar para siempre",
+                          danger: true,
+                        },
+                      ).then((ok) => {
+                        if (ok) deleteMutation.mutate(client.id);
+                      });
+                    }}
+                    className="rounded-md border border-[var(--danger)]/50 px-2.5 py-1 text-xs text-[var(--danger)] hover:bg-[var(--danger)]/10 disabled:opacity-60"
+                  >
+                    Eliminar
+                  </button>
+                </>
+              )}
+            </div>
+          </MobileListCard>
+        ))}
+      </MobileList>
+
+      <DesktopTableWrap>
         <table className="w-full min-w-[620px] text-left text-sm">
           <thead className="bg-[var(--bg)] text-[var(--text-muted)]">
             <tr>
@@ -187,7 +268,7 @@ function ArchivedClients({ canWrite }: { canWrite: boolean }) {
             ))}
           </tbody>
         </table>
-      </div>
+      </DesktopTableWrap>
     </section>
   );
 }

@@ -314,14 +314,18 @@ export class CrmService {
       await this.tenantConnections.getClientServiceRepository(schema);
     const rows = await services.find({
       where: { clientId: In(clients.map((c) => c.id)) },
-      select: ['clientId', 'activeFrom'],
+      select: ['clientId', 'activeFrom', 'status'],
     });
     const withFrom = new Set(
       rows.filter((s) => !!s.activeFrom).map((s) => s.clientId),
     );
+    const suspended = new Set(
+      rows.filter((s) => s.status === 'suspended').map((s) => s.clientId),
+    );
     return clients.map((c) =>
       Object.assign(c, {
         hasInstallDate: c.installDay != null || withFrom.has(c.id),
+        hasSuspendedService: suspended.has(c.id),
       }),
     );
   }
@@ -490,6 +494,473 @@ export class CrmService {
     }
     await repo.delete({ id });
     return { ok: true };
+  }
+
+  /**
+   * Detecta posibles clientes duplicados por teléfono, documento, email o nombre.
+   */
+  async findDuplicateClients(
+    user: AuthUser,
+    opts?: {
+      field?: 'auto' | 'phone' | 'document' | 'email' | 'name';
+      q?: string;
+      limit?: number;
+      includeInactive?: boolean;
+    },
+  ) {
+    const field = opts?.field ?? 'auto';
+    const limit = Math.min(Math.max(opts?.limit ?? 40, 1), 80);
+    const q = (opts?.q ?? '').trim().toLowerCase();
+    const rows = await this.listClients(user);
+    const active = opts?.includeInactive
+      ? rows
+      : rows.filter((c) => c.isActive !== false);
+
+    const filtered = q
+      ? active.filter((c) => {
+          const hay = [
+            c.firstName,
+            c.lastName,
+            c.companyName,
+            c.phone,
+            c.email,
+            c.documentNumber,
+            c.companyTaxId,
+          ]
+            .filter(Boolean)
+            .join(' ')
+            .toLowerCase();
+          return hay.includes(q);
+        })
+      : active;
+
+    type KeyKind = 'phone' | 'document' | 'email' | 'name';
+    const buckets = new Map<
+      string,
+      { kind: KeyKind; key: string; clients: typeof filtered }
+    >();
+
+    const push = (kind: KeyKind, key: string, c: (typeof filtered)[number]) => {
+      if (!key) return;
+      const id = `${kind}:${key}`;
+      let b = buckets.get(id);
+      if (!b) {
+        b = { kind, key, clients: [] };
+        buckets.set(id, b);
+      }
+      if (!b.clients.some((x) => x.id === c.id)) b.clients.push(c);
+    };
+
+    for (const c of filtered) {
+      const phone = normalizePhone(c.phone);
+      const doc = normalizeDoc(c.documentNumber || c.companyTaxId);
+      const email = (c.email ?? '').trim().toLowerCase();
+      const name = normalizePersonName(c);
+
+      if (field === 'auto' || field === 'phone') push('phone', phone, c);
+      if (field === 'auto' || field === 'document') push('document', doc, c);
+      if (field === 'auto' || field === 'email') push('email', email, c);
+      if (field === 'auto' || field === 'name') push('name', name, c);
+    }
+
+    const groups = [...buckets.values()]
+      .filter((b) => b.clients.length >= 2)
+      .filter((b) => (b.kind === 'email' ? b.key.includes('@') : true))
+      .filter((b) => (b.kind === 'phone' ? b.key.length >= 7 : true))
+      .filter((b) => (b.kind === 'document' ? b.key.length >= 5 : true))
+      .filter((b) => (b.kind === 'name' ? b.key.length >= 5 : true))
+      .sort((a, b) => b.clients.length - a.clients.length)
+      .slice(0, limit)
+      .map((g) => ({
+        matchOn: g.kind,
+        matchKey: g.key,
+        count: g.clients.length,
+        clients: g.clients.map((c) => ({
+          id: c.id,
+          name: this.clientDisplayName(c),
+          phone: c.phone ?? '',
+          email: c.email ?? '',
+          documentNumber: c.documentNumber ?? '',
+          companyTaxId: c.companyTaxId ?? '',
+          isActive: c.isActive !== false,
+          isLead: !!c.isLead,
+          city: c.city ?? '',
+        })),
+      }));
+
+    return {
+      field,
+      q: q || null,
+      groupCount: groups.length,
+      groups,
+    };
+  }
+
+  /**
+   * Une `sourceClientId` en `targetClientId`: mueve servicios, facturas y
+   * eventos; rellena campos vacíos del destino; archiva el origen.
+   */
+  async mergeClients(
+    user: AuthUser,
+    opts: {
+      targetClientId: string;
+      sourceClientId: string;
+      fillEmptyFields?: boolean;
+      deleteSource?: boolean;
+    },
+  ) {
+    const targetId = opts.targetClientId?.trim();
+    const sourceId = opts.sourceClientId?.trim();
+    if (!targetId || !sourceId) {
+      throw new BadRequestException('targetClientId y sourceClientId requeridos');
+    }
+    if (targetId === sourceId) {
+      throw new BadRequestException('Los IDs de origen y destino deben ser distintos');
+    }
+
+    const schema = this.requireSchema(user);
+    const clients = await this.tenantConnections.getClientRepository(schema);
+    const target = await clients.findOne({ where: { id: targetId } });
+    const source = await clients.findOne({ where: { id: sourceId } });
+    if (!target) throw new NotFoundException('Cliente destino no encontrado');
+    if (!source) throw new NotFoundException('Cliente origen no encontrado');
+
+    const services =
+      await this.tenantConnections.getClientServiceRepository(schema);
+    const invoices = await this.tenantConnections.getInvoiceRepository(schema);
+    const calendar =
+      await this.tenantConnections.getCalendarEventRepository(schema);
+
+    const movedServices = await services.update(
+      { clientId: sourceId },
+      { clientId: targetId },
+    );
+    const movedInvoices = await invoices.update(
+      { clientId: sourceId },
+      { clientId: targetId },
+    );
+    const movedEvents = await calendar.update(
+      { clientId: sourceId },
+      { clientId: targetId },
+    );
+
+    const fill = opts.fillEmptyFields !== false;
+    if (fill) {
+      const fillStr = (cur: string, next: string) =>
+        !(cur ?? '').trim() && (next ?? '').trim() ? next.trim() : cur;
+      target.firstName = fillStr(target.firstName, source.firstName);
+      target.lastName = fillStr(target.lastName, source.lastName);
+      target.companyName = fillStr(target.companyName, source.companyName);
+      target.documentType = fillStr(target.documentType, source.documentType);
+      target.documentNumber = fillStr(
+        target.documentNumber,
+        source.documentNumber,
+      );
+      target.companyTaxId = fillStr(target.companyTaxId, source.companyTaxId);
+      target.email = fillStr(target.email, source.email);
+      target.phone = fillStr(target.phone, source.phone);
+      target.street = fillStr(target.street, source.street);
+      target.city = fillStr(target.city, source.city);
+      target.zipCode = fillStr(target.zipCode, source.zipCode);
+      if (target.latitude == null && source.latitude != null) {
+        target.latitude = source.latitude;
+      }
+      if (target.longitude == null && source.longitude != null) {
+        target.longitude = source.longitude;
+      }
+      if (!target.zoneId && source.zoneId) target.zoneId = source.zoneId;
+      if (target.installDay == null && source.installDay != null) {
+        target.installDay = source.installDay;
+      }
+      if (!target.isCompany && source.isCompany) target.isCompany = true;
+      if (target.isLead && !source.isLead) target.isLead = false;
+    }
+
+    const mergeNote = `[Merge ${new Date().toISOString().slice(0, 10)}] Unido desde ${this.clientDisplayName(source)} (${sourceId}).`;
+    target.note = target.note?.trim()
+      ? `${target.note.trim()}\n${mergeNote}`
+      : mergeNote;
+    target.isActive = true;
+    await clients.save(target);
+    await this.syncPortalSnapshot(user, target);
+
+    source.isActive = false;
+    source.note = source.note?.trim()
+      ? `${source.note.trim()}\n[Merge] Archivado → ${targetId}`
+      : `[Merge] Archivado → ${targetId}`;
+    await clients.save(source);
+
+    if (user.tenantId && this.clientPortal) {
+      await this.clientPortal.onClientArchivedOrDeleted(user.tenantId, sourceId);
+    }
+
+    let deletedSource = false;
+    if (opts.deleteSource === true) {
+      await this.deleteClient(user, sourceId);
+      deletedSource = true;
+    }
+
+    return {
+      ok: true,
+      targetClientId: targetId,
+      sourceClientId: sourceId,
+      deletedSource,
+      moved: {
+        services: movedServices.affected ?? 0,
+        invoices: movedInvoices.affected ?? 0,
+        calendarEvents: movedEvents.affected ?? 0,
+      },
+      target: {
+        id: target.id,
+        name: this.clientDisplayName(target),
+        phone: target.phone,
+        email: target.email,
+      },
+    };
+  }
+
+  /**
+   * Detecta servicios duplicados que comparten ONU (y opcionalmente el mismo plan).
+   * Útil tras migraciones / merges de clientes que dejaron 2 contratos en la misma ONU.
+   */
+  async findDuplicateServices(
+    user: AuthUser,
+    opts?: {
+      match?: 'onu_and_plan' | 'onu';
+      clientId?: string;
+      includeEnded?: boolean;
+      limit?: number;
+    },
+  ) {
+    const match = opts?.match === 'onu' ? 'onu' : 'onu_and_plan';
+    const limit = Math.min(Math.max(opts?.limit ?? 40, 1), 80);
+    const schema = this.requireSchema(user);
+    const serviceRepo =
+      await this.tenantConnections.getClientServiceRepository(schema);
+    const clientRepo = await this.tenantConnections.getClientRepository(schema);
+    const onuRepo = await this.tenantConnections.getOnuRepository(schema);
+
+    const qb = serviceRepo
+      .createQueryBuilder('s')
+      .leftJoinAndSelect('s.servicePlan', 'plan')
+      .where('s.onuId IS NOT NULL');
+    if (!opts?.includeEnded) {
+      qb.andWhere('s.status != :ended', { ended: 'ended' });
+    }
+    if (opts?.clientId?.trim()) {
+      qb.andWhere('s.clientId = :clientId', {
+        clientId: opts.clientId.trim(),
+      });
+    }
+    const services = await qb.orderBy('s.createdAt', 'ASC').getMany();
+    if (services.length < 2) {
+      return { match, groupCount: 0, groups: [] as const };
+    }
+
+    const clientIds = [...new Set(services.map((s) => s.clientId))];
+    const onuIds = [
+      ...new Set(services.map((s) => s.onuId).filter(Boolean) as string[]),
+    ];
+    const clients =
+      clientIds.length > 0
+        ? await clientRepo.find({ where: { id: In(clientIds) } })
+        : [];
+    const onus =
+      onuIds.length > 0
+        ? await onuRepo.find({ where: { id: In(onuIds) } })
+        : [];
+    const clientById = new Map(clients.map((c) => [c.id, c]));
+    const onuById = new Map(onus.map((o) => [o.id, o]));
+
+    const buckets = new Map<string, typeof services>();
+    for (const s of services) {
+      if (!s.onuId) continue;
+      const key =
+        match === 'onu'
+          ? `onu:${s.onuId}`
+          : `onu:${s.onuId}|plan:${s.servicePlanId}`;
+      const list = buckets.get(key) ?? [];
+      list.push(s);
+      buckets.set(key, list);
+    }
+
+    const statusRank = (st: string) =>
+      st === 'active' ? 0 : st === 'suspended' ? 1 : st === 'prepared' ? 2 : 3;
+
+    const groups = [...buckets.entries()]
+      .filter(([, list]) => list.length >= 2)
+      .sort((a, b) => b[1].length - a[1].length)
+      .slice(0, limit)
+      .map(([key, list]) => {
+        const sorted = [...list].sort(
+          (a, b) => statusRank(a.status) - statusRank(b.status),
+        );
+        const onu = onuById.get(sorted[0].onuId!);
+        const plan = sorted[0].servicePlan;
+        return {
+          matchKey: key,
+          onuId: sorted[0].onuId,
+          onuSn: onu?.sn ?? null,
+          onuIf: onu?.onuIf ?? null,
+          servicePlanId: sorted[0].servicePlanId,
+          planName: plan?.name ?? null,
+          samePlan: sorted.every(
+            (s) => s.servicePlanId === sorted[0].servicePlanId,
+          ),
+          count: sorted.length,
+          suggestedTargetServiceId: sorted[0].id,
+          services: sorted.map((s) => {
+            const c = clientById.get(s.clientId);
+            return {
+              id: s.id,
+              clientId: s.clientId,
+              clientName: c ? this.clientDisplayName(c) : s.clientId,
+              name: s.name,
+              status: s.status,
+              servicePlanId: s.servicePlanId,
+              planName: s.servicePlan?.name ?? null,
+              price: s.price,
+              onuId: s.onuId,
+              createdAt: s.createdAt,
+            };
+          }),
+        };
+      });
+
+    return { match, groupCount: groups.length, groups };
+  }
+
+  /**
+   * Unifica sourceServiceId en targetServiceId (misma ONU; mismo plan por defecto).
+   * Mueve facturas del origen al destino, libera la ONU del origen y lo marca ended.
+   */
+  async mergeServices(
+    user: AuthUser,
+    opts: {
+      targetServiceId: string;
+      sourceServiceId: string;
+      requireSamePlan?: boolean;
+    },
+  ) {
+    const targetId = opts.targetServiceId?.trim();
+    const sourceId = opts.sourceServiceId?.trim();
+    if (!targetId || !sourceId) {
+      throw new BadRequestException(
+        'targetServiceId y sourceServiceId requeridos',
+      );
+    }
+    if (targetId === sourceId) {
+      throw new BadRequestException('Los IDs de origen y destino deben ser distintos');
+    }
+
+    const schema = this.requireSchema(user);
+    const serviceRepo =
+      await this.tenantConnections.getClientServiceRepository(schema);
+    const invoiceRepo =
+      await this.tenantConnections.getInvoiceRepository(schema);
+    const clientRepo = await this.tenantConnections.getClientRepository(schema);
+
+    const target = await serviceRepo.findOne({
+      where: { id: targetId },
+      relations: { servicePlan: true },
+    });
+    const source = await serviceRepo.findOne({
+      where: { id: sourceId },
+      relations: { servicePlan: true },
+    });
+    if (!target) throw new NotFoundException('Servicio destino no encontrado');
+    if (!source) throw new NotFoundException('Servicio origen no encontrado');
+
+    if (!target.onuId && !source.onuId) {
+      throw new BadRequestException(
+        'Ninguno de los servicios tiene ONU; no se puede unificar por ONU',
+      );
+    }
+    if (target.onuId && source.onuId && target.onuId !== source.onuId) {
+      throw new BadRequestException(
+        'Los servicios no comparten la misma ONU; no se unifican',
+      );
+    }
+    if (opts.requireSamePlan !== false) {
+      if (target.servicePlanId !== source.servicePlanId) {
+        throw new BadRequestException(
+          'Los servicios tienen planes distintos. Pasá requireSamePlan=false solo si querés forzar.',
+        );
+      }
+    }
+
+    // Conservar ONU en el destino
+    if (!target.onuId && source.onuId) {
+      target.onuId = source.onuId;
+    }
+
+    const movedInvoices = await invoiceRepo.update(
+      { clientServiceId: sourceId },
+      {
+        clientServiceId: targetId,
+        clientId: target.clientId,
+      },
+    );
+
+    const today = new Date().toISOString().slice(0, 10);
+    const mergeNote = `[Merge servicio ${today}] Unido desde ${source.name} (${sourceId}).`;
+    target.note = target.note?.trim()
+      ? `${target.note.trim()}\n${mergeNote}`
+      : mergeNote;
+    if (target.status === 'ended' && source.status !== 'ended') {
+      target.status = source.status;
+    }
+    if (
+      (target.status === 'prepared' || target.status === 'ended') &&
+      (source.status === 'active' || source.status === 'suspended')
+    ) {
+      target.status = source.status;
+    }
+    await serviceRepo.save(target);
+
+    source.onuId = null;
+    source.status = 'ended';
+    source.activeTo = source.activeTo || today;
+    source.note = source.note?.trim()
+      ? `${source.note.trim()}\n[Merge servicio] Ended → ${targetId}`
+      : `[Merge servicio] Ended → ${targetId}`;
+    await serviceRepo.save(source);
+
+    const targetClient = await clientRepo.findOne({
+      where: { id: target.clientId },
+    });
+    const sourceClient = await clientRepo.findOne({
+      where: { id: source.clientId },
+    });
+
+    return {
+      ok: true,
+      targetServiceId: targetId,
+      sourceServiceId: sourceId,
+      sameClient: target.clientId === source.clientId,
+      moved: { invoices: movedInvoices.affected ?? 0 },
+      target: {
+        id: target.id,
+        name: target.name,
+        status: target.status,
+        clientId: target.clientId,
+        clientName: targetClient
+          ? this.clientDisplayName(targetClient)
+          : target.clientId,
+        onuId: target.onuId,
+        servicePlanId: target.servicePlanId,
+        planName: target.servicePlan?.name ?? null,
+      },
+      source: {
+        id: source.id,
+        name: source.name,
+        status: source.status,
+        clientId: source.clientId,
+        clientName: sourceClient
+          ? this.clientDisplayName(sourceClient)
+          : source.clientId,
+      },
+    };
   }
 
   // —— Zones ——
@@ -1135,6 +1606,7 @@ export class CrmService {
       additionalDecoUnitPrice: additionalDecoUnitPrice.toFixed(2),
       additionalDecoFeePending:
         additionalDecoCount > 0 && additionalDecoUnitPrice > 0,
+      billingProrate: !!dto.billingProrate,
     });
     const saved = await repo.save(service);
 
@@ -1244,6 +1716,112 @@ export class CrmService {
       patch.activeTo = null;
     }
     return this.updateClientService(user, id, patch);
+  }
+
+  /**
+   * Suspende o reactiva todos los servicios del cliente (no por contrato).
+   * `suspended`: active → suspended (+ redportal/OLT).
+   * `active`: suspended → active (+ quita portal / enable OLT).
+   * Si ya están suspendidos, re-aplica red (p.ej. Disable ONU desde topología).
+   */
+  async setClientServicesStatus(
+    user: AuthUser,
+    clientId: string,
+    status: 'suspended' | 'active',
+  ) {
+    const schema = this.requireSchema(user);
+    const clientRepo = await this.tenantConnections.getClientRepository(schema);
+    const client = await clientRepo.findOne({ where: { id: clientId } });
+    if (!client) throw new NotFoundException('Client not found');
+
+    const repo =
+      await this.tenantConnections.getClientServiceRepository(schema);
+    const services = await repo.find({
+      where: {
+        clientId,
+        status: In(status === 'suspended' ? ['active', 'suspended'] : ['suspended']),
+      },
+    });
+
+    const warnings: string[] = [];
+    let updated = 0;
+    let reapplied = 0;
+
+    for (const svc of services) {
+      try {
+        if (status === 'suspended' && svc.status === 'suspended') {
+          await this.applyNetworkServiceStatus(user, svc.id, 'suspended');
+          reapplied += 1;
+          continue;
+        }
+        const saved = await this.setServiceStatus(user, svc.id, status);
+        updated += 1;
+        const warn = (
+          saved as { networkApply?: NetworkApplyResult }
+        ).networkApply?.warning;
+        if (warn) warnings.push(warn);
+      } catch (err) {
+        this.logger.warn(
+          `Cliente ${clientId} status=${status} svc ${svc.id}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+        warnings.push(
+          err instanceof Error ? err.message : `Error en servicio ${svc.id}`,
+        );
+      }
+    }
+
+    const action =
+      status === 'suspended' ? 'suspendidos' : 'reactivados';
+    const message =
+      updated > 0
+        ? `${updated} servicio(s) ${action}.`
+        : reapplied > 0
+          ? `Red reaplicada en ${reapplied} servicio(s) ya suspendido(s).`
+          : status === 'suspended'
+            ? 'No hay servicios activos para suspender.'
+            : 'No hay servicios suspendidos para reactivar.';
+
+    return {
+      ok: true as const,
+      clientId,
+      status,
+      updated,
+      reapplied,
+      warnings,
+      message,
+      warning: warnings[0],
+    };
+  }
+
+  /** Suspende servicios activos de un cliente por mora (cron de facturación). */
+  async autoSuspendClientForOverdue(
+    schema: string,
+    clientId: string,
+  ): Promise<number> {
+    const tenant = await this.tenants.findOne({
+      where: { schemaName: schema },
+    });
+    if (!tenant) return 0;
+
+    const systemUser: AuthUser = {
+      sub: 'billing-overdue',
+      email: 'billing@system.local',
+      role: 'tenant_user',
+      name: 'Facturación',
+      tenantId: tenant.id,
+      tenantSlug: tenant.slug,
+      schemaName: schema,
+      tenantRole: 'owner',
+    };
+
+    const result = await this.setClientServicesStatus(
+      systemUser,
+      clientId,
+      'suspended',
+    );
+    return result.updated;
   }
 
   /**
@@ -1383,9 +1961,9 @@ export class CrmService {
     if (!onu?.oltId || !onu.onuIf) return { via: 'none' };
 
     if (status === 'suspended') {
-      await this.onus.disable(user, onu.oltId, onu.onuIf);
+      await this.onus.disable(user, onu.oltId, onu.onuIf, { fromCrm: true });
     } else {
-      await this.onus.enable(user, onu.oltId, onu.onuIf);
+      await this.onus.enable(user, onu.oltId, onu.onuIf, { fromCrm: true });
     }
     return { via: 'olt' };
   }
@@ -1436,7 +2014,7 @@ export class CrmService {
         onu.oltId &&
         onu.onuIf
       ) {
-        await this.onus.enable(user, onu.oltId, onu.onuIf);
+        await this.onus.enable(user, onu.oltId, onu.onuIf, { fromCrm: true });
         return { via: 'olt' };
       }
       return { via: 'portal' };
@@ -1463,7 +2041,9 @@ export class CrmService {
           `Portal falló svc=${service.id}, fallback OLT: ${reason}`,
         );
         if (onu.oltId && onu.onuIf) {
-          await this.onus.disable(user, onu.oltId, onu.onuIf);
+          await this.onus.disable(user, onu.oltId, onu.onuIf, {
+            fromCrm: true,
+          });
           return {
             via: 'olt_fallback',
             warning: `${reason} Se aplicó disable en la OLT (sin portal cautivo).`,
@@ -1476,7 +2056,7 @@ export class CrmService {
     if (!onu.oltId || !onu.onuIf) {
       throw new BadRequestException(plan.reason);
     }
-    await this.onus.disable(user, onu.oltId, onu.onuIf);
+    await this.onus.disable(user, onu.oltId, onu.onuIf, { fromCrm: true });
     return { via: 'olt_fallback', warning: plan.reason };
   }
 
@@ -1504,14 +2084,23 @@ export class CrmService {
       clientCount,
       planCount,
       activeServices,
-      suspendedServices,
+      suspendedClientsRow,
       salesRow,
       estimatedRow,
     ] = await Promise.all([
       clients.count({ where: { isActive: true } }),
       plans.count({ where: { isActive: true } }),
       services.count({ where: { status: 'active' } }),
-      services.count({ where: { status: 'suspended' } }),
+      // Misma regla que el badge «Suspendido» en CRM: cliente activo (no lead)
+      // con al menos un servicio suspendido.
+      services
+        .createQueryBuilder('s')
+        .innerJoin('s.client', 'c')
+        .where('s.status = :status', { status: 'suspended' })
+        .andWhere('c.isActive = true')
+        .andWhere('c.isLead = false')
+        .select('COUNT(DISTINCT c.id)', 'cnt')
+        .getRawOne<{ cnt: string }>(),
       invoices
         .createQueryBuilder('i')
         .select('COALESCE(SUM(i.total::numeric), 0)', 'sum')
@@ -1530,6 +2119,7 @@ export class CrmService {
 
     const salesThisMonth = Number(salesRow?.sum ?? 0);
     const estimatedEarnings = Number(estimatedRow?.sum ?? 0);
+    const suspendedClients = Number(suspendedClientsRow?.cnt ?? 0);
 
     const openAlarms = await this.alarms.listOpen(schema);
     const alerts = openAlarms.map((a) => {
@@ -1541,6 +2131,8 @@ export class CrmService {
           kind === 'onu_los' ? ('critical' as const) : ('warning' as const),
         title: alarmTitle(kind, sn),
         message: alarmBody(kind),
+        onuId: a.onuId,
+        oltId: a.oltId,
       };
     });
 
@@ -1548,11 +2140,34 @@ export class CrmService {
       clientCount,
       planCount,
       activeServices,
-      suspendedServices,
+      suspendedClients,
       salesThisMonth,
       estimatedEarnings,
       alertsCount: alerts.length,
       alerts,
     };
   }
+}
+
+function normalizePhone(phone?: string | null): string {
+  return (phone ?? '').replace(/\D+/g, '');
+}
+
+function normalizeDoc(doc?: string | null): string {
+  return (doc ?? '').replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+}
+
+function normalizePersonName(c: {
+  firstName?: string;
+  lastName?: string;
+  companyName?: string;
+}): string {
+  const person = [c.firstName, c.lastName]
+    .filter(Boolean)
+    .join(' ')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+  if (person.length >= 5) return person;
+  return (c.companyName ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
 }

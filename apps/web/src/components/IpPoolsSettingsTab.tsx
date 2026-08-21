@@ -12,6 +12,12 @@ import {
 import { useNotify } from './NotifyProvider'
 import { SettingsSubTabs } from './SettingsSubTabs'
 import { ModalPortal } from './ModalPortal'
+import {
+  DesktopTableWrap,
+  MobileList,
+  MobileListCard,
+  MobileListMeta,
+} from './MobileList'
 
 const inputClass =
   'w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 outline-none ring-[var(--accent)] focus:ring-2'
@@ -405,97 +411,175 @@ export function IpPoolsSettingsTab({ canWrite }: { canWrite: boolean }) {
           No hay pools de {purposeLabel.toLowerCase()}.
         </div>
       ) : (
-        <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
-          <table className="w-full min-w-[640px] text-left text-sm">
-            <thead className="border-b border-[var(--border)] bg-[var(--bg)] text-[var(--text-muted)]">
-              <tr>
-                <th className="px-3 py-2 font-medium">OLT</th>
-                <th className="px-3 py-2 font-medium">Router</th>
-                <th className="px-3 py-2 font-medium">VLAN</th>
-                <th className="px-3 py-2 font-medium">Gateway</th>
-                <th className="px-3 py-2 font-medium">Prefijo</th>
-                <th className="px-3 py-2 font-medium">Red</th>
-                {purpose === 'internet' && (
-                  <th className="px-3 py-2 font-medium">DNS</th>
-                )}
-                <th className="px-3 py-2 font-medium">Uso</th>
-                <th className="px-3 py-2 font-medium">Acciones</th>
-              </tr>
-            </thead>
-            <tbody>
-              {pools.map((p) => (
-                <tr
-                  key={p.id}
-                  className="border-b border-[var(--border)] last:border-0"
-                >
-                  <td className="px-3 py-2">{p.oltName ?? '—'}</td>
-                  <td className="px-3 py-2">{p.routerName ?? '—'}</td>
-                  <td className="px-3 py-2">{p.vlanId}</td>
-                  <td className="px-3 py-2 font-mono text-xs">{p.gateway}</td>
-                  <td className="px-3 py-2">/{p.prefix}</td>
-                  <td className="px-3 py-2 font-mono text-xs">{p.network}</td>
+        <>
+          <MobileList>
+            {pools.map((p) => (
+              <MobileListCard key={p.id}>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold">
+                      VLAN {p.vlanId}
+                    </p>
+                    <p className="font-mono text-[11px] text-[var(--text-muted)]">
+                      {p.gateway}/{p.prefix}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setViewPool(p)}
+                    className="shrink-0 text-xs text-[var(--accent)] hover:underline"
+                  >
+                    Ver pool
+                  </button>
+                </div>
+                <MobileListMeta>
+                  <span>{p.oltName ?? '—'}</span>
+                  <span>·</span>
+                  <span>{p.routerName ?? '—'}</span>
+                  <span>·</span>
+                  <span className="font-mono">{p.network}</span>
                   {purpose === 'internet' && (
-                    <td className="px-3 py-2 font-mono text-xs">
-                      {p.dns1 ?? '—'}
-                      {p.dns2 ? (
-                        <span className="block text-[var(--text-muted)]">
-                          {p.dns2}
-                        </span>
-                      ) : null}
-                    </td>
+                    <>
+                      <span>·</span>
+                      <span className="font-mono">
+                        DNS {p.dns1 ?? '—'}
+                        {p.dns2 ? ` / ${p.dns2}` : ''}
+                      </span>
+                    </>
                   )}
-                  <td className="px-3 py-2">
-                    {p.assigned} / {p.total}
-                    <span className="ml-1 text-[var(--text-muted)]">
-                      ({p.available} libres)
-                    </span>
-                  </td>
-                  <td className="px-3 py-2">
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setViewPool(p)}
-                        className="text-sm text-[var(--accent)] hover:underline"
-                      >
-                        Ver pool
-                      </button>
-                      {canWrite && (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => openEdit(p)}
-                            className="text-sm text-[var(--text-muted)] hover:underline"
-                          >
-                            Editar
-                          </button>
-                          <button
-                            type="button"
-                            disabled={p.assigned > 0 || deleteMutation.isPending}
-                            onClick={() => {
-                              void confirm(
-                                `¿Eliminar pool VLAN ${p.vlanId} (${p.gateway}/${p.prefix})?`,
-                                {
-                                  title: 'Eliminar pool IP',
-                                  danger: true,
-                                  confirmLabel: 'Eliminar',
-                                },
-                              ).then((ok) => {
-                                if (ok) void deleteMutation.mutateAsync(p.id)
-                              })
-                            }}
-                            className="text-sm text-[var(--danger)] hover:underline disabled:opacity-40"
-                          >
-                            Eliminar
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  </td>
+                  <span>·</span>
+                  <span>
+                    {p.assigned}/{p.total} ({p.available} libres)
+                  </span>
+                </MobileListMeta>
+                {canWrite && (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => openEdit(p)}
+                      className="text-xs text-[var(--text-muted)] hover:underline"
+                    >
+                      Editar
+                    </button>
+                    <button
+                      type="button"
+                      disabled={p.assigned > 0 || deleteMutation.isPending}
+                      onClick={() => {
+                        void confirm(
+                          `¿Eliminar pool VLAN ${p.vlanId} (${p.gateway}/${p.prefix})?`,
+                          {
+                            title: 'Eliminar pool IP',
+                            danger: true,
+                            confirmLabel: 'Eliminar',
+                          },
+                        ).then((ok) => {
+                          if (ok) void deleteMutation.mutateAsync(p.id)
+                        })
+                      }}
+                      className="text-xs text-[var(--danger)] hover:underline disabled:opacity-40"
+                    >
+                      Eliminar
+                    </button>
+                  </div>
+                )}
+              </MobileListCard>
+            ))}
+          </MobileList>
+
+          <DesktopTableWrap>
+            <table className="w-full min-w-[640px] text-left text-sm">
+              <thead className="border-b border-[var(--border)] bg-[var(--bg)] text-[var(--text-muted)]">
+                <tr>
+                  <th className="px-3 py-2 font-medium">OLT</th>
+                  <th className="px-3 py-2 font-medium">Router</th>
+                  <th className="px-3 py-2 font-medium">VLAN</th>
+                  <th className="px-3 py-2 font-medium">Gateway</th>
+                  <th className="px-3 py-2 font-medium">Prefijo</th>
+                  <th className="px-3 py-2 font-medium">Red</th>
+                  {purpose === 'internet' && (
+                    <th className="px-3 py-2 font-medium">DNS</th>
+                  )}
+                  <th className="px-3 py-2 font-medium">Uso</th>
+                  <th className="px-3 py-2 font-medium">Acciones</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {pools.map((p) => (
+                  <tr
+                    key={p.id}
+                    className="border-b border-[var(--border)] last:border-0"
+                  >
+                    <td className="px-3 py-2">{p.oltName ?? '—'}</td>
+                    <td className="px-3 py-2">{p.routerName ?? '—'}</td>
+                    <td className="px-3 py-2">{p.vlanId}</td>
+                    <td className="px-3 py-2 font-mono text-xs">{p.gateway}</td>
+                    <td className="px-3 py-2">/{p.prefix}</td>
+                    <td className="px-3 py-2 font-mono text-xs">{p.network}</td>
+                    {purpose === 'internet' && (
+                      <td className="px-3 py-2 font-mono text-xs">
+                        {p.dns1 ?? '—'}
+                        {p.dns2 ? (
+                          <span className="block text-[var(--text-muted)]">
+                            {p.dns2}
+                          </span>
+                        ) : null}
+                      </td>
+                    )}
+                    <td className="px-3 py-2">
+                      {p.assigned} / {p.total}
+                      <span className="ml-1 text-[var(--text-muted)]">
+                        ({p.available} libres)
+                      </span>
+                    </td>
+                    <td className="px-3 py-2">
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setViewPool(p)}
+                          className="text-sm text-[var(--accent)] hover:underline"
+                        >
+                          Ver pool
+                        </button>
+                        {canWrite && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => openEdit(p)}
+                              className="text-sm text-[var(--text-muted)] hover:underline"
+                            >
+                              Editar
+                            </button>
+                            <button
+                              type="button"
+                              disabled={
+                                p.assigned > 0 || deleteMutation.isPending
+                              }
+                              onClick={() => {
+                                void confirm(
+                                  `¿Eliminar pool VLAN ${p.vlanId} (${p.gateway}/${p.prefix})?`,
+                                  {
+                                    title: 'Eliminar pool IP',
+                                    danger: true,
+                                    confirmLabel: 'Eliminar',
+                                  },
+                                ).then((ok) => {
+                                  if (ok) void deleteMutation.mutateAsync(p.id)
+                                })
+                              }}
+                              className="text-sm text-[var(--danger)] hover:underline disabled:opacity-40"
+                            >
+                              Eliminar
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </DesktopTableWrap>
+        </>
       )}
 
       {formModal && (

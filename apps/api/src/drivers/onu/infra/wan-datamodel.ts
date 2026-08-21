@@ -151,6 +151,8 @@ function listTr098Candidates(
           externalIp: strVal(genieGet(device, `${conn}.ExternalIPAddress`)),
           name: strVal(genieGet(device, `${conn}.Name`)),
           serviceList:
+            strVal(genieGet(device, `${conn}.X_HW_SERVICELIST`)) ??
+            strVal(genieGet(device, `${conn}.X_TDTC_ServiceList`)) ??
             strVal(genieGet(device, `${conn}.X_FH_ServiceList`)) ??
             strVal(genieGet(device, `${conn}.X_CT-COM_ServiceList`)),
           vlanId: vlanPath ? numberOf(genieGet(device, vlanPath)?.value) : null,

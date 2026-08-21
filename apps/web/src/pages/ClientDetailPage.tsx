@@ -28,10 +28,24 @@ import { ServiceOnuViewModal } from '../components/ServiceOnuViewModal'
 import { ClientInvoicesSection } from '../components/ClientInvoicesSection'
 import { GoogleMapsCoords } from '../components/GoogleMapsCoords'
 import { LocationPickerMap } from '../components/LocationPickerMap'
+import {
+  DesktopTableWrap,
+  MobileList,
+  MobileListCard,
+  MobileListEmpty,
+  MobileListMeta,
+} from '../components/MobileList'
 import { useNotify } from '../components/NotifyProvider'
 
-export function ClientDetailPage() {
-  const { id = '' } = useParams()
+export function ClientDetailPage({
+  clientId: clientIdProp,
+  embedded = false,
+}: {
+  clientId?: string
+  embedded?: boolean
+} = {}) {
+  const params = useParams()
+  const id = (clientIdProp ?? params.id ?? '').trim()
   const navigate = useNavigate()
   const { user } = useAuth()
   const canWrite = canWriteCrm(user?.tenantRole)
@@ -99,7 +113,7 @@ export function ClientDetailPage() {
       action,
     }: {
       serviceId: string
-      action: 'suspend' | 'end' | 'activate'
+      action: 'end' | 'activate'
     }) =>
       apiFetch<{ networkApply?: { via: string; warning?: string } }>(
         `/app/client-services/${serviceId}/${action}`,
@@ -108,31 +122,37 @@ export function ClientDetailPage() {
     onSuccess: (data) => {
       void queryClient.invalidateQueries({ queryKey: ['app', 'clients', id] })
       void queryClient.invalidateQueries({ queryKey: ['app', 'dashboard'] })
+      void queryClient.invalidateQueries({ queryKey: ['app', 'onus'] })
       if (data?.networkApply?.warning) {
         void alert(data.networkApply.warning, {
-          title: 'Suspensión',
+          title: 'Red',
           variant: 'warning',
         })
       }
     },
   })
 
-  const reconcileMutation = useMutation({
-    mutationFn: ({
-      serviceId,
-      removeOnu,
-    }: {
-      serviceId: string
-      removeOnu?: boolean
-    }) =>
-      apiFetch(`/app/client-services/${serviceId}/reconcile-olt`, {
-        method: 'POST',
-        body: JSON.stringify({ removeOnu: !!removeOnu }),
-      }),
-    onSuccess: () => {
+  const clientSuspendMutation = useMutation({
+    mutationFn: (action: 'suspend' | 'activate') =>
+      apiFetch<{
+        message?: string
+        warning?: string
+        updated?: number
+      }>(`/app/clients/${id}/${action}`, { method: 'POST' }),
+    onSuccess: (data) => {
       void queryClient.invalidateQueries({ queryKey: ['app', 'clients', id] })
-      void queryClient.invalidateQueries({ queryKey: ['app', 'onus'] })
       void queryClient.invalidateQueries({ queryKey: ['app', 'dashboard'] })
+      void queryClient.invalidateQueries({ queryKey: ['app', 'onus'] })
+      if (data?.warning) {
+        void alert(data.warning, {
+          title: 'Suspensión',
+          variant: 'warning',
+        })
+        return
+      }
+      if (data?.message) {
+        void alert(data.message, { title: 'Cliente' })
+      }
     },
     onError: (err: Error) => void alert(err.message),
   })
@@ -165,18 +185,19 @@ export function ClientDetailPage() {
         (current) =>
           current ? { ...current, isActive: updated.isActive } : current,
       )
-      if (!updated.isActive) navigate('/app/clients')
+      if (!updated.isActive && !embedded) navigate('/app/clients')
     },
   })
 
   const client = clientQuery.data
+  const hasActiveService =
+    client?.services.some((s) => s.status === 'active') ?? false
+  const hasSuspendedService =
+    client?.services.some((s) => s.status === 'suspended') ?? false
 
-  return (
-    <PanelShell
-      title={client ? clientDisplayName(client) : 'Cliente'}
-      subtitle="Ficha y contratos"
-      variant="tenant"
-    >
+  const inner = (
+    <>
+      {!embedded && (
       <div className="mb-4">
         <Link
           to="/app/clients"
@@ -185,6 +206,7 @@ export function ClientDetailPage() {
           ← Volver a clientes
         </Link>
       </div>
+      )}
 
       {clientQuery.error && (
         <p className="mb-4 text-sm text-[var(--danger)]">
@@ -238,6 +260,53 @@ export function ClientDetailPage() {
                           : 'Invitar al portal'}
                     </button>
                   )}
+                  {hasActiveService && (
+                    <button
+                      type="button"
+                      disabled={clientSuspendMutation.isPending}
+                      onClick={() => {
+                        void confirm(
+                          `¿Suspender a ${clientDisplayName(client)}?\n\nSe suspenderán todos sus servicios (portal cautivo o disable en OLT, según la configuración de la empresa).`,
+                          {
+                            title: 'Suspender cliente',
+                            danger: true,
+                            confirmLabel: 'Suspender',
+                          },
+                        ).then((ok) => {
+                          if (ok) clientSuspendMutation.mutate('suspend')
+                        })
+                      }}
+                      className="rounded-lg border border-amber-500/50 px-3 py-1.5 text-sm text-amber-300 hover:bg-amber-500/10 disabled:opacity-60"
+                    >
+                      {clientSuspendMutation.isPending &&
+                      clientSuspendMutation.variables === 'suspend'
+                        ? 'Suspendiendo…'
+                        : 'Suspender'}
+                    </button>
+                  )}
+                  {!hasActiveService && hasSuspendedService && (
+                    <button
+                      type="button"
+                      disabled={clientSuspendMutation.isPending}
+                      onClick={() => {
+                        void confirm(
+                          `¿Reactivar a ${clientDisplayName(client)}?\n\nSe reactivarán todos sus servicios suspendidos.`,
+                          {
+                            title: 'Reactivar cliente',
+                            confirmLabel: 'Reactivar',
+                          },
+                        ).then((ok) => {
+                          if (ok) clientSuspendMutation.mutate('activate')
+                        })
+                      }}
+                      className="rounded-lg border border-emerald-500/50 px-3 py-1.5 text-sm text-emerald-300 hover:bg-emerald-500/10 disabled:opacity-60"
+                    >
+                      {clientSuspendMutation.isPending &&
+                      clientSuspendMutation.variables === 'activate'
+                        ? 'Reactivando…'
+                        : 'Reactivar'}
+                    </button>
+                  )}
                   <button
                     type="button"
                     disabled={archiveMutation.isPending}
@@ -275,8 +344,8 @@ export function ClientDetailPage() {
               </p>
             )}
 
-            <div className="grid gap-4 lg:grid-cols-2 lg:items-stretch">
-              <section className="rounded-xl border border-[var(--border)] bg-[var(--bg)] p-5">
+            <div className="grid min-w-0 gap-4 lg:grid-cols-2 lg:items-stretch">
+              <section className="min-w-0 rounded-xl border border-[var(--border)] bg-[var(--bg)] p-5">
                 <h3 className="mb-3 text-sm font-semibold">Contacto</h3>
                   <dl className="grid gap-x-4 gap-y-3 text-sm sm:grid-cols-2">
                   <Field label="Email" value={client.email} />
@@ -304,7 +373,7 @@ export function ClientDetailPage() {
                 </dl>
               </section>
 
-              <section className="grid gap-4 rounded-xl border border-[var(--border)] bg-[var(--bg)] p-5 sm:grid-cols-[minmax(11rem,0.7fr)_minmax(16rem,1.3fr)] sm:items-stretch">
+              <section className="grid min-w-0 max-w-full gap-4 overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg)] p-5 sm:grid-cols-[minmax(0,0.75fr)_minmax(0,1.25fr)] sm:items-stretch">
                 <div className="min-w-0">
                   <h3 className="mb-3 text-sm font-semibold">Dirección</h3>
                   <dl className="grid content-start gap-3 text-sm">
@@ -319,13 +388,13 @@ export function ClientDetailPage() {
                     />
                   )}
                 </div>
-                <div className="min-h-[10rem] w-full min-w-0 overflow-hidden rounded-lg border border-[var(--border)]">
+                <div className="relative min-h-[10rem] w-full min-w-0 max-w-full overflow-hidden rounded-lg border border-[var(--border)]">
                   {client.latitude != null && client.longitude != null ? (
                     <LocationPickerMap
                       lat={client.latitude}
                       lng={client.longitude}
                       readOnly
-                      className="h-full min-h-[10rem] w-full"
+                      className="absolute inset-0 h-full w-full max-w-full"
                     />
                   ) : (
                     <div className="flex h-full min-h-[10rem] items-center justify-center bg-[var(--bg-elevated)] px-2 text-center text-[11px] leading-snug text-[var(--text-muted)]">
@@ -364,7 +433,146 @@ export function ClientDetailPage() {
             </p>
           )}
 
-          <div className="overflow-x-auto overflow-hidden rounded-xl border border-[var(--border)]">
+          <MobileList>
+            {client.services.length === 0 && (
+              <MobileListEmpty>
+                Sin servicios. Asigna un plan para crear un contrato.
+              </MobileListEmpty>
+            )}
+            {client.services.map((s) => {
+              const linkedOnu = s.onuId ? onuById.get(s.onuId) : undefined
+              const canSyncOnuName =
+                !!client.migratedAt &&
+                !!s.migratedAt &&
+                !s.onuNameSyncedAt &&
+                !!s.onuId
+              return (
+                <MobileListCard key={s.id}>
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold">{s.name}</p>
+                      <p className="text-xs text-[var(--text-muted)]">
+                        {s.servicePlan?.name ?? '—'}
+                        {s.price != null ? ` · ${money(s.price)}` : ''}
+                      </p>
+                    </div>
+                    <div className="inline-flex shrink-0 items-center gap-1.5">
+                      <span className="text-xs">
+                        {serviceStatusLabel[s.status as ClientServiceStatus] ??
+                          s.status}
+                      </span>
+                      {s.onuId ? <ServiceSignalIcon onu={linkedOnu} /> : null}
+                    </div>
+                  </div>
+                  <MobileListMeta>
+                    {s.serviceState?.canonical &&
+                    s.serviceState.canonical !== s.status ? (
+                      <span>
+                        ({canonicalServiceLabel[s.serviceState.canonical]})
+                      </span>
+                    ) : null}
+                    {s.serviceState?.drift ? (
+                      <span
+                        className="rounded-full border border-[var(--danger)] px-2 py-0.5 text-[10px] text-[var(--danger)]"
+                        title={s.serviceState.drift.message}
+                      >
+                        Desvío
+                      </span>
+                    ) : null}
+                    {s.activeFrom ? <span>Desde {s.activeFrom}</span> : null}
+                    {(s.street || s.city) && (
+                      <span className="truncate">
+                        {[s.street, s.city].filter(Boolean).join(', ')}
+                      </span>
+                    )}
+                    {s.onuId ? (
+                      <span>
+                        ONU{' '}
+                        {linkedOnu?.name ||
+                          linkedOnu?.sn ||
+                          linkedOnu?.onuIf ||
+                          'vinculada'}
+                      </span>
+                    ) : null}
+                  </MobileListMeta>
+                  {canWrite && (
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setEditService(s)}
+                        className="rounded-md border border-[var(--border)] px-2.5 py-1 text-xs hover:border-[var(--accent)] hover:text-[var(--accent)]"
+                      >
+                        Editar
+                      </button>
+                      {canSyncOnuName && (
+                        <button
+                          type="button"
+                          disabled={syncOnuNameMutation.isPending}
+                          title="Actualiza el name de la ONU en la OLT con Cliente + Servicio"
+                          onClick={() => syncOnuNameMutation.mutate(s.id)}
+                          className="rounded-md border border-[var(--border)] px-2.5 py-1 text-xs hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:opacity-60"
+                        >
+                          {syncOnuNameMutation.isPending &&
+                          syncOnuNameMutation.variables === s.id
+                            ? 'Sincronizando…'
+                            : 'Sincronizar'}
+                        </button>
+                      )}
+                      {s.onuId && (
+                        <button
+                          type="button"
+                          onClick={() => setViewOnuService(s)}
+                          className="rounded-md bg-[var(--accent)] px-2.5 py-1 text-xs font-medium text-white hover:bg-[var(--accent-hover)]"
+                        >
+                          Ver ONU
+                        </button>
+                      )}
+                      {s.status === 'prepared' && (
+                        <button
+                          type="button"
+                          disabled={actionMutation.isPending}
+                          onClick={() =>
+                            actionMutation.mutate({
+                              serviceId: s.id,
+                              action: 'activate',
+                            })
+                          }
+                          className="rounded-md border border-[var(--border)] px-2.5 py-1 text-xs hover:border-[var(--success)] hover:text-[var(--success)]"
+                        >
+                          Activar
+                        </button>
+                      )}
+                      {s.status !== 'ended' && (
+                        <button
+                          type="button"
+                          disabled={actionMutation.isPending}
+                          onClick={() => {
+                            void confirm('¿Finalizar este servicio?', {
+                              title: 'Finalizar servicio',
+                              danger: true,
+                              confirmLabel: 'Finalizar',
+                            }).then((ok) => {
+                              if (ok) {
+                                actionMutation.mutate({
+                                  serviceId: s.id,
+                                  action: 'end',
+                                })
+                              }
+                            })
+                          }}
+                          className="rounded-md border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--danger)] hover:border-[var(--danger)]"
+                        >
+                          Finalizar
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </MobileListCard>
+              )
+            })}
+          </MobileList>
+
+          <DesktopTableWrap>
             <table className="w-full min-w-[720px] text-left text-sm">
               <thead className="bg-[var(--bg)] text-[var(--text-muted)]">
                 <tr>
@@ -477,7 +685,7 @@ export function ClientDetailPage() {
                                 Ver ONU
                               </button>
                             )}
-                            {s.status !== 'ended' && s.status !== 'active' && (
+                            {s.status === 'prepared' && (
                               <button
                                 type="button"
                                 disabled={actionMutation.isPending}
@@ -490,55 +698,6 @@ export function ClientDetailPage() {
                                 className="rounded-md border border-[var(--border)] px-2.5 py-1 text-xs hover:border-[var(--success)] hover:text-[var(--success)]"
                               >
                                 Activar
-                              </button>
-                            )}
-                            {s.status === 'active' && (
-                              <button
-                                type="button"
-                                disabled={actionMutation.isPending}
-                                onClick={() =>
-                                  actionMutation.mutate({
-                                    serviceId: s.id,
-                                    action: 'suspend',
-                                  })
-                                }
-                                className="rounded-md border border-[var(--border)] px-2.5 py-1 text-xs hover:border-[var(--accent)] hover:text-[var(--accent)]"
-                              >
-                                Suspender
-                              </button>
-                            )}
-                            {s.serviceState?.drift && (
-                              <button
-                                type="button"
-                                disabled={reconcileMutation.isPending}
-                                onClick={() => {
-                                  const removeOnu =
-                                    s.serviceState?.drift?.code ===
-                                    'crm_ended_onu_present'
-                                  const run = () =>
-                                    reconcileMutation.mutate({
-                                      serviceId: s.id,
-                                      removeOnu,
-                                    })
-                                  if (!removeOnu) {
-                                    run()
-                                    return
-                                  }
-                                  void confirm(
-                                    '¿Quitar la ONU de la OLT (`no onu`)? El SN volverá a Huérfanas.',
-                                    {
-                                      title: 'Reconciliar OLT',
-                                      danger: true,
-                                      confirmLabel: 'Quitar ONU',
-                                    },
-                                  ).then((ok) => {
-                                    if (ok) run()
-                                  })
-                                }}
-                                className="rounded-md border border-[var(--warning,var(--accent))] px-2.5 py-1 text-xs hover:border-[var(--accent)] hover:text-[var(--accent)]"
-                                title={s.serviceState.drift.message}
-                              >
-                                Reconciliar OLT
                               </button>
                             )}
                             {s.status !== 'ended' && (
@@ -572,7 +731,7 @@ export function ClientDetailPage() {
                 })}
               </tbody>
             </table>
-          </div>
+          </DesktopTableWrap>
 
           <ClientInvoicesSection
             clientId={client.id}
@@ -618,6 +777,24 @@ export function ClientDetailPage() {
           )}
         </>
       )}
+    </>
+  )
+
+  if (embedded) {
+    return (
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-3 sm:px-4">
+        {inner}
+      </div>
+    )
+  }
+
+  return (
+    <PanelShell
+      title={client ? clientDisplayName(client) : 'Cliente'}
+      subtitle="Ficha y contratos"
+      variant="tenant"
+    >
+      {inner}
     </PanelShell>
   )
 }
@@ -654,7 +831,7 @@ function ClientZoneField({ zoneId }: { zoneId?: string | null }) {
   return <Field label="Zona" value={name} />
 }
 
-function ClientStatusBadge({ client }: { client: Client }) {
+function ClientStatusBadge({ client }: { client: ClientDetail }) {
   if (client.isLead) {
     return (
       <span className="inline-flex rounded-full bg-amber-500/15 px-2 py-0.5 text-xs font-medium text-amber-300">
@@ -662,16 +839,23 @@ function ClientStatusBadge({ client }: { client: Client }) {
       </span>
     )
   }
-  if (client.isActive) {
+  if (!client.isActive) {
     return (
-      <span className="inline-flex rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs font-medium text-emerald-300">
-        Activo
+      <span className="inline-flex rounded-full bg-zinc-500/15 px-2 py-0.5 text-xs font-medium text-zinc-400">
+        Archivado
+      </span>
+    )
+  }
+  if (client.services.some((s) => s.status === 'suspended')) {
+    return (
+      <span className="inline-flex rounded-full bg-amber-500/15 px-2 py-0.5 text-xs font-medium text-amber-300">
+        Suspendido
       </span>
     )
   }
   return (
-    <span className="inline-flex rounded-full bg-zinc-500/15 px-2 py-0.5 text-xs font-medium text-zinc-400">
-      Archivado
+    <span className="inline-flex rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs font-medium text-emerald-300">
+      Activo
     </span>
   )
 }

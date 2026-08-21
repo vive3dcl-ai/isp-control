@@ -118,7 +118,7 @@ export function MobileLoginPage() {
             'radial-gradient(ellipse 90% 55% at 15% 0%, color-mix(in srgb, var(--accent) 22%, transparent), transparent), radial-gradient(ellipse 70% 45% at 100% 100%, color-mix(in srgb, var(--accent) 10%, transparent), transparent)',
         }}
       />
-      <div className="relative mx-auto flex w-full max-w-md flex-1 flex-col justify-start px-4 pb-6 pt-8 sm:justify-center sm:py-10">
+      <div className="relative mx-auto flex w-full max-w-md flex-1 flex-col justify-start app-safe-page sm:justify-center sm:py-10">
         <div className="mb-5 text-center">
           <div className="mb-3 flex justify-center">
             <BrandLogo height={64} className="mx-auto rounded-lg" />

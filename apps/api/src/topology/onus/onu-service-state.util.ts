@@ -66,6 +66,26 @@ export function isOltAdminDisabled(
   return /disable/i.test(adminState ?? '');
 }
 
+/** Estado de acceso para Conectadas: disable OLT no es LOS ni “sin señal”. */
+export type OnuAccessStatus = 'online' | 'offline' | 'los' | 'disabled';
+
+export function onuAccessStatus(input: {
+  adminState?: string | null;
+  status?: string | null;
+  online?: boolean;
+  phaseState?: string | null;
+}): OnuAccessStatus {
+  if (isOltAdminDisabled(input.adminState)) return 'disabled';
+  if (input.online) return 'online';
+  if (
+    (input.status ?? '').toLowerCase() === 'los' ||
+    /\blos\b/i.test(input.phaseState ?? '')
+  ) {
+    return 'los';
+  }
+  return 'offline';
+}
+
 export function pickLinkedService<
   T extends { status: string; createdAt: Date },
 >(services: T[]): T | null {

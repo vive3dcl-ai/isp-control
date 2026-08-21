@@ -3,6 +3,13 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { apiFetch } from "../lib/api";
 import type { AcsServiceStatus, Tr069StatusResponse } from "../lib/tr069";
+import {
+  DesktopTableWrap,
+  MobileList,
+  MobileListCard,
+  MobileListEmpty,
+  MobileListMeta,
+} from "./MobileList";
 import { OnuProvisionProgressModal } from "./OnuProvisionProgressModal";
 
 function ServiceBadge({
@@ -167,67 +174,104 @@ export function Tr069StatusView() {
             {statusQuery.isFetching ? "Refreshing…" : "Refresh"}
           </button>
         </div>
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[640px] text-left text-sm">
-            <thead>
-              <tr className="border-b border-[var(--border)] text-[var(--text-muted)]">
-                <th className="px-4 py-2 font-medium">Profile</th>
-                <th className="px-4 py-2 font-medium">Type</th>
-                <th className="px-4 py-2 font-medium">NBI endpoint</th>
-                <th className="px-4 py-2 font-medium">Services</th>
-                <th className="px-4 py-2 font-medium">Devices in ACS</th>
-                <th className="px-4 py-2 font-medium">Faults</th>
-              </tr>
-            </thead>
-            <tbody>
-              {statusQuery.isLoading && (
-                <tr>
-                  <td
-                    colSpan={6}
-                    className="px-4 py-6 text-[var(--text-muted)]"
-                  >
-                    Cargando…
-                  </td>
+        <div className="p-4 md:p-0">
+          <MobileList>
+            {statusQuery.isLoading && (
+              <p className="text-sm text-[var(--text-muted)]">Cargando…</p>
+            )}
+            {!statusQuery.isLoading && (data?.acsHealth ?? []).length === 0 && (
+              <MobileListEmpty>
+                No hay perfiles TR069. Crea uno en la vista Profiles.
+              </MobileListEmpty>
+            )}
+            {(data?.acsHealth ?? []).map((row) => (
+              <MobileListCard key={row.profileId}>
+                <p className="text-sm font-semibold">{row.profileName}</p>
+                <MobileListMeta>
+                  <span>{row.type}</span>
+                  <span>·</span>
+                  <span className="truncate font-mono">
+                    {row.nbiEndpoint || "—"}
+                  </span>
+                </MobileListMeta>
+                <div className="mt-2 flex flex-wrap gap-3">
+                  <ServiceBadge label="CWMP" status={row.services.cwmp} />
+                  <ServiceBadge label="NBI" status={row.services.nbi} />
+                  <ServiceBadge label="FS" status={row.services.fs} />
+                </div>
+                <MobileListMeta>
+                  <span>
+                    Devices:{" "}
+                    {row.devicesInAcs == null ? "—" : row.devicesInAcs}
+                  </span>
+                  <span>·</span>
+                  <span>Faults: {row.faults}</span>
+                </MobileListMeta>
+              </MobileListCard>
+            ))}
+          </MobileList>
+          <DesktopTableWrap bordered={false}>
+            <table className="w-full min-w-[640px] text-left text-sm">
+              <thead>
+                <tr className="border-b border-[var(--border)] text-[var(--text-muted)]">
+                  <th className="px-4 py-2 font-medium">Profile</th>
+                  <th className="px-4 py-2 font-medium">Type</th>
+                  <th className="px-4 py-2 font-medium">NBI endpoint</th>
+                  <th className="px-4 py-2 font-medium">Services</th>
+                  <th className="px-4 py-2 font-medium">Devices in ACS</th>
+                  <th className="px-4 py-2 font-medium">Faults</th>
                 </tr>
-              )}
-              {!statusQuery.isLoading &&
-                (data?.acsHealth ?? []).length === 0 && (
+              </thead>
+              <tbody>
+                {statusQuery.isLoading && (
                   <tr>
                     <td
                       colSpan={6}
                       className="px-4 py-6 text-[var(--text-muted)]"
                     >
-                      No hay perfiles TR069. Crea uno en la vista Profiles.
+                      Cargando…
                     </td>
                   </tr>
                 )}
-              {(data?.acsHealth ?? []).map((row) => (
-                <tr
-                  key={row.profileId}
-                  className="border-b border-[var(--border)] last:border-0"
-                >
-                  <td className="px-4 py-3 font-medium">{row.profileName}</td>
-                  <td className="px-4 py-3 text-[var(--text-muted)]">
-                    {row.type}
-                  </td>
-                  <td className="px-4 py-3 font-mono text-xs text-[var(--text-muted)]">
-                    {row.nbiEndpoint || "—"}
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex flex-wrap gap-3">
-                      <ServiceBadge label="CWMP" status={row.services.cwmp} />
-                      <ServiceBadge label="NBI" status={row.services.nbi} />
-                      <ServiceBadge label="FS" status={row.services.fs} />
-                    </div>
-                  </td>
-                  <td className="px-4 py-3 text-[var(--text-muted)]">
-                    {row.devicesInAcs == null ? "—" : row.devicesInAcs}
-                  </td>
-                  <td className="px-4 py-3">{row.faults}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                {!statusQuery.isLoading &&
+                  (data?.acsHealth ?? []).length === 0 && (
+                    <tr>
+                      <td
+                        colSpan={6}
+                        className="px-4 py-6 text-[var(--text-muted)]"
+                      >
+                        No hay perfiles TR069. Crea uno en la vista Profiles.
+                      </td>
+                    </tr>
+                  )}
+                {(data?.acsHealth ?? []).map((row) => (
+                  <tr
+                    key={row.profileId}
+                    className="border-b border-[var(--border)] last:border-0"
+                  >
+                    <td className="px-4 py-3 font-medium">{row.profileName}</td>
+                    <td className="px-4 py-3 text-[var(--text-muted)]">
+                      {row.type}
+                    </td>
+                    <td className="px-4 py-3 font-mono text-xs text-[var(--text-muted)]">
+                      {row.nbiEndpoint || "—"}
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex flex-wrap gap-3">
+                        <ServiceBadge label="CWMP" status={row.services.cwmp} />
+                        <ServiceBadge label="NBI" status={row.services.nbi} />
+                        <ServiceBadge label="FS" status={row.services.fs} />
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-[var(--text-muted)]">
+                      {row.devicesInAcs == null ? "—" : row.devicesInAcs}
+                    </td>
+                    <td className="px-4 py-3">{row.faults}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </DesktopTableWrap>
         </div>
         {data?.refreshedAt && (
           <p className="border-t border-[var(--border)] px-4 py-2 text-xs text-[var(--text-muted)]">
@@ -244,51 +288,81 @@ export function Tr069StatusView() {
           </h3>
           <CountBadge n={filteredFaults.length} />
         </div>
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[720px] text-left text-sm">
-            <thead>
-              <tr className="border-b border-[var(--border)] text-[var(--text-muted)]">
-                <th className="px-4 py-2 font-medium">When</th>
-                <th className="px-4 py-2 font-medium">Profile</th>
-                <th className="px-4 py-2 font-medium">Device</th>
-                <th className="px-4 py-2 font-medium">Channel</th>
-                <th className="px-4 py-2 font-medium">Code</th>
-                <th className="px-4 py-2 font-medium">Message</th>
-                <th className="px-4 py-2 font-medium">Retries</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredFaults.length === 0 ? (
-                <tr>
-                  <td
-                    colSpan={7}
-                    className="px-4 py-8 text-center text-[var(--text-muted)]"
-                  >
-                    No active faults.
-                  </td>
-                </tr>
-              ) : (
-                filteredFaults.map((f, i) => (
-                  <tr
-                    key={`${f.when}-${f.code}-${i}`}
-                    className="border-b border-[var(--border)] last:border-0"
-                  >
-                    <td className="px-4 py-2 text-xs">
-                      {new Date(f.when).toLocaleString()}
-                    </td>
-                    <td className="px-4 py-2">{f.profileName}</td>
-                    <td className="px-4 py-2 font-mono text-xs">
+        <div className="p-4 md:p-0">
+          <MobileList>
+            {filteredFaults.length === 0 ? (
+              <MobileListEmpty>No active faults.</MobileListEmpty>
+            ) : (
+              filteredFaults.map((f, i) => (
+                <MobileListCard key={`${f.when}-${f.code}-${i}`}>
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="min-w-0 text-sm font-semibold">{f.profileName}</p>
+                    <span className="shrink-0 font-mono text-[11px] text-[var(--danger)]">
+                      {f.code}
+                    </span>
+                  </div>
+                  <p className="mt-1 break-words text-xs">{f.message}</p>
+                  <MobileListMeta>
+                    <span>{new Date(f.when).toLocaleString()}</span>
+                    <span>·</span>
+                    <span className="truncate font-mono">
                       {f.deviceId ?? "—"}
+                    </span>
+                    <span>·</span>
+                    <span>{f.channel}</span>
+                    <span>·</span>
+                    <span>Retries {f.retries}</span>
+                  </MobileListMeta>
+                </MobileListCard>
+              ))
+            )}
+          </MobileList>
+          <DesktopTableWrap bordered={false}>
+            <table className="w-full min-w-[720px] text-left text-sm">
+              <thead>
+                <tr className="border-b border-[var(--border)] text-[var(--text-muted)]">
+                  <th className="px-4 py-2 font-medium">When</th>
+                  <th className="px-4 py-2 font-medium">Profile</th>
+                  <th className="px-4 py-2 font-medium">Device</th>
+                  <th className="px-4 py-2 font-medium">Channel</th>
+                  <th className="px-4 py-2 font-medium">Code</th>
+                  <th className="px-4 py-2 font-medium">Message</th>
+                  <th className="px-4 py-2 font-medium">Retries</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredFaults.length === 0 ? (
+                  <tr>
+                    <td
+                      colSpan={7}
+                      className="px-4 py-8 text-center text-[var(--text-muted)]"
+                    >
+                      No active faults.
                     </td>
-                    <td className="px-4 py-2">{f.channel}</td>
-                    <td className="px-4 py-2 font-mono text-xs">{f.code}</td>
-                    <td className="px-4 py-2">{f.message}</td>
-                    <td className="px-4 py-2">{f.retries}</td>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+                ) : (
+                  filteredFaults.map((f, i) => (
+                    <tr
+                      key={`${f.when}-${f.code}-${i}`}
+                      className="border-b border-[var(--border)] last:border-0"
+                    >
+                      <td className="px-4 py-2 text-xs">
+                        {new Date(f.when).toLocaleString()}
+                      </td>
+                      <td className="px-4 py-2">{f.profileName}</td>
+                      <td className="px-4 py-2 font-mono text-xs">
+                        {f.deviceId ?? "—"}
+                      </td>
+                      <td className="px-4 py-2">{f.channel}</td>
+                      <td className="px-4 py-2 font-mono text-xs">{f.code}</td>
+                      <td className="px-4 py-2">{f.message}</td>
+                      <td className="px-4 py-2">{f.retries}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </DesktopTableWrap>
         </div>
       </section>
 
@@ -310,110 +384,195 @@ export function Tr069StatusView() {
           <h3 className="text-sm font-semibold">TR069 ONU inventory</h3>
           <CountBadge n={filteredOnus.length} />
         </div>
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[900px] text-left text-sm">
-            <thead>
-              <tr className="border-b border-[var(--border)] text-[var(--text-muted)]">
-                <th className="px-4 py-2 font-medium">Device ID</th>
-                <th className="px-4 py-2 font-medium">Serial</th>
-                <th className="px-4 py-2 font-medium">
-                  <button
-                    type="button"
-                    className="inline-flex items-center gap-1 hover:text-[var(--text)]"
-                    onClick={() => setOltSortAsc((v) => !v)}
-                  >
-                    OLT
-                    <span className="text-[10px]">
-                      {oltSortAsc ? "▲" : "▼"}
-                    </span>
-                  </button>
-                </th>
-                <th className="px-4 py-2 font-medium">Model</th>
-                <th className="px-4 py-2 font-medium">Description</th>
-                <th className="px-4 py-2 font-medium">IP</th>
-                <th className="px-4 py-2 font-medium">Last inform</th>
-                <th className="px-4 py-2 font-medium">State</th>
-                <th className="px-4 py-2 font-medium">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredOnus.length === 0 ? (
-                <tr>
-                  <td
-                    colSpan={9}
-                    className="px-4 py-8 text-center text-[var(--text-muted)]"
-                  >
-                    No TR069-managed ONUs found.
-                  </td>
-                </tr>
-              ) : (
-                filteredOnus.map((o) => {
-                  const test = manualTests[o.onuId];
-                  return (
-                    <tr
-                      key={o.deviceId}
-                      className="border-b border-[var(--border)] last:border-0"
-                    >
-                      <td className="px-4 py-2 font-mono text-xs">
-                        {o.deviceId}
-                      </td>
-                      <td className="px-4 py-2 font-mono text-xs">
+        <div className="p-4 md:p-0">
+          <MobileList>
+            {filteredOnus.length === 0 ? (
+              <MobileListEmpty>
+                No TR069-managed ONUs found.
+              </MobileListEmpty>
+            ) : (
+              filteredOnus.map((o) => {
+                const test = manualTests[o.onuId];
+                return (
+                  <MobileListCard key={o.deviceId}>
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
                         {o.serial ? (
                           <Link
                             to={`/app/settings?tab=onus&q=${encodeURIComponent(o.serial)}`}
-                            className="text-[var(--accent)] hover:underline"
-                            title="Ver en ONUs"
+                            className="font-mono text-sm font-semibold text-[var(--accent)] hover:underline"
                           >
                             {o.serial}
                           </Link>
                         ) : (
-                          "—"
+                          <p className="font-mono text-sm font-semibold">—</p>
                         )}
-                      </td>
-                      <td className="px-4 py-2">{o.oltName ?? "—"}</td>
-                      <td className="px-4 py-2">{o.model ?? "—"}</td>
-                      <td className="px-4 py-2">{o.description ?? "—"}</td>
-                      <td className="px-4 py-2 font-mono text-xs">
-                        {o.ip ?? "—"}
-                      </td>
-                      <td className="px-4 py-2 text-xs">
-                        {o.lastInform
-                          ? new Date(o.lastInform).toLocaleString()
-                          : "—"}
-                      </td>
-                      <td className="px-4 py-2">{o.state}</td>
-                      <td className="px-4 py-2">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <button
-                            type="button"
-                            disabled={checkOpen}
-                            onClick={() => startManualTest(o.onuId, o.serial)}
-                            className="rounded-md border border-[var(--border)] px-2 py-1 text-xs hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:opacity-50"
-                          >
-                            {test?.status === "running"
-                              ? "Testing…"
-                              : "Test manual"}
-                          </button>
-                          {test && test.status !== "running" ? (
-                            <span
-                              title={test.message}
-                              className={
-                                test.status === "ok"
-                                  ? "text-xs text-emerald-400"
-                                  : "text-xs text-[var(--danger)]"
-                              }
+                        <p className="truncate text-xs text-[var(--text-muted)]">
+                          {o.oltName ?? "—"} · {o.model ?? "—"}
+                        </p>
+                      </div>
+                      <span className="shrink-0 text-xs">{o.state}</span>
+                    </div>
+                    <MobileListMeta>
+                      <span className="truncate font-mono">
+                        {o.deviceId}
+                      </span>
+                      {o.ip ? (
+                        <>
+                          <span>·</span>
+                          <span className="font-mono">{o.ip}</span>
+                        </>
+                      ) : null}
+                      {o.lastInform ? (
+                        <>
+                          <span>·</span>
+                          <span>
+                            {new Date(o.lastInform).toLocaleString()}
+                          </span>
+                        </>
+                      ) : null}
+                    </MobileListMeta>
+                    {o.description ? (
+                      <p className="mt-1 truncate text-xs text-[var(--text-muted)]">
+                        {o.description}
+                      </p>
+                    ) : null}
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        disabled={checkOpen}
+                        onClick={() => startManualTest(o.onuId, o.serial)}
+                        className="rounded-md border border-[var(--border)] px-2 py-1 text-xs hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:opacity-50"
+                      >
+                        {test?.status === "running"
+                          ? "Testing…"
+                          : "Test manual"}
+                      </button>
+                      {test && test.status !== "running" ? (
+                        <span
+                          title={test.message}
+                          className={
+                            test.status === "ok"
+                              ? "text-xs text-emerald-400"
+                              : "text-xs text-[var(--danger)]"
+                          }
+                        >
+                          {test.status === "ok" ? "Todo OK" : "Fail"}
+                        </span>
+                      ) : null}
+                    </div>
+                  </MobileListCard>
+                );
+              })
+            )}
+          </MobileList>
+          <DesktopTableWrap bordered={false}>
+            <table className="w-full min-w-[900px] text-left text-sm">
+              <thead>
+                <tr className="border-b border-[var(--border)] text-[var(--text-muted)]">
+                  <th className="px-4 py-2 font-medium">Device ID</th>
+                  <th className="px-4 py-2 font-medium">Serial</th>
+                  <th className="px-4 py-2 font-medium">
+                    <button
+                      type="button"
+                      className="inline-flex items-center gap-1 hover:text-[var(--text)]"
+                      onClick={() => setOltSortAsc((v) => !v)}
+                    >
+                      OLT
+                      <span className="text-[10px]">
+                        {oltSortAsc ? "▲" : "▼"}
+                      </span>
+                    </button>
+                  </th>
+                  <th className="px-4 py-2 font-medium">Model</th>
+                  <th className="px-4 py-2 font-medium">Description</th>
+                  <th className="px-4 py-2 font-medium">IP</th>
+                  <th className="px-4 py-2 font-medium">Last inform</th>
+                  <th className="px-4 py-2 font-medium">State</th>
+                  <th className="px-4 py-2 font-medium">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredOnus.length === 0 ? (
+                  <tr>
+                    <td
+                      colSpan={9}
+                      className="px-4 py-8 text-center text-[var(--text-muted)]"
+                    >
+                      No TR069-managed ONUs found.
+                    </td>
+                  </tr>
+                ) : (
+                  filteredOnus.map((o) => {
+                    const test = manualTests[o.onuId];
+                    return (
+                      <tr
+                        key={o.deviceId}
+                        className="border-b border-[var(--border)] last:border-0"
+                      >
+                        <td className="px-4 py-2 font-mono text-xs">
+                          {o.deviceId}
+                        </td>
+                        <td className="px-4 py-2 font-mono text-xs">
+                          {o.serial ? (
+                            <Link
+                              to={`/app/settings?tab=onus&q=${encodeURIComponent(o.serial)}`}
+                              className="text-[var(--accent)] hover:underline"
+                              title="Ver en ONUs"
                             >
-                              {test.status === "ok" ? "Todo OK" : "Fail"}
-                            </span>
-                          ) : null}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
+                              {o.serial}
+                            </Link>
+                          ) : (
+                            "—"
+                          )}
+                        </td>
+                        <td className="px-4 py-2">{o.oltName ?? "—"}</td>
+                        <td className="px-4 py-2">{o.model ?? "—"}</td>
+                        <td className="px-4 py-2">{o.description ?? "—"}</td>
+                        <td className="px-4 py-2 font-mono text-xs">
+                          {o.ip ?? "—"}
+                        </td>
+                        <td className="px-4 py-2 text-xs">
+                          {o.lastInform
+                            ? new Date(o.lastInform).toLocaleString()
+                            : "—"}
+                        </td>
+                        <td className="px-4 py-2">{o.state}</td>
+                        <td className="px-4 py-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              disabled={checkOpen}
+                              onClick={() =>
+                                startManualTest(o.onuId, o.serial)
+                              }
+                              className="rounded-md border border-[var(--border)] px-2 py-1 text-xs hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:opacity-50"
+                            >
+                              {test?.status === "running"
+                                ? "Testing…"
+                                : "Test manual"}
+                            </button>
+                            {test && test.status !== "running" ? (
+                              <span
+                                title={test.message}
+                                className={
+                                  test.status === "ok"
+                                    ? "text-xs text-emerald-400"
+                                    : "text-xs text-[var(--danger)]"
+                                }
+                              >
+                                {test.status === "ok" ? "Todo OK" : "Fail"}
+                              </span>
+                            ) : null}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </DesktopTableWrap>
         </div>
       </section>
 

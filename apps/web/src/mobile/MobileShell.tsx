@@ -16,10 +16,10 @@ export function MobileShell() {
     location.pathname.startsWith('/movil/mapa-red/postes')
 
   return (
-    <div className="mobile-app app-shell flex flex-col bg-[var(--bg)] text-[var(--text)]">
-      <header className="relative z-50 flex h-14 shrink-0 items-center border-b border-[var(--border)] bg-[var(--bg-header)]/95 px-4 backdrop-blur">
+    <div className="mobile-app app-shell flex flex-col overflow-x-hidden bg-[var(--bg)] text-[var(--text)]">
+      <header className="app-shell-header relative z-50 flex shrink-0 items-center border-b border-[var(--border)] bg-[var(--bg-header)]/95 backdrop-blur">
         <div
-          className={`mx-auto flex h-full w-full items-center justify-between gap-3 ${wide ? 'max-w-3xl' : 'max-w-lg'}`}
+          className={`mx-auto flex h-14 w-full min-w-0 items-center justify-between gap-3 ${wide ? 'max-w-3xl' : 'max-w-lg'}`}
         >
           <NavLink
             to="/movil"
@@ -51,7 +51,7 @@ export function MobileShell() {
       </header>
 
       <main
-        className={`app-shell-main mx-auto flex w-full flex-col px-4 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-4 ${
+        className={`app-shell-main app-shell-main-safe mx-auto flex w-full min-w-0 flex-col pt-4 ${
           wide ? 'max-w-3xl' : 'max-w-lg'
         }`}
       >

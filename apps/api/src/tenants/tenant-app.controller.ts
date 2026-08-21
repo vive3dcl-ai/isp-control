@@ -25,7 +25,7 @@ export class TenantAppController {
         clientCount: 0,
         planCount: 0,
         activeServices: 0,
-        suspendedServices: 0,
+        suspendedClients: 0,
         salesThisMonth: 0,
         estimatedEarnings: 0,
         alertsCount: 0,

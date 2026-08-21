@@ -4,10 +4,18 @@ import { useSearchParams } from 'react-router-dom'
 import { apiFetch } from '../lib/api'
 import {
   formatSignal,
+  isOnuSuspended,
   signalBand,
   type ConnectedOnu,
   type ConnectedOnusResponse,
 } from '../lib/onu-connected'
+import {
+  DesktopTableWrap,
+  MobileList,
+  MobileListCard,
+  MobileListEmpty,
+  MobileListMeta,
+} from './MobileList'
 import { OnuDetailModal } from './OnuDetailModal'
 
 const PAGE_SIZE = 50
@@ -64,6 +72,23 @@ function HealthBadge({ onu }: { onu: ConnectedOnu }) {
 }
 
 function StatusIcon({ onu }: { onu: ConnectedOnu }) {
+  if (isOnuSuspended(onu)) {
+    return (
+      <span
+        className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-amber-500/20 text-amber-400"
+        title={onu.phaseState || 'Suspendida (admin disable)'}
+      >
+        <svg
+          viewBox="0 0 16 16"
+          className="h-3.5 w-3.5"
+          fill="currentColor"
+          aria-hidden
+        >
+          <path d="M5 3h2v10H5V3zm4 0h2v10H9V3z" />
+        </svg>
+      </span>
+    )
+  }
   if (onu.online) {
     return (
       <span
@@ -131,8 +156,15 @@ function SignalBars({
   )
 }
 
-function SignalCell({ dbm }: { dbm: number | null }) {
-  const band = signalBand(dbm)
+function SignalCell({ onu }: { onu: ConnectedOnu }) {
+  if (isOnuSuspended(onu)) {
+    return (
+      <span className="text-[var(--text-muted)]" title="Señal no cuenta: ONU suspendida">
+        —
+      </span>
+    )
+  }
+  const band = signalBand(onu.signalDbm)
   const color =
     band === 'good'
       ? 'text-emerald-400'
@@ -141,7 +173,7 @@ function SignalCell({ dbm }: { dbm: number | null }) {
         : band === 'poor'
           ? 'text-red-400'
           : 'text-[var(--text-muted)]'
-  return <span className={color}>{formatSignal(dbm)}</span>
+  return <span className={color}>{formatSignal(onu.signalDbm)}</span>
 }
 
 export function OnuConnectedPanel({
@@ -153,8 +185,9 @@ export function OnuConnectedPanel({
   initialOnuType?: string
 }) {
   const queryClient = useQueryClient()
-  const [searchParams] = useSearchParams()
+  const [searchParams, setSearchParams] = useSearchParams()
   const qFromUrl = searchParams.get('q')?.trim() ?? ''
+  const onuIdFromUrl = searchParams.get('onuId')?.trim() ?? ''
   const [search, setSearch] = useState(qFromUrl)
   const [oltId, setOltId] = useState('')
   const [board, setBoard] = useState('')
@@ -162,7 +195,7 @@ export function OnuConnectedPanel({
   const [onuType, setOnuType] = useState(initialOnuType)
   const [ponType, setPonType] = useState('')
   const [statusFilter, setStatusFilter] = useState<
-    '' | 'online' | 'offline' | 'los'
+    '' | 'online' | 'offline' | 'los' | 'suspended'
   >('')
   const [signalFilter, setSignalFilter] = useState<
     '' | 'good' | 'fair' | 'poor'
@@ -194,6 +227,16 @@ export function OnuConnectedPanel({
     refetchInterval: 60_000,
   })
 
+  useEffect(() => {
+    if (!onuIdFromUrl || !listQuery.data?.onus.length) return
+    const hit = listQuery.data.onus.find((o) => o.id === onuIdFromUrl)
+    if (!hit) return
+    setSelected({ oltId: hit.oltId, onuIf: hit.onuIf })
+    const next = new URLSearchParams(searchParams)
+    next.delete('onuId')
+    setSearchParams(next, { replace: true })
+  }, [onuIdFromUrl, listQuery.data?.onus, searchParams, setSearchParams])
+
   const recheckPendingQuery = useQuery({
     queryKey: ['app', 'onus', 'recheck-migrated'],
     queryFn: () =>
@@ -214,6 +257,31 @@ export function OnuConnectedPanel({
       void queryClient.invalidateQueries({ queryKey: ['app', 'onus'] })
       void queryClient.invalidateQueries({
         queryKey: ['app', 'onus', 'recheck-migrated'],
+      })
+    },
+  })
+
+  const dbaPendingQuery = useQuery({
+    queryKey: ['app', 'onus', 'dba-pending'],
+    queryFn: () =>
+      apiFetch<{ pending: number; show: boolean }>(
+        '/app/onus/verify/dba-pending',
+      ),
+    staleTime: 15_000,
+    enabled: canWrite,
+  })
+
+  const syncDbaMutation = useMutation({
+    mutationFn: () =>
+      apiFetch<{ queued: number; message?: string }>(
+        '/app/onus/verify/sync-dba',
+        { method: 'POST' },
+      ),
+    onSuccess: (data) => {
+      setSyncBanner(data.message ?? `Sync DBA: ${data.queued} ONU(s)`)
+      void queryClient.invalidateQueries({ queryKey: ['app', 'onus'] })
+      void queryClient.invalidateQueries({
+        queryKey: ['app', 'onus', 'dba-pending'],
       })
     },
   })
@@ -297,11 +365,21 @@ export function OnuConnectedPanel({
       if (port && o.port !== port) return false
       if (onuType && o.onuType !== onuType) return false
       if (ponType && o.ponType !== ponType) return false
-      if (statusFilter === 'online' && !o.online) return false
-      if (statusFilter === 'offline' && (o.online || o.status === 'los'))
+      if (statusFilter === 'online' && (isOnuSuspended(o) || !o.online))
         return false
-      if (statusFilter === 'los' && o.status !== 'los') return false
+      if (
+        statusFilter === 'offline' &&
+        (isOnuSuspended(o) || o.online || o.status === 'los')
+      )
+        return false
+      if (
+        statusFilter === 'los' &&
+        (isOnuSuspended(o) || o.status !== 'los')
+      )
+        return false
+      if (statusFilter === 'suspended' && !isOnuSuspended(o)) return false
       if (signalFilter) {
+        if (isOnuSuspended(o)) return false
         const band = signalBand(o.signalDbm)
         if (band !== signalFilter) return false
       }
@@ -513,6 +591,26 @@ export function OnuConnectedPanel({
             >
               <span className="h-2.5 w-2.5 rounded-full border-2 border-current" />
             </button>
+            <button
+              type="button"
+              title="Suspendidas (admin disable)"
+              onClick={() => toggleStatus('suspended')}
+              className={[
+                'inline-flex items-center justify-center rounded-md px-2 py-1.5',
+                statusFilter === 'suspended'
+                  ? 'bg-amber-600 text-white'
+                  : 'border border-[var(--border)] text-amber-400',
+              ].join(' ')}
+            >
+              <svg
+                viewBox="0 0 16 16"
+                className="h-3.5 w-3.5"
+                fill="currentColor"
+                aria-hidden
+              >
+                <path d="M5 3h2v10H5V3zm4 0h2v10H9V3z" />
+              </svg>
+            </button>
           </div>
         </div>
         <div className="flex flex-col gap-1 text-xs text-[var(--text-muted)]">
@@ -590,6 +688,19 @@ export function OnuConnectedPanel({
             {recheckMutation.isPending ? 'Recheck…' : 'Recheck all'}
           </button>
         ) : null}
+        {canWrite && dbaPendingQuery.data?.show ? (
+          <button
+            type="button"
+            disabled={syncDbaMutation.isPending}
+            onClick={() => void syncDbaMutation.mutateAsync()}
+            className="rounded-lg border border-amber-500/50 px-3 py-2 text-sm text-amber-200 hover:bg-amber-500/10 disabled:opacity-60"
+            title="Lee T-CONT vs plan CRM (incluye Sin verificar) y aplica el perfil si no coincide"
+          >
+            {syncDbaMutation.isPending
+              ? 'Verificando…'
+              : `Verificar perfiles (${dbaPendingQuery.data.pending})`}
+          </button>
+        ) : null}
         {canWrite && (
           <button
             type="button"
@@ -655,11 +766,87 @@ export function OnuConnectedPanel({
             : `${pageSafe * PAGE_SIZE + 1}–${Math.min(
                 (pageSafe + 1) * PAGE_SIZE,
                 filtered.length,
-              )} de ${filtered.length} · ${listQuery.data?.online ?? 0} online`}
+              )} de ${filtered.length} · ${listQuery.data?.online ?? 0} online${
+                (listQuery.data?.suspended ?? 0) > 0
+                  ? ` · ${listQuery.data?.suspended} suspendidas`
+                  : ''
+              }`}
         </span>
       </div>
 
-      <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
+      <MobileList>
+        {listQuery.isLoading && (
+          <p className="text-sm text-[var(--text-muted)]">
+            Consultando OLTs (puede tardar)…
+          </p>
+        )}
+        {!listQuery.isLoading && pageRows.length === 0 && (
+          <MobileListEmpty>
+            {listQuery.data?.message ||
+              (listQuery.data?.olts?.length
+                ? 'No hay ONUs importadas. Prueba la conexión de una OLT para importarlas.'
+                : 'No hay ONUs. Conecta una OLT ZTE en Topología o revisa credenciales.')}
+          </MobileListEmpty>
+        )}
+        {pageRows.map((o) => (
+          <MobileListCard key={o.id}>
+            <div className="flex items-start gap-2">
+              <StatusIcon onu={o} />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-semibold">
+                  {o.name || o.sn || o.onuIf}
+                </p>
+                <p className="truncate font-mono text-[11px] text-[var(--text-muted)]">
+                  {o.sn || '—'}
+                </p>
+              </div>
+              <button
+                type="button"
+                className="shrink-0 rounded-md bg-[var(--accent)] px-2.5 py-1 text-xs font-medium text-white hover:bg-[var(--accent-hover)]"
+                onClick={() =>
+                  setSelected({ oltId: o.oltId, onuIf: o.onuIf })
+                }
+              >
+                Ver
+              </button>
+            </div>
+            <MobileListMeta>
+              <span>
+                {o.oltName} · {o.onuIf}
+              </span>
+              <span>·</span>
+              <SignalCell onu={o} />
+              <span>·</span>
+              <HealthBadge onu={o} />
+              {o.mode === 'router' || o.mode === 'bridge' ? (
+                <>
+                  <span>·</span>
+                  <span>
+                    {o.mode === 'router' ? 'Router' : 'Bridge'}
+                    {o.vlan != null ? ` · VLAN ${o.vlan}` : ''}
+                  </span>
+                </>
+              ) : null}
+              {o.onuType ? (
+                <>
+                  <span>·</span>
+                  <span>{o.onuType}</span>
+                </>
+              ) : null}
+              {(o.zone || o.odb) && (
+                <>
+                  <span>·</span>
+                  <span className="truncate">
+                    {[o.zone, o.odb].filter(Boolean).join(' / ')}
+                  </span>
+                </>
+              )}
+            </MobileListMeta>
+          </MobileListCard>
+        ))}
+      </MobileList>
+
+      <DesktopTableWrap>
         <table className="w-full min-w-[1100px] text-left text-sm">
           <thead>
             <tr className="border-b border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--text-muted)]">
@@ -742,7 +929,7 @@ export function OnuConnectedPanel({
                   {o.odb ?? '—'}
                 </td>
                 <td className="px-2 py-2">
-                  <SignalCell dbm={o.signalDbm} />
+                  <SignalCell onu={o} />
                 </td>
                 <td className="px-2 py-2">
                   {o.mode === 'router' ? (
@@ -772,7 +959,7 @@ export function OnuConnectedPanel({
             ))}
           </tbody>
         </table>
-      </div>
+      </DesktopTableWrap>
 
       {selected && (
         <OnuDetailModal

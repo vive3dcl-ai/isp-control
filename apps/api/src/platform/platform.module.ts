@@ -4,6 +4,10 @@ import { Tenant } from '../tenants/entities/tenant.entity';
 import { PlatformAdmin } from '../auth/entities/platform-admin.entity';
 import { PlatformModulePricing } from '../modules/entities/platform-module-pricing.entity';
 import { PlatformSmtpSettings } from './entities/platform-smtp-settings.entity';
+import { PlatformAiSettings } from './entities/platform-ai-settings.entity';
+import { PlatformAiUsageDaily } from './entities/platform-ai-usage-daily.entity';
+import { PlatformAiCapability } from './entities/platform-ai-capability.entity';
+import { AiModule } from '../ai/ai.module';
 import { PlatformPublicUrls } from './entities/platform-public-urls.entity';
 import { PlatformSystemPlan } from './entities/platform-system-plan.entity';
 import { PlatformBillingSettings } from './entities/platform-billing-settings.entity';
@@ -18,6 +22,7 @@ import { PlatformSubscriptionService } from './platform-subscription.service';
 import { PlatformBrandingService } from './platform-branding.service';
 import { ModuleExpiryScheduler } from './module-expiry.scheduler';
 import { PlatformSettingsAdminController } from './platform-settings.admin.controller';
+import { PlatformAiAdminController } from './platform-ai.admin.controller';
 import { PlatformSubscriptionAppController } from './platform-subscription.app.controller';
 import { PlatformBrandingPublicController } from './platform-branding.public.controller';
 import { PlatformPlansPublicController } from './platform-plans.public.controller';
@@ -28,11 +33,15 @@ import { DatabaseModule } from '../database/database.module';
 @Module({
   imports: [
     DatabaseModule,
+    AiModule,
     TypeOrmModule.forFeature([
       Tenant,
       PlatformAdmin,
       PlatformModulePricing,
       PlatformSmtpSettings,
+      PlatformAiSettings,
+      PlatformAiUsageDaily,
+      PlatformAiCapability,
       PlatformPublicUrls,
       PlatformSystemPlan,
       PlatformBillingSettings,
@@ -43,6 +52,7 @@ import { DatabaseModule } from '../database/database.module';
   ],
   controllers: [
     PlatformSettingsAdminController,
+    PlatformAiAdminController,
     PlatformSubscriptionAppController,
     PlatformBrandingPublicController,
     PlatformPlansPublicController,

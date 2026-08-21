@@ -5,6 +5,7 @@ export type ModuleId =
   | 'whatsapp'
   | 'onu_unlock'
   | 'client_portal'
+  | 'asistente_ia'
 
 /** Catálogo global (Admin → Módulos). Solo módulos billable en la UI. */
 export type ModuleCatalogItem = {
@@ -23,6 +24,12 @@ export type ModuleCatalogItem = {
   /** Solo en módulo whatsapp: cupo Baileys de plataforma. */
   baileysSlotsUsed?: number
   baileysSlotsMax?: number
+}
+
+export type TenantModulesAdminResponse = {
+  modules: TenantModuleAdmin[]
+  /** Permitir modo Interno del Asistente IA para este tenant. */
+  aiInternalEnabled: boolean
 }
 
 export type TenantModuleAdmin = {
@@ -104,6 +111,18 @@ export type MercadoPagoConfig = {
   developersUrl?: string | null
 }
 
+export type PayPalEnvironment = 'sandbox' | 'production'
+
+export type PayPalConfig = {
+  environment: PayPalEnvironment
+  integration: 'checkout'
+  clientId: string
+  clientSecret: string
+  webhookId: string
+  hasClientSecret: boolean
+  hasWebhookId: boolean
+}
+
 export type WhatsAppProvider = 'cloud_api' | 'baileys'
 export type WhatsAppBaileysStatus =
   | 'disconnected'
@@ -128,21 +147,77 @@ export type WhatsAppConfig = {
   qrDataUrl?: string | null
 }
 
+export type AsistenteIaMode = 'own' | 'internal'
+export type AsistenteIaOwnProvider =
+  | 'openai'
+  | 'anthropic'
+  | 'grok'
+  | 'gemini'
+  | 'deepseek'
+  | 'latinrouter'
+
+export type AiVendorOption = {
+  id: AsistenteIaOwnProvider
+  label: string
+  models: string[]
+  defaultModel: string
+}
+
+export type AsistenteIaConfig = {
+  mode: AsistenteIaMode
+  provider: AsistenteIaOwnProvider
+  model: string
+  apiKey: string
+  enabled: boolean
+  hasApiKey: boolean
+  /** false = Admin deshabilitó el proveedor interno para este tenant. */
+  internalAllowed?: boolean
+  vendors?: AiVendorOption[]
+  quota?: {
+    requestsUsed: number
+    requestsLimit: number
+    tokensUsed: number
+    tokensLimit: number
+    platformEnabled: boolean
+    platformProvider: string | null
+    platformModel: string | null
+  }
+}
+
+export type PlatformAiSettings = {
+  enabled: boolean
+  provider: AsistenteIaOwnProvider
+  model: string
+  apiKey: string
+  hasApiKey: boolean
+  dailyRequestLimit: number
+  dailyTokenLimit: number
+  configured: boolean
+  vendors?: AiVendorOption[]
+}
+
 export type PlatformPaymentMethod = {
   id: string
-  provider: 'mercadopago'
+  provider: 'mercadopago' | 'paypal'
   name: string
   description: string
   enabled: boolean
-  environment: MercadoPagoEnvironment
+  environment: MercadoPagoEnvironment | PayPalEnvironment
   integration: string
   configured: boolean
-  publicKey: string
-  hasAccessToken: boolean
-  hasWebhookSecret: boolean
-  accessToken: string
-  webhookSecret: string
   updatedAt: string
+  /** Mercado Pago */
+  publicKey?: string
+  hasAccessToken?: boolean
+  hasWebhookSecret?: boolean
+  accessToken?: string
+  webhookSecret?: string
+  /** PayPal */
+  clientId?: string
+  hasClientSecret?: boolean
+  hasWebhookId?: boolean
+  clientSecret?: string
+  webhookId?: string
 }
 
 export function formatModulePrice(

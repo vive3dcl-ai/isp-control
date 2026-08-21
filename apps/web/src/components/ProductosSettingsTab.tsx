@@ -6,6 +6,13 @@ import { useCompanyCurrency, useMoney } from '../lib/currency'
 import { MoneyInput } from './MoneyInput'
 import { useNotify } from './NotifyProvider'
 import { ModalPortal } from './ModalPortal'
+import {
+  DesktopTableWrap,
+  MobileList,
+  MobileListCard,
+  MobileListEmpty,
+  MobileListMeta,
+} from './MobileList'
 
 const inputClass =
   'w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2.5 outline-none ring-[var(--accent)] focus:ring-2'
@@ -59,7 +66,62 @@ export function ProductosSettingsTab({ canWrite }: { canWrite: boolean }) {
         </p>
       )}
 
-      <div className="overflow-x-auto overflow-hidden rounded-xl border border-[var(--border)]">
+      <MobileList>
+        {productsQuery.isLoading && (
+          <p className="text-sm text-[var(--text-muted)]">Cargando…</p>
+        )}
+        {!productsQuery.isLoading && products.length === 0 && (
+          <MobileListEmpty>No hay productos todavía.</MobileListEmpty>
+        )}
+        {products.map((p) => (
+          <MobileListCard key={p.id}>
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold">{p.name}</p>
+                {p.description && (
+                  <p className="text-xs text-[var(--text-muted)] line-clamp-2">
+                    {p.description}
+                  </p>
+                )}
+              </div>
+              <span className="shrink-0 text-sm font-medium">
+                {money(p.unitPrice)}
+              </span>
+            </div>
+            <MobileListMeta>
+              <span>{p.isActive ? 'Activo' : 'Inactivo'}</span>
+            </MobileListMeta>
+            {canWrite && (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setEditProduct(p)}
+                  className="rounded-md border border-[var(--border)] px-2.5 py-1 text-xs hover:border-[var(--accent)] hover:text-[var(--accent)]"
+                >
+                  Editar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void confirm(`¿Eliminar el producto ${p.name}?`, {
+                      title: 'Eliminar producto',
+                      danger: true,
+                      confirmLabel: 'Eliminar',
+                    }).then((ok) => {
+                      if (ok) deleteMutation.mutate(p.id)
+                    })
+                  }}
+                  className="rounded-md border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--danger)] hover:border-[var(--danger)]"
+                >
+                  Eliminar
+                </button>
+              </div>
+            )}
+          </MobileListCard>
+        ))}
+      </MobileList>
+
+      <DesktopTableWrap>
         <table className="w-full min-w-[560px] text-left text-sm">
           <thead className="bg-[var(--bg)] text-[var(--text-muted)]">
             <tr>
@@ -132,7 +194,7 @@ export function ProductosSettingsTab({ canWrite }: { canWrite: boolean }) {
             ))}
           </tbody>
         </table>
-      </div>
+      </DesktopTableWrap>
 
       <ProductFormModal
         open={createOpen}

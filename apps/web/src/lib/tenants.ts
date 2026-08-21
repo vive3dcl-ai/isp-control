@@ -10,6 +10,8 @@ export interface Tenant {
   slug: string
   schemaName: string
   status: TenantStatus
+  /** Empresa interna ISP Control (sin mora / siempre activa). */
+  isInternalCompany?: boolean
   createdAt: string
   updatedAt: string
 }
@@ -43,6 +45,7 @@ export interface UpdateTenantInput {
   phone?: string
   address?: string
   status?: TenantStatus
+  isInternalCompany?: boolean
 }
 
 export interface CreateTenantResponse {

@@ -1,9 +1,10 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuthModule } from '../auth/auth.module';
 import { DatabaseModule } from '../database/database.module';
 import { Tenant } from '../tenants/entities/tenant.entity';
 import { TenantRolesGuard } from '../auth/guards/tenant-roles.guard';
+import { CrmModule } from '../crm/crm.module';
 import { TopologyController } from './topology.controller';
 import { TopologyService } from './topology.service';
 import { MikrotikClient } from './routers/mikrotik.client';
@@ -61,9 +62,10 @@ import { SupportModule } from '../support/support.module';
 @Module({
   imports: [
     DatabaseModule,
-    AuthModule,
-    PlatformModule,
+    forwardRef(() => AuthModule),
+    forwardRef(() => PlatformModule),
     SupportModule,
+    forwardRef(() => CrmModule),
     TypeOrmModule.forFeature([Tenant, OnuCatalogItem]),
   ],
   controllers: [
@@ -131,6 +133,7 @@ import { SupportModule } from '../support/support.module';
     IpPoolService,
     OnuTr069ConfigService,
     OnuAcsDriverCatalogService,
+    OnuPostProvisionVerifyService,
     NetworkAuditService,
     NetworkAlarmService,
     ServiceVlanService,

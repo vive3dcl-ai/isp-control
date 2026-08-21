@@ -10,6 +10,13 @@ import {
   type ProgressStep,
 } from './OperationProgressModal'
 import { ModalPortal } from './ModalPortal'
+import {
+  DesktopTableWrap,
+  MobileList,
+  MobileListCard,
+  MobileListEmpty,
+  MobileListMeta,
+} from './MobileList'
 
 const inputClass =
   'w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2.5 outline-none ring-[var(--accent)] focus:ring-2'
@@ -701,7 +708,75 @@ export function SpeedProfilesSettingsTab({ canWrite }: { canWrite: boolean }) {
         <p className="mb-4 text-sm text-[var(--danger)]">{query.error.message}</p>
       )}
 
-      <div className="overflow-x-auto overflow-hidden rounded-xl border border-[var(--border)]">
+      <MobileList>
+        {query.isLoading && (
+          <p className="text-sm text-[var(--text-muted)]">Cargando…</p>
+        )}
+        {!query.isLoading && profiles.length === 0 && (
+          <MobileListEmpty>
+            No hay perfiles del sistema todavía.
+          </MobileListEmpty>
+        )}
+        {profiles.map((p) => {
+          const olts = p.olts ?? []
+          const known = olts.filter((o) => o.present != null)
+          const pending = known.filter((o) => o.needsSync).length
+          const ok = known.filter((o) => o.present === true).length
+          return (
+            <MobileListCard key={p.id}>
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold">{p.name}</p>
+                {p.oltProfileName ? (
+                  <p className="text-[11px] text-[var(--text-muted)]">
+                    OLT: {p.oltProfileName}
+                  </p>
+                ) : null}
+                {p.description ? (
+                  <p className="text-xs text-[var(--text-muted)]">
+                    {p.description}
+                  </p>
+                ) : null}
+              </div>
+              <MobileListMeta>
+                <span>
+                  ↓{p.downloadMbps} / ↑{p.uploadMbps} Mbps
+                </span>
+                <span>·</span>
+                <span>
+                  {olts.length === 0
+                    ? 'Sin OLTs'
+                    : known.length === 0
+                      ? `${olts.length} OLT(s)`
+                      : `${ok}/${olts.length} sync${pending > 0 ? ` (${pending} pend.)` : ''}`}
+                </span>
+                <span>·</span>
+                <span>{p.isActive ? 'Activo' : 'Inactivo'}</span>
+              </MobileListMeta>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setEdit(p)}
+                  className="rounded-md border border-[var(--border)] px-2.5 py-1 text-xs hover:border-[var(--accent)] hover:text-[var(--accent)]"
+                >
+                  {canWrite ? 'Editar / OLTs' : 'Ver'}
+                </button>
+                {canWrite && (
+                  <button
+                    type="button"
+                    disabled={progressOpen}
+                    onClick={() => void startDelete(p)}
+                    className="rounded-md border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--danger)] hover:border-[var(--danger)] disabled:opacity-50"
+                  >
+                    Eliminar
+                  </button>
+                )}
+              </div>
+            </MobileListCard>
+          )
+        })}
+      </MobileList>
+
+      <DesktopTableWrap>
         <table className="w-full min-w-[640px] text-left text-sm">
           <thead className="bg-[var(--bg)] text-[var(--text-muted)]">
             <tr>
@@ -795,7 +870,7 @@ export function SpeedProfilesSettingsTab({ canWrite }: { canWrite: boolean }) {
             })}
           </tbody>
         </table>
-      </div>
+      </DesktopTableWrap>
 
       <SpeedProfileFormModal
         open={createOpen}

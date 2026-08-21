@@ -29,6 +29,8 @@ export interface Client {
   /** Día del mes de instalación (1–31); solo si no hay fecha de alta. */
   installDay: number | null
   hasInstallDate?: boolean
+  /** Al menos un servicio en status suspended (badge Suspendido en lista). */
+  hasSuspendedService?: boolean
   createdAt: string
   updatedAt: string
 }
@@ -120,6 +122,8 @@ export interface ClientService {
   migratedAt: string | null
   /** One-shot sync de nombre ONU ya hecho. */
   onuNameSyncedAt: string | null
+  /** Cobro proporcional hasta fin de mes (régimen desde instalación). */
+  billingProrate?: boolean
   createdAt: string
   updatedAt: string
 }

@@ -35,6 +35,8 @@ export interface BillingSettings {
   sendCron: string
   sendLastRunAt: string | null
   defaultDueDays: number
+  graceDaysAfterDue: number
+  billingCycleDay: number
   /** calendar_month = cobro fijo de calendario; from_install = ciclo desde el día de alta */
   billingRegime: 'calendar_month' | 'from_install'
   updatedAt: string
@@ -81,6 +83,45 @@ export interface Invoice {
   items: InvoiceItem[]
   createdAt: string
   updatedAt: string
+  clientName?: string
+  clientEmail?: string
+}
+
+export interface AccountingMonthBucket {
+  key: string
+  invoiceCount: number
+  total: number
+  paid: number
+  pending: number
+  overdue: number
+}
+
+export interface AccountingKpis {
+  salesThisMonth: number
+  estimatedEarnings: number
+  overdueTotal: number
+  invoicedThisMonth: number
+  paidCountThisMonth: number
+  openInvoiceCount: number
+  voidedThisMonth: number
+  collectionRateThisMonth: number
+  invoiceCount: number
+}
+
+export interface AccountingOverview {
+  currentMonth: string
+  kpis: AccountingKpis
+  months: AccountingMonthBucket[]
+  invoices: Invoice[]
+}
+
+export const INVOICE_STATUS_LABEL: Record<string, string> = {
+  draft: 'Borrador',
+  issued: 'Emitida',
+  sent: 'Enviada',
+  paid: 'Pagada',
+  void: 'Anulada',
+  overdue: 'Vencida',
 }
 
 export const TEMPLATE_TYPE_LABELS: Record<InvoiceTemplateType, string> = {

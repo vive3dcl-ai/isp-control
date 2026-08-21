@@ -2,9 +2,12 @@ import { useEffect, useState } from 'react'
 import { useAuth } from '../auth/AuthContext'
 import { isPlatformRole } from '../lib/api'
 import {
+  clearPushPromptDismiss,
   clearPushPromptPending,
+  dismissPushPrompt,
   isPwaStandalone,
   markPushPromptPending,
+  wasPushPromptDismissedRecently,
 } from '../lib/pwa'
 import {
   enablePushNotifications,
@@ -13,27 +16,12 @@ import {
 } from '../lib/webPush'
 
 const SHOW_DELAY_MS = 700
-const SESSION_DISMISS_KEY = 'isp-push-prompt-session-dismiss'
-
-function wasDismissedThisSession() {
-  try {
-    return sessionStorage.getItem(SESSION_DISMISS_KEY) === '1'
-  } catch {
-    return false
-  }
-}
-
-function dismissThisSession() {
-  try {
-    sessionStorage.setItem(SESSION_DISMISS_KEY, '1')
-  } catch {
-    // ignore
-  }
-}
+/** Tras «Ahora no», no volver a pedir hasta 24 h. */
+const DISMISS_COOLDOWN_MS = 24 * 60 * 60 * 1000
 
 /**
- * Tras login (y en cada apertura de sesión) insiste en activar notificaciones
- * si el permiso no está concedido. Ambas apps (admin + técnico).
+ * Tras login insiste en activar notificaciones si el permiso no está concedido.
+ * «Ahora no» guarda cooldown de 24 h en localStorage.
  */
 export function PushEnablePrompt() {
   const { user, loading } = useAuth()
@@ -45,45 +33,25 @@ export function PushEnablePrompt() {
   useEffect(() => {
     function onInstalled() {
       markPushPromptPending()
-      try {
-        sessionStorage.removeItem(SESSION_DISMISS_KEY)
-      } catch {
-        // ignore
-      }
-      setInstallTick((n) => n + 1)
-    }
-    function bumpAsk() {
-      try {
-        sessionStorage.removeItem(SESSION_DISMISS_KEY)
-      } catch {
-        // ignore
-      }
+      // Tras instalar la PWA, permitir preguntar de nuevo (limpia cooldown).
+      clearPushPromptDismiss()
       setInstallTick((n) => n + 1)
     }
     function onVisible() {
-      // En PWA instalada: al volver a la app insistir. En pestaña web basta login/pageshow.
       if (document.visibilityState === 'visible' && isPwaStandalone()) {
-        bumpAsk()
+        setInstallTick((n) => n + 1)
       }
     }
     window.addEventListener('appinstalled', onInstalled)
-    window.addEventListener('pageshow', bumpAsk)
     document.addEventListener('visibilitychange', onVisible)
     return () => {
       window.removeEventListener('appinstalled', onInstalled)
-      window.removeEventListener('pageshow', bumpAsk)
       document.removeEventListener('visibilitychange', onVisible)
     }
   }, [])
 
-  // Cada login vuelve a pedir (aunque en esta pestaña hubieran dicho "ahora no").
   useEffect(() => {
     if (!user?.id) return
-    try {
-      sessionStorage.removeItem(SESSION_DISMISS_KEY)
-    } catch {
-      // ignore
-    }
     setInstallTick((n) => n + 1)
   }, [user?.id])
 
@@ -101,8 +69,10 @@ export function PushEnablePrompt() {
       setVisible(false)
       return
     }
-    // Insistir en cada apertura de la app/sesión (no cooldown de días).
-    if (wasDismissedThisSession()) return
+    if (wasPushPromptDismissedRecently(DISMISS_COOLDOWN_MS)) {
+      setVisible(false)
+      return
+    }
 
     const t = window.setTimeout(() => setVisible(true), SHOW_DELAY_MS)
     return () => window.clearTimeout(t)
@@ -117,7 +87,7 @@ export function PushEnablePrompt() {
   const inApp = isPwaStandalone()
 
   function onDismiss() {
-    dismissThisSession()
+    dismissPushPrompt()
     setVisible(false)
   }
 
@@ -142,7 +112,7 @@ export function PushEnablePrompt() {
   }
 
   return (
-    <div className="fixed inset-x-0 bottom-0 z-[85] p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+    <div className="fixed inset-x-0 bottom-0 z-[85] p-4 pb-[max(1rem,var(--safe-bottom))] pl-[max(1rem,var(--safe-left))] pr-[max(1rem,var(--safe-right))]">
       <div className="mx-auto max-w-lg rounded-2xl border border-[var(--border)] bg-[var(--bg-elevated)] p-4 shadow-2xl shadow-black/40">
         <div className="mb-3 flex items-start justify-between gap-3">
           <div>

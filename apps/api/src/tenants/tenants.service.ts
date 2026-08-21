@@ -143,6 +143,21 @@ export class TenantsService {
     if (dto.status !== undefined) {
       tenant.status = dto.status;
     }
+    if (dto.isInternalCompany !== undefined) {
+      tenant.isInternalCompany = !!dto.isInternalCompany;
+      if (tenant.isInternalCompany) {
+        tenant.status = 'active';
+        tenant.subscriptionStatus = 'active';
+        if (!tenant.subscriptionPeriodEnd) {
+          tenant.subscriptionPeriodEnd = new Date(
+            Date.UTC(2099, 11, 31, 23, 59, 59),
+          );
+        }
+        if (!tenant.subscriptionPeriodStart) {
+          tenant.subscriptionPeriodStart = new Date();
+        }
+      }
+    }
 
     return this.tenants.save(tenant);
   }

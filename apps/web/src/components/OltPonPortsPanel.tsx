@@ -13,6 +13,12 @@ import {
   oltMetaClass,
   oltToolbarClass,
 } from './oltPanelUi'
+import {
+  DesktopTableWrap,
+  MobileList,
+  MobileListCard,
+  MobileListMeta,
+} from './MobileList'
 
 
 const inputClass =
@@ -347,7 +353,120 @@ export function OltPonPortsPanel({
               </div>
             </div>
 
-            <div className="overflow-x-auto">
+            <MobileList className="p-3">
+              {slotPorts.map((p) => (
+                <MobileListCard key={p.ifName}>
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold">
+                        Puerto {p.port} ·{' '}
+                        {p.ponType === 'epon' ? 'EPON' : 'GPON'}
+                      </p>
+                      <p className="text-xs text-[var(--text-muted)]">
+                        {p.adminEnabled ? 'Habilitado' : 'Deshabilitado'} ·{' '}
+                        <span
+                          className={
+                            p.status === 'Up'
+                              ? 'font-medium text-emerald-500'
+                              : 'font-medium text-[var(--danger)]'
+                          }
+                        >
+                          {p.status}
+                        </span>
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      className="shrink-0 text-xs text-[var(--accent)] hover:underline"
+                      onClick={() => openConfigure(p)}
+                    >
+                      Configurar
+                    </button>
+                  </div>
+                  <div className="mt-2">
+                    <LoadBar
+                      online={p.onuOnline}
+                      max={p.maxOnus}
+                      pct={p.loadPct}
+                    />
+                  </div>
+                  <MobileListMeta>
+                    <span>
+                      ONUs {p.onuOnline}/{p.onuTotal}
+                    </span>
+                    <span>·</span>
+                    <span className="font-mono">
+                      Señal{' '}
+                      {p.avgSignalDbm != null
+                        ? `${p.avgSignalDbm.toFixed(2)} dBm`
+                        : '—'}
+                    </span>
+                    <span>·</span>
+                    <span className="font-mono">
+                      Tx{' '}
+                      {p.txPowerDbm != null
+                        ? `${p.txPowerDbm.toFixed(2)}`
+                        : '—'}
+                    </span>
+                    <span>·</span>
+                    <span>
+                      Rango {p.minRangeM}-{p.maxRangeM} m
+                    </span>
+                    <span>·</span>
+                    <button
+                      type="button"
+                      className={[
+                        'font-medium underline-offset-2 hover:underline',
+                        p.rogueDetectEnabled
+                          ? 'text-[var(--accent)]'
+                          : 'hover:text-[var(--accent)]',
+                      ].join(' ')}
+                      onClick={() => {
+                        setRogueSlot(p.slot)
+                        setRogueOpen(true)
+                      }}
+                    >
+                      Rogue{' '}
+                      {p.rogueDetectEnabled ? 'on' : 'off'}
+                    </button>
+                  </MobileListMeta>
+                  {p.description ? (
+                    <p className="mt-1 line-clamp-2 text-[11px] text-[var(--text-muted)]">
+                      {p.description}
+                    </p>
+                  ) : null}
+                  {canWrite && (
+                    <div className="mt-2">
+                      <button
+                        type="button"
+                        className="text-xs text-[var(--accent)] hover:underline disabled:opacity-50"
+                        disabled={rebootOnusMutation.isPending}
+                        onClick={() => {
+                          void confirm(
+                            `¿Reiniciar ONUs del puerto ${p.port}?`,
+                            {
+                              title: 'Reiniciar ONUs',
+                              danger: true,
+                              confirmLabel: 'Reiniciar',
+                            },
+                          ).then((ok) => {
+                            if (ok) {
+                              rebootOnusMutation.mutate({
+                                ifName: p.ifName,
+                              })
+                            }
+                          })
+                        }}
+                      >
+                        Reiniciar ONUs
+                      </button>
+                    </div>
+                  )}
+                </MobileListCard>
+              ))}
+            </MobileList>
+
+            <DesktopTableWrap bordered={false}>
               <table className="w-full min-w-[1100px] text-left text-sm">
                 <thead>
                   <tr className="border-b border-[var(--border)] text-[var(--text-muted)]">
@@ -484,7 +603,7 @@ export function OltPonPortsPanel({
                   ))}
                 </tbody>
               </table>
-            </div>
+            </DesktopTableWrap>
           </section>
         )
       })}

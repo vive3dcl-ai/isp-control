@@ -15,8 +15,10 @@ import {
   ensureMgmtReady,
   ensureOmciTr069,
   ensureReachable,
+  ensureServiceL2,
   ensureServiceSpv,
   ensureServiceWanIp,
+  ensureServiceWanReset,
   ensureServiceWcd,
   findEmptyWanConnectionDevice,
   hg8145HasServiceWan,
@@ -28,6 +30,8 @@ import {
   listHuaweiWanIpConnections,
   needsNewWanConnectionDevice,
 } from './wan';
+import { huaweiInternetCarrierOk } from '../../infra/huawei-carrier';
+import { findServiceWanVlanMismatch } from '../../infra/service-wan-vlan';
 
 export type Hg8145HealStepId =
   | 'ensure_omci_tr069'
@@ -37,7 +41,9 @@ export type Hg8145HealStepId =
   | 'ensure_mgmt_ready'
   | 'ensure_service_wcd'
   | 'ensure_service_wanip'
+  | 'ensure_service_wan_reset'
   | 'ensure_service_spv'
+  | 'ensure_service_l2'
   | 'noop';
 
 const ACS_STEPS: OnuProgressStepDef[] = [
@@ -48,7 +54,7 @@ const ACS_STEPS: OnuProgressStepDef[] = [
   },
   {
     id: 'ensure_connreq',
-    label: 'Credenciales Connection Request',
+    label: 'Credenciales de administración',
     phase: 'acs',
   },
   {
@@ -67,6 +73,11 @@ const ACS_STEPS: OnuProgressStepDef[] = [
     phase: 'acs',
   },
   {
+    id: 'ensure_service_wan_reset',
+    label: 'Recrear WAN (VLAN del panel)',
+    phase: 'acs',
+  },
+  {
     id: 'ensure_service_wcd',
     label: 'Crear WANConnectionDevice de servicio',
     phase: 'acs',
@@ -78,8 +89,13 @@ const ACS_STEPS: OnuProgressStepDef[] = [
   },
   {
     id: 'ensure_service_spv',
-    label: 'Aplicar IP/VLAN/DNS/NAT (SPV)',
+    label: 'Árbol de servicio',
     phase: 'acs',
+  },
+  {
+    id: 'ensure_service_l2',
+    label: 'OLT service-port / flow (carrier)',
+    phase: 'olt',
   },
 ];
 
@@ -104,6 +120,7 @@ export function hg8145CompletedFromGaps(gaps: OnuHealGaps): string[] {
     done.push('ensure_service_wcd', 'ensure_service_wanip');
   }
   if (gaps.serviceWanOk === true) done.push('ensure_service_spv');
+  if (gaps.serviceCarrierOk === true) done.push('ensure_service_l2');
   return done;
 }
 
@@ -116,6 +133,8 @@ export function pickHg8145VerifyStep(ctx: OnuVerifyHealCtx): Hg8145HealStepId {
   const wanMissing = g.hasServiceWan === false;
   const informAlive =
     g.informAlive ?? hg8145InformAlive(ctx.device);
+  const carrierOk =
+    g.serviceCarrierOk ?? huaweiInternetCarrierOk(ctx.device);
 
   // Agente TR-069 muerto: OMCI ip-host+ACS + reboot (cola no drena).
   if (g.reachable === false && informAlive === false) {
@@ -136,6 +155,21 @@ export function pickHg8145VerifyStep(ctx: OnuVerifyHealCtx): Hg8145HealStepId {
     }
     return 'ensure_service_wanip';
   }
+
+  // CPE etiqueta VLAN distinta a la del panel: SPV falla (9005) sin carrier.
+  // Borrar WCD INTERNET y recrear con VLAN/IP del panel (nunca adoptar ACS).
+  if (wanNeedsSpv || g.serviceWanOk === false) {
+    if (findServiceWanVlanMismatch(ctx.device, ctx.wan.wanVlan, {
+      mgmtIp: ctx.mgmtIp,
+      expectedIp: ctx.wan.wanIp,
+    })) {
+      return 'ensure_service_wan_reset';
+    }
+  }
+
+  // WAN INTERNET (VLAN panel) sin carrier L2: service-port/flow en OLT.
+  // Antes que SPV (Huawei 9005 en ExternalIPAddress con ERROR_NO_CARRIER).
+  if (carrierOk === false) return 'ensure_service_l2';
 
   // INTERNET mal: SPV vía Inform, sin quedarnos en ensure_reachable.
   if (wanNeedsSpv) return 'ensure_service_spv';
@@ -168,14 +202,29 @@ export async function verifyHealHg8145x6(
   const head = `heal huawei-hg8145x6:${step}`;
   const withProgress = (
     r: OnuModelProvisionResult,
-  ): OnuModelProvisionResult => ({
-    ...r,
-    progress: {
-      currentStepId: step === 'noop' ? null : step,
-      completed: step !== 'noop' && r.ok ? [...completed, step] : completed,
-      notes: r.notes,
-    },
-  });
+  ): OnuModelProvisionResult => {
+    const note = r.notes.filter(Boolean).join(' · ').slice(0, 240);
+    const historyEntry =
+      step === 'noop'
+        ? []
+        : [
+            {
+              id: step,
+              status: (r.ok ? 'done' : 'error') as 'done' | 'error',
+              note: note || undefined,
+              at: new Date().toISOString(),
+            },
+          ];
+    return {
+      ...r,
+      progress: {
+        currentStepId: step === 'noop' ? null : step,
+        completed: step !== 'noop' && r.ok ? [...completed, step] : completed,
+        notes: r.notes,
+        history: historyEntry,
+      },
+    };
+  };
 
   switch (step) {
     case 'ensure_omci_tr069': {
@@ -198,6 +247,10 @@ export async function verifyHealHg8145x6(
       const r = await ensureMgmtReady(ctx);
       return withProgress({ ok: r.ok, notes: [head, ...r.notes] });
     }
+    case 'ensure_service_wan_reset': {
+      const r = await ensureServiceWanReset(ctx);
+      return withProgress({ ok: r.ok, notes: [head, ...r.notes] });
+    }
     case 'ensure_service_wcd': {
       const r = await ensureServiceWcd(ctx);
       return withProgress({ ok: r.ok, notes: [head, ...r.notes] });
@@ -208,6 +261,10 @@ export async function verifyHealHg8145x6(
     }
     case 'ensure_service_spv': {
       const r = await ensureServiceSpv(ctx);
+      return withProgress({ ok: r.ok, notes: [head, ...r.notes] });
+    }
+    case 'ensure_service_l2': {
+      const r = await ensureServiceL2(ctx);
       return withProgress({ ok: r.ok, notes: [head, ...r.notes] });
     }
     default:

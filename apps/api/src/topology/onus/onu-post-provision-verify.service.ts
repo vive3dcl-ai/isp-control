@@ -1,4 +1,5 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { IsNull, Not } from 'typeorm';
 import { TenantConnectionService } from '../../database/tenant-connection.service';
 import { shouldSkipOltHealWrites } from '../olts/olt-config-backup.util';
 import type { Onu } from '../shared/entities/onu.entity';
@@ -14,6 +15,7 @@ import {
   CONN_REQ_USERNAME,
   detectDataModelRoot,
   shouldWriteConnReqCredentials,
+  CONN_REQ_INFORM_INTERVAL_S,
 } from '../../drivers/onu/infra/connreq-credentials';
 import {
   decideVerifyOutcome,
@@ -22,6 +24,9 @@ import {
   shouldCloseVerifyWindow,
   shouldRunVerifyTick,
   summarizeVerifyDetail,
+  summarizeVerifyFailures,
+  assessInternetEvidence,
+  countPublicDsts,
   VERIFY_HEAL_MAX_ATTEMPTS,
   VERIFY_MAX_CONCURRENCY_PER_TENANT,
   type OnuVerifyCheckResult,
@@ -31,6 +36,7 @@ import {
   readWanConnectionState,
 } from '../../drivers/onu/infra/wan-datamodel';
 import { assessServiceRoute } from '../../drivers/onu/models/generic-zte/route';
+import { assessServiceLanBind } from '../../drivers/onu/infra/lan-bind';
 import { resolveServiceWanForVerify } from '../../drivers/onu/infra/resolve-service-wan-for-verify';
 import { OnuTr069ConfigService } from './onu-tr069-config.service';
 import {
@@ -40,6 +46,7 @@ import {
 import { NetworkAuditService } from './network-audit.service';
 import {
   needsMigratedHealthBackfill,
+  needsDbaProfileCheck,
   shouldSkipHealthPass,
 } from '../../drivers/olt/zte/shared/zte-olt-dba.util';
 import { ServiceVlanService } from '../olts/service-vlan.service';
@@ -48,8 +55,9 @@ import {
   resolveOnuDriver,
   resolveProgressPlan,
   resolveVerifyChecks,
+  type OnuVerifyCheckId,
+  type OnuVerifyCheckMode,
 } from '../../drivers/onu';
-import type { OnuVerifyCheckId } from '../../drivers/onu';
 
 function prefixToMask(prefix: number): string {
   const mask = prefix === 0 ? 0 : (~0 << (32 - prefix)) >>> 0;
@@ -77,6 +85,7 @@ export class OnuPostProvisionVerifyService {
   private readonly logger = new Logger(OnuPostProvisionVerifyService.name);
   /** Serializa verify/run|kick|poller por ONU (evita ok↔test↔fail por carreras). */
   private readonly verifyChains = new Map<string, Promise<unknown>>();
+  private readonly dbaSyncInFlight = new Set<string>();
 
   constructor(
     private readonly tenantConnections: TenantConnectionService,
@@ -185,9 +194,13 @@ export class OnuPostProvisionVerifyService {
         dns: detail.dns ?? null,
         route: detail.route ?? null,
         uplinkVlan: detail.uplinkVlan ?? null,
+        lanBind: detail.lanBind ?? null,
         traffic: detail.traffic ?? null,
       },
       healed: detail.healed ?? [],
+      failureSummary: summarizeVerifyFailures(detail, {
+        checks: resolveVerifyChecks(driver),
+      }),
     };
   }
 
@@ -376,6 +389,111 @@ export class OnuPostProvisionVerifyService {
     return { queued: pending.length };
   }
 
+  /** ONUs con plan/DBA desalineado, en CHECK, o perfil aún sin verificar. */
+  async countDbaPending(schema: string): Promise<number> {
+    return (await this.listDbaPending(schema)).length;
+  }
+
+  private async listDbaPending(schema: string): Promise<Onu[]> {
+    const onuRepo = await this.tenantConnections.getOnuRepository(schema);
+    const svcRepo =
+      await this.tenantConnections.getClientServiceRepository(schema);
+    const [rows, services] = await Promise.all([
+      onuRepo.find({
+        select: ['id', 'sn', 'verifyStatus', 'verifyDetail'],
+      }),
+      svcRepo.find({
+        where: { onuId: Not(IsNull()), status: Not('ended') },
+        relations: { servicePlan: true },
+      }),
+    ]);
+    const withSpeed = new Set(
+      services
+        .filter((s) => s.onuId && s.servicePlan?.speedProfileId)
+        .map((s) => s.onuId as string),
+    );
+    return rows.filter((o) =>
+      needsDbaProfileCheck({
+        verifyStatus: o.verifyStatus,
+        planOk: (o.verifyDetail as OnuVerifyDetail | null)?.plan?.ok ?? null,
+        hasSpeedPlan: withSpeed.has(o.id),
+      }),
+    );
+  }
+
+  /**
+   * Lee T-CONT vs plan (incluye “Sin verificar”) y cura mismatch.
+   * Corre en segundo plano: no es un Check ONU completo (evita ACS masivo).
+   */
+  async syncDbaAll(
+    schema: string,
+  ): Promise<{ queued: number; started: boolean }> {
+    const pending = await this.listDbaPending(schema);
+    if (!pending.length) return { queued: 0, started: false };
+    if (this.dbaSyncInFlight.has(schema)) {
+      return { queued: pending.length, started: false };
+    }
+    this.dbaSyncInFlight.add(schema);
+    void this.runDbaSyncBatch(
+      schema,
+      pending.map((o) => o.id),
+    ).finally(() => {
+      this.dbaSyncInFlight.delete(schema);
+    });
+    return { queued: pending.length, started: true };
+  }
+
+  private async runDbaSyncBatch(
+    schema: string,
+    onuIds: string[],
+  ): Promise<void> {
+    await mapWithConcurrency(onuIds, 2, async (onuId) => {
+      try {
+        const dba = await this.tr069.syncInternetDba(schema, onuId, {
+          heal: true,
+        });
+        await this.persistDbaPlanResult(schema, onuId, dba);
+      } catch (err) {
+        this.logger.warn(
+          `syncDbaAll ${onuId}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    });
+  }
+
+  private async persistDbaPlanResult(
+    schema: string,
+    onuId: string,
+    dba: {
+      matched: boolean;
+      message: string;
+      expected: string | null;
+      actual: string | null;
+    },
+  ): Promise<void> {
+    const onuRepo = await this.tenantConnections.getOnuRepository(schema);
+    const onu = await onuRepo.findOne({ where: { id: onuId } });
+    if (!onu) return;
+    const detail = (onu.verifyDetail ?? {}) as OnuVerifyDetail;
+    onu.verifyDetail = {
+      ...detail,
+      plan: {
+        ok: dba.matched,
+        message: dba.message,
+        meta: { expected: dba.expected, actual: dba.actual },
+      },
+    };
+    onu.verifyCheckedAt = new Date();
+    if (dba.matched && onu.verifyStatus === 'check') {
+      onu.verifyStatus = 'ok';
+    } else if (!dba.matched && onu.verifyStatus === 'ok') {
+      onu.verifyStatus = 'check';
+    }
+    await onuRepo.save(onu);
+  }
+
   private async executeCheck(
     schema: string,
     onuId: string,
@@ -426,6 +544,10 @@ export class OnuPostProvisionVerifyService {
       detail.plan = {
         ok: dba.matched,
         message: dba.message,
+        meta: {
+          expected: dba.expected,
+          actual: dba.actual,
+        },
       };
       if (dba.healed) healed.push(dba.message);
     } catch (err) {
@@ -445,6 +567,8 @@ export class OnuPostProvisionVerifyService {
       if (needs('route')) detail.route = { ok: false, message: 'sin IP WAN' };
       if (needs('uplinkVlan'))
         detail.uplinkVlan = { ok: false, message: 'sin IP WAN' };
+      if (needs('lanBind'))
+        detail.lanBind = { ok: false, message: 'sin IP WAN' };
       if (needs('connreq'))
         detail.connreq = { ok: false, message: 'sin IP WAN' };
       if (needs('traffic'))
@@ -468,49 +592,12 @@ export class OnuPostProvisionVerifyService {
         if (cred.note) healed.push(cred.note);
       }
 
-      if (needs('arp') || needs('traffic')) {
-        if (!wanPool?.routerId) {
-          if (needs('arp')) {
-            detail.arp = {
-              ok: false,
-              message: 'el pool WAN no tiene router asignado',
-            };
-          }
-          if (verifyChecks.arp === 'required') irrecoverable = true;
-        } else {
-          const deviceRepo =
-            await this.tenantConnections.getNetworkDeviceRepository(schema);
-          const router = await deviceRepo.findOne({
-            where: { id: wanPool.routerId },
-          });
-          if (!router) {
-            if (needs('arp')) {
-              detail.arp = {
-                ok: false,
-                message: 'router del pool no encontrado',
-              };
-            }
-            if (verifyChecks.arp === 'required') irrecoverable = true;
-          } else {
-            // ARP primero (rápido). Conexiones firewall solo si traffic lo pide
-            // y ACS no aportó bytes — ese dump es muy lento en routers cargados.
-            const routerProbe = await this.probeRouter(
-              router,
-              onu.wanIp,
-              prevDetail.traffic?.meta,
-              { includeConnections: false },
-            );
-            if (needs('arp')) detail.arp = routerProbe.arp;
-            if (needs('traffic')) detail.traffic = routerProbe.traffic;
-          }
-        }
-      }
-
-      const acs = await this.probeAcs(onu, wanPool);
+      const acs = await this.probeAcs(onu, wanPool, verifyChecks);
       if (needs('connreq')) detail.connreq = acs.connreq;
       if (needs('wan')) detail.wan = acs.wan;
       if (needs('dns')) detail.dns = acs.dns;
       if (needs('route')) detail.route = acs.route;
+      if (needs('lanBind')) detail.lanBind = acs.lanBind;
       if (detail.connreq) {
         credentialsOurs = detail.connreq.ok;
       }
@@ -519,57 +606,6 @@ export class OnuPostProvisionVerifyService {
       // TR-069 y aun así no responder ARP (el tráfico no sale del chasis).
       if (needs('uplinkVlan')) {
         detail.uplinkVlan = await this.probeUplinkVlan(schema, onu, wanPool);
-      }
-
-      // Traffic rápido: bytes ACS → WAN+ARP → count-only (sin dump lento).
-      if (needs('traffic')) {
-        if (acs.bytesOk) {
-          detail.traffic = {
-            ok: true,
-            message: acs.bytesOk,
-            meta: acs.wan.meta,
-          };
-        } else if (
-          typeof prevDetail.wan?.meta?.bytesRecv === 'number' &&
-          typeof acs.wan.meta?.bytesRecv === 'number' &&
-          acs.wan.meta.bytesRecv > prevDetail.wan.meta.bytesRecv
-        ) {
-          detail.traffic = {
-            ok: true,
-            message: 'bytes WAN crecieron',
-            meta: acs.wan.meta,
-          };
-        } else if (detail.arp?.ok && detail.wan?.ok) {
-          // CPE con IP correcta + ARP viva en el gateway = camino a internet listo.
-          detail.traffic = {
-            ok: true,
-            message: 'WAN Connected + ARP viva',
-            meta: {
-              ...(detail.arp.meta ?? {}),
-              ...(detail.wan.meta ?? {}),
-              via: 'arp+wan',
-            },
-          };
-        } else if (
-          detail.traffic &&
-          !detail.traffic.ok &&
-          wanPool?.routerId
-        ) {
-          const deviceRepo =
-            await this.tenantConnections.getNetworkDeviceRepository(schema);
-          const router = await deviceRepo.findOne({
-            where: { id: wanPool.routerId },
-          });
-          if (router) {
-            const slow = await this.probeRouter(
-              router,
-              onu.wanIp!,
-              prevDetail.traffic?.meta,
-              { includeConnections: true, arpOnly: false },
-            );
-            if (slow.traffic.ok) detail.traffic = slow.traffic;
-          }
-        }
       }
 
       if (
@@ -601,27 +637,26 @@ export class OnuPostProvisionVerifyService {
         }
       }
 
-      // ARP ausente / WAN / DNS: normalmente sólo se reempuja si ya tenemos el
-      // camino de connection_request (empujar con credenciales ajenas sólo
-      // alarga la cola). Excepción: las ONU con handler por modelo que "posee"
-      // la selección de WAN necesitan correr aunque el CPE no sea manejable —
-      // su provision rompe el deadlock (pre-carga credenciales + reinicia) y sin
-      // esto nunca se dispararía. También corrige LAN/SSID bind aunque WAN/DNS
-      // ya estén ok (isServiceWanApplied es idempotente y sale temprano).
+      // Checker: curar solo si probes fallan o (modelo ACS) hay gap real.
+      // Nunca forzar heal “porque ownsWan” si WAN/DNS/bind ya están OK —
+      // repushWanForVerify además no-op si gaps.serviceWanOk && carrier ok.
       const modelOwnsWan = !!healDriver?.ownsWanSelection?.({
         sn: onu.sn!,
         onuType: onu.onuType,
       });
-      const wanNeedsHeal =
-        canHeal &&
-        !!wanPool &&
-        (modelOwnsWan ||
-          usesHealOne ||
-          (needs('wan') && !detail.wan?.ok && !!detail.wan) ||
-          (needs('dns') && !detail.dns?.ok && !!detail.dns) ||
-          (needs('arp') && !detail.arp?.ok && !!detail.arp) ||
-          (needs('route') && !detail.route?.ok && !!detail.route));
-      if (wanNeedsHeal && (credentialsOurs || modelOwnsWan || usesHealOne)) {
+      const probeNeedsHeal =
+        (needs('wan') && !!detail.wan && !detail.wan.ok) ||
+        (needs('dns') && !!detail.dns && !detail.dns.ok) ||
+        (needs('route') && !!detail.route && !detail.route.ok) ||
+        (needs('lanBind') && !!detail.lanBind && !detail.lanBind.ok) ||
+        // Tráfico opcional: si WAN ok pero sin navegación, el heal puede
+        // empujar L2 (carrier) sin re-provisionar.
+        (modelOwnsWan &&
+          needs('traffic') &&
+          !!detail.traffic &&
+          !detail.traffic.ok);
+      const wanNeedsHeal = canHeal && !!wanPool && probeNeedsHeal;
+      if (wanNeedsHeal && (credentialsOurs || modelOwnsWan)) {
         const note = await this.tr069.repushWanForVerify(schema, onuId);
         if (note) healed.push(note);
         if (needs('route') && !detail.route?.ok) {
@@ -635,11 +670,24 @@ export class OnuPostProvisionVerifyService {
         const refreshed = await onuRepo.findOne({ where: { id: onuId } });
         if (refreshed) onu = refreshed;
       }
+
+      // Internet al final: ARP del gateway + destinos públicos / volumen WAN.
+      if (needs('traffic')) {
+        detail.traffic = await this.probeInternet(
+          schema,
+          onu,
+          wanPool,
+          acs,
+          prevDetail.traffic?.meta,
+        );
+      }
     }
 
     if (healed.length) detail.healed = healed;
 
-    // Marcar pasos net_* como completed cuando el probe pasó.
+    // net_*: sólo el probe actual (si ARP falló, no heredar verde viejo).
+    // ACS/OLT: conservar completed+history del provision/heal (no inventar
+    // ensure_service_wan / apply_service_spv ni borrar el script).
     const netCompleted: string[] = [];
     for (const id of [
       'arp',
@@ -648,19 +696,22 @@ export class OnuPostProvisionVerifyService {
       'dns',
       'route',
       'uplinkVlan',
+      'lanBind',
       'traffic',
     ] as const) {
       const c = detail[id];
       if (c?.ok) netCompleted.push(`net_${id}`);
     }
     const prevProgress = (onu.verifyDetail as OnuVerifyDetail)?.progress;
+    const prevAcsCompleted = (prevProgress?.completed ?? []).filter(
+      (id) => !id.startsWith('net_'),
+    );
     if (netCompleted.length || prevProgress) {
       detail.progress = {
         currentStepId: prevProgress?.currentStepId ?? null,
-        completed: [
-          ...new Set([...(prevProgress?.completed ?? []), ...netCompleted]),
-        ],
+        completed: [...new Set([...prevAcsCompleted, ...netCompleted])],
         notes: prevProgress?.notes ?? [],
+        history: prevProgress?.history ?? [],
         updatedAt: new Date().toISOString(),
       };
     }
@@ -676,10 +727,12 @@ export class OnuPostProvisionVerifyService {
     // Una curación debe tener al menos un chequeo posterior para probar si
     // prendió. Incluso con la ventana vencida, se permiten los tres intentos;
     // recién el tick siguiente al tercero puede cerrar en fail.
-    const windowExpired = shouldCloseVerifyWindow({
-      windowExpired: rawWindowExpired,
-      healingApplied: healed.length > 0,
-    });
+    const windowExpired = opts.manual
+      ? rawWindowExpired
+      : shouldCloseVerifyWindow({
+          windowExpired: rawWindowExpired,
+          healingApplied: healed.length > 0,
+        });
     const next = skipAcs
       ? 'check'
       : decideVerifyOutcome({
@@ -777,6 +830,52 @@ export class OnuPostProvisionVerifyService {
     return new RouterOsApiClient(device.mgmtHost, port, useTls, 30_000);
   }
 
+  private async probeInternet(
+    schema: string,
+    onu: Onu,
+    wanPool: { routerId?: string | null } | null,
+    acs: { wan: OnuVerifyCheckResult },
+    prevMeta?: Record<string, unknown>,
+  ): Promise<OnuVerifyCheckResult> {
+    const bytesRecv =
+      typeof acs.wan.meta?.bytesRecv === 'number' ? acs.wan.meta.bytesRecv : 0;
+    const prevBytes =
+      typeof prevMeta?.bytesRecv === 'number' ? prevMeta.bytesRecv : null;
+    let publicDstCount = 0;
+    let connCount = 0;
+    if (wanPool?.routerId && onu.wanIp?.trim()) {
+      const deviceRepo =
+        await this.tenantConnections.getNetworkDeviceRepository(schema);
+      const router = await deviceRepo.findOne({
+        where: { id: wanPool.routerId },
+      });
+      if (router) {
+        const probe = await this.probeRouter(router, onu.wanIp, prevMeta, {
+          includeConnections: true,
+        });
+        publicDstCount =
+          typeof probe.traffic.meta?.publicDstCount === 'number'
+            ? probe.traffic.meta.publicDstCount
+            : 0;
+        connCount =
+          typeof probe.traffic.meta?.connCount === 'number'
+            ? probe.traffic.meta.connCount
+            : 0;
+      }
+    }
+    const judged = assessInternetEvidence({
+      bytesRecv,
+      prevBytesRecv: prevBytes,
+      publicDstCount,
+      connCount,
+    });
+    return {
+      ok: judged.ok,
+      message: judged.message,
+      meta: judged.meta,
+    };
+  }
+
   private async probeRouter(
     router: NetworkDevice,
     wanIp: string,
@@ -849,15 +948,15 @@ export class OnuPostProvisionVerifyService {
         };
       }
 
-      // count-only: mucho más rápido que volcar todas las conexiones.
-      const CONN_PRINT_MS = 3_000;
+      const CONN_PRINT_MS = 4_000;
       let count = 0;
+      let publicDstCount = 0;
       try {
         const replies = await Promise.race([
           api.write([
             '/ip/firewall/connection/print',
             `?src-address=${wanIp}`,
-            '=count-only=',
+            '=.proplist=dst-address,orig-dst-address',
           ]),
           new Promise<never>((_, reject) =>
             setTimeout(
@@ -866,46 +965,30 @@ export class OnuPostProvisionVerifyService {
             ),
           ),
         ]);
-        const done = replies.find((r) => r.type === '!done');
-        const ret = done?.attrs?.['ret'] ?? done?.attrs?.['=ret'];
-        count = Number(ret);
-        if (!Number.isFinite(count)) {
-          // Fallback: algunos RouterOS no respetan count-only con filtro.
-          const rows = reRows(replies).filter((c) =>
-            String(c['src-address'] || '').startsWith(wanIp),
-          );
-          count = rows.length;
-        }
+        const rows = reRows(replies);
+        const dsts = rows.map(
+          (c) => c['dst-address'] || c['orig-dst-address'] || '',
+        );
+        count = rows.length;
+        publicDstCount = countPublicDsts(dsts);
       } catch {
         return {
           arp,
           traffic: {
             ok: false,
             message: 'conexiones: timeout',
+            meta: { connCount: 0, publicDstCount: 0 },
           },
         };
       }
-      const prevCount =
-        typeof prevTrafficMeta?.connCount === 'number'
-          ? prevTrafficMeta.connCount
-          : 0;
-      const traffic: OnuVerifyCheckResult =
-        count > 0
-          ? {
-              ok: true,
-              message: `${count} conexiones en ${router.name}`,
-              meta: { connCount: count },
-            }
-          : {
-              ok: false,
-              message:
-                prevCount > 0
-                  ? 'sin conexiones ahora'
-                  : 'sin conexiones activas',
-              meta: { connCount: 0 },
-            };
-
-      return { arp, traffic };
+      return {
+        arp,
+        traffic: {
+          ok: publicDstCount > 0,
+          message: `${count} conn · ${publicDstCount} destinos públicos`,
+          meta: { connCount: count, publicDstCount },
+        },
+      };
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       return {
@@ -926,11 +1009,13 @@ export class OnuPostProvisionVerifyService {
       dns1: string | null;
       dns2: string | null;
     } | null,
+    verifyChecks: Record<OnuVerifyCheckId, OnuVerifyCheckMode>,
   ): Promise<{
     connreq: OnuVerifyCheckResult;
     wan: OnuVerifyCheckResult;
     dns: OnuVerifyCheckResult;
     route: OnuVerifyCheckResult;
+    lanBind: OnuVerifyCheckResult;
     bytesOk: string | null;
   }> {
     if (!onu.sn?.trim()) {
@@ -939,6 +1024,7 @@ export class OnuPostProvisionVerifyService {
         wan: { ok: false, message: 'sin SN' },
         dns: { ok: false, message: 'sin SN' },
         route: { ok: false, message: 'sin SN' },
+        lanBind: { ok: false, message: 'sin SN' },
         bytesOk: null,
       };
     }
@@ -952,6 +1038,7 @@ export class OnuPostProvisionVerifyService {
           wan: { ok: false, message: 'aún no Informó al ACS' },
           dns: { ok: false, message: 'aún no Informó al ACS' },
           route: { ok: false, message: 'aún no Informó al ACS' },
+          lanBind: { ok: false, message: 'aún no Informó al ACS' },
           bytesOk: null,
         };
       }
@@ -974,7 +1061,33 @@ export class OnuPostProvisionVerifyService {
               : 'credenciales vacías',
             meta: { username: user },
           }
-        : await this.checkConnectionRequest(device, onu.sn);
+        : verifyChecks.connreq === 'optional'
+          ? {
+              ok: true,
+              message: CONN_REQ_USERNAME,
+              meta: { username: user, skippedWake: true },
+            }
+          : await this.checkConnectionRequest(device, onu.sn);
+
+      const informRaw = Number(
+        strVal(
+          genieGet(
+            device,
+            `${detectDataModelRoot(device)}.ManagementServer.PeriodicInformInterval`,
+          ),
+        ),
+      );
+      const informS =
+        Number.isFinite(informRaw) && informRaw > 0 ? informRaw : null;
+      if (connreq.ok) {
+        connreq.message = informS
+          ? `${connreq.message} · inform ${informS}s`
+          : `${connreq.message} · inform ${CONN_REQ_INFORM_INTERVAL_S}s`;
+        connreq.meta = {
+          ...(connreq.meta ?? {}),
+          informIntervalS: informS ?? CONN_REQ_INFORM_INTERVAL_S,
+        };
+      }
 
       const acsModel =
         strVal(genieGet(device, 'InternetGatewayDevice.DeviceInfo.ModelName')) ??
@@ -993,6 +1106,7 @@ export class OnuPostProvisionVerifyService {
           wan: { ok: false, message: 'sin WAN de servicio en el árbol TR-069' },
           dns: { ok: false, message: 'sin WAN de servicio en el árbol TR-069' },
           route: { ok: false, message: 'sin WAN de servicio en el árbol TR-069' },
+          lanBind: { ok: false, message: 'sin WAN de servicio en el árbol TR-069' },
           bytesOk: null,
         };
       }
@@ -1005,6 +1119,7 @@ export class OnuPostProvisionVerifyService {
           },
           dns: { ok: false, message: 'sólo existe la WAN de gestión' },
           route: { ok: false, message: 'sólo existe la WAN de gestión' },
+          lanBind: { ok: false, message: 'sólo existe la WAN de gestión' },
           bytesOk: null,
         };
       }
@@ -1039,11 +1154,6 @@ export class OnuPostProvisionVerifyService {
       if (wanPool && gw && gw !== wanPool.gateway) {
         problems.push(`gw=${gw}`);
       }
-      // Un NAT desconocido no es un NAT apagado: hay modelos que no publican la
-      // hoja hasta que el ACS descubre su subárbol.
-      if (nat === false || (found.model === 'tr098' && nat !== true)) {
-        problems.push('NAT off');
-      }
       if (wanPool && Number.isFinite(vlan) && vlan !== wanPool.vlanId) {
         problems.push(`vlan=${vlan} (esperada ${wanPool.vlanId})`);
       } else if (wanPool && !Number.isFinite(vlan)) {
@@ -1061,7 +1171,7 @@ export class OnuPostProvisionVerifyService {
         problems.length === 0
           ? {
               ok: true,
-              message: `${ip} vlan=${vlan} nat=${nat ?? 'n/d'}`,
+              message: `${ip} vlan=${vlan}`,
               meta: {
                 bytesSent,
                 bytesRecv,
@@ -1134,7 +1244,27 @@ export class OnuPostProvisionVerifyService {
         },
       };
 
-      return { connreq, wan, dns: dnsCheck, route, bytesOk };
+      const bind = assessServiceLanBind(device, conn);
+      const natOff =
+        nat === false || (found.model === 'tr098' && nat !== true);
+      const bindParts: string[] = [];
+      if (!bind.ok && !bind.skip) bindParts.push(bind.message);
+      if (natOff) bindParts.push('NAT off');
+      else if (nat === true) bindParts.push('NAT on');
+      const lanBind: OnuVerifyCheckResult = {
+        ok: (bind.ok || bind.skip) && !natOff,
+        message: bindParts.length
+          ? bindParts.join(' · ')
+          : bind.message,
+        meta: {
+          skip: bind.skip,
+          current: bind.current,
+          healCount: bind.heal?.length ?? 0,
+          nat,
+        },
+      };
+
+      return { connreq, wan, dns: dnsCheck, route, lanBind, bytesOk };
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       return {
@@ -1142,6 +1272,7 @@ export class OnuPostProvisionVerifyService {
         wan: { ok: false, message: `ACS: ${msg}` },
         dns: { ok: false, message: `ACS: ${msg}` },
         route: { ok: false, message: `ACS: ${msg}` },
+        lanBind: { ok: false, message: `ACS: ${msg}` },
         bytesOk: null,
       };
     }

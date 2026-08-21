@@ -1236,7 +1236,12 @@ export function MufaViewModal({
   const body = (
     <>
         {!embedded && (
-        <div className="flex shrink-0 items-center justify-between border-b border-[var(--border)] px-4 py-3 sm:px-5">
+        <div
+          className={[
+            'flex shrink-0 items-center justify-between border-b border-[var(--border)] px-4 py-3 sm:px-5',
+            mobile ? 'modal-safe-header' : '',
+          ].join(' ')}
+        >
           <div className="flex items-center gap-3">
             <MapElementTypeIcon type={isNap ? 'nap' : 'mufa'} size={40} />
             <div>
@@ -1580,7 +1585,12 @@ export function MufaViewModal({
           </section>
         </div>
 
-        <div className="flex shrink-0 items-center justify-between gap-3 border-t border-[var(--border)] px-4 py-2.5 text-xs text-[var(--text-muted)]">
+        <div
+          className={[
+            'flex shrink-0 items-center justify-between gap-3 border-t border-[var(--border)] px-4 py-2.5 text-xs text-[var(--text-muted)]',
+            mobile ? 'modal-safe-footer' : '',
+          ].join(' ')}
+        >
           <span>
             {hint ?? 'Arrastra pelo → pelo o haz click en dos pelos'}
           </span>

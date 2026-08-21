@@ -4,7 +4,14 @@ import { apiFetch } from '../lib/api'
 import type { UncfgOnu, UncfgResponse } from '../lib/onu-connected'
 import { OnuAuthorizeModal } from './OnuAuthorizeModal'
 import { OnuDeniedModal } from './OnuDeniedModal'
-import { OnuSuspendedModal } from './OnuSuspendedModal'
+import { OnuPonMovedModal } from './OnuPonMovedModal'
+import {
+  DesktopTableWrap,
+  MobileList,
+  MobileListCard,
+  MobileListEmpty,
+  MobileListMeta,
+} from './MobileList'
 import { useNotify } from './NotifyProvider'
 
 const selectClass =
@@ -17,7 +24,7 @@ export function OnuOrphansPanel({ canWrite }: { canWrite: boolean }) {
   const [msg, setMsg] = useState<string | null>(null)
   const [selected, setSelected] = useState<UncfgOnu | null>(null)
   const [showDenied, setShowDenied] = useState(false)
-  const [showSuspended, setShowSuspended] = useState(false)
+  const [showPonMoved, setShowPonMoved] = useState(false)
 
   const uncfgQuery = useQuery({
     queryKey: ['app', 'onus', 'uncfg', oltId || 'all'],
@@ -73,7 +80,8 @@ export function OnuOrphansPanel({ canWrite }: { canWrite: boolean }) {
   const olts = data?.olts ?? []
   const errors = data?.errors ?? []
   const deniedCount = data?.deniedCount ?? 0
-  const suspendedCount = data?.suspendedCount ?? 0
+  const ponMoved = data?.ponMoved ?? []
+  const ponMovedCount = data?.ponMovedCount ?? ponMoved.length
   const loading = uncfgQuery.isLoading || refreshMutation.isPending
 
   return (
@@ -112,13 +120,13 @@ export function OnuOrphansPanel({ canWrite }: { canWrite: boolean }) {
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
-            onClick={() => setShowSuspended(true)}
+            onClick={() => setShowPonMoved(true)}
             className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm font-medium hover:bg-[var(--bg)]"
           >
-            Suspendidas
-            {suspendedCount > 0 ? (
+            PON cambiado
+            {ponMovedCount > 0 ? (
               <span className="ml-1.5 rounded bg-amber-600/20 px-1.5 text-xs text-amber-400">
-                {suspendedCount}
+                {ponMovedCount}
               </span>
             ) : null}
           </button>
@@ -141,8 +149,10 @@ export function OnuOrphansPanel({ canWrite }: { canWrite: boolean }) {
         ONUs en la OLT pendientes de autorización (
         <span className="font-mono text-xs">show … onu uncfg</span>). El modelo
         sale del ACS cuando la ONU ya Informó (ProductClass). Orden: más
-        reciente → más antigua. Denegar las oculta en Bloqueadas. Las
-        suspendidas (admin disable) van a Suspendidas, no aquí.
+        reciente → más antigua. Denegar las oculta en Bloqueadas. Si el SN ya
+        está en Conectadas pero en otro PON, aparece en PON cambiado. Las
+        deshabilitadas en la OLT se quedan en Conectadas (estado Suspendida), no
+        aquí.
       </p>
 
       {msg && (
@@ -172,7 +182,89 @@ export function OnuOrphansPanel({ canWrite }: { canWrite: boolean }) {
         </ul>
       )}
 
-      <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
+      <MobileList>
+        {loading && onus.length === 0 ? (
+          <p className="text-sm text-[var(--text-muted)]">Consultando OLT…</p>
+        ) : onus.length === 0 ? (
+          <MobileListEmpty>
+            No hay ONUs huérfanas. Pulsa Refrescar para consultar la OLT.
+          </MobileListEmpty>
+        ) : (
+          onus.map((o) => (
+            <MobileListCard key={`${o.oltId}:${o.oltIf}:${o.sn}`}>
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="truncate font-mono text-sm font-semibold">
+                    {o.sn}
+                  </p>
+                  <p className="truncate text-xs text-[var(--text-muted)]">
+                    {o.oltName} · {o.oltIf}
+                  </p>
+                </div>
+                <span className="shrink-0 text-xs text-[var(--text-muted)]">
+                  {o.model ||
+                    (o.vendor && o.vendor !== 'unknown'
+                      ? `${o.vendor}`
+                      : '—')}
+                </span>
+              </div>
+              <MobileListMeta>
+                <span>{o.state ?? '—'}</span>
+                {o.suggestedOnuId != null && (
+                  <>
+                    <span>·</span>
+                    <span>ID sug. {o.suggestedOnuId}</span>
+                  </>
+                )}
+                {o.inConnected ? (
+                  <>
+                    <span>·</span>
+                    <span className="text-amber-400">en inventario</span>
+                  </>
+                ) : null}
+                {o.firstSeenAt ? (
+                  <>
+                    <span>·</span>
+                    <span>{new Date(o.firstSeenAt).toLocaleString()}</span>
+                  </>
+                ) : null}
+              </MobileListMeta>
+              {canWrite ? (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setSelected(o)}
+                    className="rounded-md bg-[var(--accent)] px-2.5 py-1 text-xs font-medium text-white hover:bg-[var(--accent-hover)]"
+                  >
+                    Autorizar
+                  </button>
+                  <button
+                    type="button"
+                    disabled={denyMutation.isPending}
+                    onClick={() => {
+                      void confirm(
+                        `¿Denegar SN ${o.sn}?\n\nNo se autorizará y desaparecerá de Huérfanas. Puedes verla en Bloqueadas y quitarla después.`,
+                        {
+                          title: 'Denegar ONU',
+                          danger: true,
+                          confirmLabel: 'Denegar',
+                        },
+                      ).then((ok) => {
+                        if (ok) denyMutation.mutate(o)
+                      })
+                    }}
+                    className="rounded-md border border-red-500/40 px-2.5 py-1 text-xs font-medium text-red-400 hover:bg-red-500/10 disabled:opacity-60"
+                  >
+                    Denegar
+                  </button>
+                </div>
+              ) : null}
+            </MobileListCard>
+          ))
+        )}
+      </MobileList>
+
+      <DesktopTableWrap>
         <table className="w-full min-w-[900px] text-left text-sm">
           <thead className="border-b border-[var(--border)] bg-[var(--bg)] text-xs text-[var(--text-muted)]">
             <tr>
@@ -297,7 +389,7 @@ export function OnuOrphansPanel({ canWrite }: { canWrite: boolean }) {
             )}
           </tbody>
         </table>
-      </div>
+      </DesktopTableWrap>
 
       {data?.probedAt ? (
         <p className="text-xs text-[var(--text-muted)]">
@@ -325,8 +417,20 @@ export function OnuOrphansPanel({ canWrite }: { canWrite: boolean }) {
       {showDenied && (
         <OnuDeniedModal onClose={() => setShowDenied(false)} />
       )}
-      {showSuspended && (
-        <OnuSuspendedModal onClose={() => setShowSuspended(false)} />
+
+      {showPonMoved && (
+        <OnuPonMovedModal
+          rows={ponMoved}
+          loading={loading && !data}
+          canWrite={canWrite}
+          onClose={() => setShowPonMoved(false)}
+          onReleased={(sn) => {
+            setMsg(
+              `SN ${sn} eliminado de Conectadas — debería aparecer en Huérfanas al refrescar`,
+            )
+            void refreshMutation.mutateAsync()
+          }}
+        />
       )}
     </div>
   )

@@ -156,6 +156,14 @@ export function dismissPushPrompt() {
   }
 }
 
+export function clearPushPromptDismiss() {
+  try {
+    localStorage.removeItem(PUSH_PROMPT_DISMISS_KEY)
+  } catch {
+    // ignore
+  }
+}
+
 export function isAdminPwaInstalled() {
   if (isAdminPwaSession()) return true
   try {
@@ -261,8 +269,8 @@ export function applyTechPwaManifest(branding: PlatformBranding) {
       scope: `${origin}/movil`,
       display: 'standalone',
       orientation: 'portrait-primary',
-      background_color: '#0c1219',
-      theme_color: '#0c1219',
+      background_color: '#0b1220',
+      theme_color: '#0f1726',
       lang: 'es',
       dir: 'ltr',
       icons: [
@@ -280,7 +288,7 @@ export function applyTechPwaManifest(branding: PlatformBranding) {
         },
       ],
     },
-    '#0c1219',
+    '#0f1726',
   )
 }
 
@@ -310,8 +318,8 @@ export function applyAdminPwaManifest(branding: PlatformBranding) {
       scope: `${origin}/`,
       display: 'standalone',
       orientation: 'any',
-      background_color: '#0c1219',
-      theme_color: '#0c1219',
+      background_color: '#0b1220',
+      theme_color: '#0f1726',
       lang: 'es',
       dir: 'ltr',
       icons: [
@@ -329,7 +337,7 @@ export function applyAdminPwaManifest(branding: PlatformBranding) {
         },
       ],
     },
-    '#0c1219',
+    '#0f1726',
   )
 }
 

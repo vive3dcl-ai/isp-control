@@ -10,6 +10,12 @@ import { UserAccountMenu } from './UserAccountMenu'
 import { BrandLogo } from './BrandLogo'
 import { useBranding } from '../branding/BrandingContext'
 import { isAdminPwaInstalled, isAdminPwaSession } from '../lib/pwa'
+import { useSubscriptionAccess } from '../auth/useSubscriptionAccess'
+import { useAsistenteChatOptional } from '../asistente/AsistenteChatContext'
+import { AsistenteHeaderButton } from '../asistente/AsistenteHeaderButton'
+
+const SUBSCRIPTION_LOCK_TO =
+  '/app/settings?tab=empresa&section=suscripcion'
 
 export type AppShellVariant = 'admin' | 'tenant'
 
@@ -26,6 +32,7 @@ const adminNav: NavItem[] = [
   { to: '/admin/tenant-users', label: 'Clientes Tenant' },
   { to: '/admin/tickets', label: 'Tickets', showTicketBadge: true },
   { to: '/admin/modules', label: 'Módulos' },
+  { to: '/admin/ai', label: 'IA' },
   { to: '/admin/payment-methods', label: 'Métodos de pago' },
   { to: '/admin/onus', label: 'ONUs' },
   { to: '/admin/settings', label: 'Ajustes' },
@@ -34,6 +41,7 @@ const adminNav: NavItem[] = [
 const tenantNavBase: NavItem[] = [
   { to: '/app', label: 'Dashboard', end: true },
   { to: '/app/clients', label: 'Clientes' },
+  { to: '/app/accounting', label: 'Contabilidad' },
   { to: '/app/calendar', label: 'Calendario' },
   { to: '/app/users', label: 'Usuarios' },
   { to: '/app/topology', label: 'Topología' },
@@ -61,14 +69,29 @@ export function PanelShell({
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [exiting, setExiting] = useState(false)
   const summaryQuery = useNotificationSummary(variant)
+  const asistente = useAsistenteChatOptional()
+  const { blocked: subscriptionLocked } = useSubscriptionAccess()
 
   const hideTechNav = isAdminPwaSession() || isAdminPwaInstalled()
   const links = useMemo(() => {
     if (variant === 'admin') return adminNav
+    if (subscriptionLocked) {
+      return [
+        {
+          to: SUBSCRIPTION_LOCK_TO,
+          label: 'Suscripción',
+        },
+      ]
+    }
     if (!hideTechNav) return tenantNavBase
     return tenantNavBase.filter((l) => l.to !== '/movil')
-  }, [variant, hideTechNav])
+  }, [variant, hideTechNav, subscriptionLocked])
   const ticketBadge = summaryQuery.data?.ticketBadge ?? false
+  const showAsistenteNav =
+    variant === 'tenant' &&
+    !subscriptionLocked &&
+    !!asistente?.moduleEnabled &&
+    !asistente.moduleLoading
 
   async function onLogout() {
     await logout()
@@ -102,7 +125,7 @@ export function PanelShell({
       {/* Sidebar — fixed; no scrollea con el contenido */}
       <aside
         className={[
-          'fixed inset-y-0 left-0 z-40 flex h-dvh w-[var(--sidebar-width)] flex-col border-r border-[var(--border)] bg-[var(--bg-sidebar)] transition-transform lg:translate-x-0',
+          'app-shell-sidebar fixed inset-y-0 left-0 z-40 flex h-dvh w-[var(--sidebar-width)] flex-col border-r border-[var(--border)] bg-[var(--bg-sidebar)] transition-transform lg:translate-x-0',
           sidebarOpen ? 'translate-x-0' : '-translate-x-full',
         ].join(' ')}
       >
@@ -138,6 +161,27 @@ export function PanelShell({
               )}
             </NavLink>
           ))}
+          {showAsistenteNav && (
+            <button
+              type="button"
+              onClick={() => {
+                if (asistente?.minimized) asistente.expand()
+                else asistente?.setOpen(true)
+                setSidebarOpen(false)
+              }}
+              className={[
+                'flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition lg:hidden',
+                asistente?.open || asistente?.minimized
+                  ? 'bg-[var(--accent)]/15 font-medium text-[var(--accent)]'
+                  : 'text-[var(--text-muted)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text)]',
+              ].join(' ')}
+            >
+              <span className="min-w-0 flex-1 truncate">Asistente</span>
+              <span aria-hidden className="text-[var(--accent)]">
+                ✦
+              </span>
+            </button>
+          )}
         </nav>
 
         <div className="border-t border-[var(--border)] p-3">
@@ -154,8 +198,8 @@ export function PanelShell({
 
       {/* Main column — margen para el sidebar fijo en desktop */}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col lg:ml-[var(--sidebar-width)]">
-        <header className="relative z-50 flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[var(--border)] bg-[var(--bg-header)]/95 px-4 backdrop-blur">
-          <div className="flex min-w-0 items-center gap-3">
+        <header className="app-shell-header relative z-50 flex shrink-0 items-center justify-between gap-3 border-b border-[var(--border)] bg-[var(--bg-header)]/95 backdrop-blur">
+          <div className="flex h-14 min-w-0 flex-1 items-center gap-3">
             <button
               type="button"
               className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-[var(--border)] text-[var(--text)] lg:hidden"
@@ -185,7 +229,7 @@ export function PanelShell({
             </div>
           </div>
 
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="flex h-14 shrink-0 items-center gap-2">
             {isImpersonating && variant === 'tenant' && (
               <button
                 type="button"
@@ -196,7 +240,10 @@ export function PanelShell({
                 {exiting ? 'Volviendo…' : 'Volver a admin'}
               </button>
             )}
-            <NotificationBell variant={variant} />
+            {variant === 'tenant' && !subscriptionLocked && (
+              <AsistenteHeaderButton />
+            )}
+            {!subscriptionLocked && <NotificationBell variant={variant} />}
             <UserAccountMenu
               displayName={user?.name || user?.email || 'Cuenta'}
               subtitle={
@@ -204,18 +251,21 @@ export function PanelShell({
                   ? `via ${user.impersonatorEmail}`
                   : user?.email
               }
-              canEditAccount={!isImpersonating}
+              canEditAccount={!isImpersonating && !subscriptionLocked}
               onLogout={onLogout}
             />
           </div>
         </header>
 
-        <main className="app-shell-main px-4 py-4 sm:px-6 sm:py-6">
-          {variant === 'tenant' && <WhatsAppAttentionBanner />}
+        <main className="app-shell-main app-shell-main-x py-4 pb-[max(1rem,var(--safe-bottom))] lg:py-6 lg:pb-6">
+          {variant === 'tenant' && !subscriptionLocked && (
+            <WhatsAppAttentionBanner />
+          )}
           {children}
         </main>
 
-        <footer className="shrink-0 border-t border-[var(--border)] bg-[var(--bg-header)] px-4 py-3 sm:px-6">
+        {/* Solo desktop: en móvil/tablet el branding ocupa espacio útil de la app */}
+        <footer className="app-shell-footer hidden shrink-0 border-t border-[var(--border)] bg-[var(--bg-header)] py-3 lg:block">
           <div className="flex flex-col gap-1 text-xs text-[var(--text-muted)] sm:flex-row sm:items-center sm:justify-between">
             <span>{branding.footerText}</span>
             <span>

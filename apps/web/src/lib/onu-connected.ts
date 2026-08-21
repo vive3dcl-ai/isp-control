@@ -142,6 +142,7 @@ export type ConnectedOnusResponse = {
   errors: Array<{ oltId: string; oltName: string; error: string }>
   total: number
   online: number
+  suspended?: number
   message?: string | null
   fromDatabase?: boolean
 }
@@ -234,7 +235,15 @@ export type ConnectedOnuDetail = ConnectedOnu & {
   }>
   voipSupported: boolean | null
   catvSupported: boolean | null
-  speedProfile: { download: string | null; upload: string | null }
+  speedProfile: {
+    download: string | null
+    upload: string | null
+    name?: string | null
+    oltUpProfile?: string | null
+    actualUpProfile?: string | null
+    dbaOk?: boolean | null
+    dbaMessage?: string | null
+  }
   imageUrl: string | null
 }
 
@@ -342,9 +351,32 @@ export type UncfgResponse = {
   total: number
   deniedCount?: number
   suspendedCount?: number
+  /** SN en uncfg cuya ficha Conectadas apunta a otro PON/OLT. */
+  ponMoved?: PonMovedOnu[]
+  ponMovedCount?: number
   rawUncfg?: number
   alsoInConnected?: number
   probedAt: string
+}
+
+export type PonMovedOnu = {
+  sn: string
+  inventoryOnuId: string
+  inventoryOltId: string
+  inventoryOltName: string
+  inventoryOnuIf: string
+  inventoryBoard: string
+  inventoryPort: string
+  inventoryAdminState: string | null
+  inventoryOnline: boolean
+  inventoryName: string | null
+  uncfgOltId: string
+  uncfgOltName: string
+  uncfgOltIf: string
+  uncfgBoard: string
+  uncfgPort: string
+  uncfgState: string | null
+  ponType: string
 }
 
 export type SuspendedOnu = {
@@ -402,6 +434,15 @@ export type AuthorizeOnuResponse = {
     typeName?: string
     model?: string
   }>
+}
+
+export function isOnuSuspended(onu: {
+  adminState?: string | null
+  status?: string | null
+}): boolean {
+  return (
+    onu.status === 'disabled' || /disable/i.test(onu.adminState ?? '')
+  )
 }
 
 export function signalBand(

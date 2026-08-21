@@ -83,6 +83,12 @@ export {
   isZteHguModel,
 } from './infra/inspect-generic-playbook';
 export { ensureGenericServiceWan } from './infra/ensure-generic-service-wan';
+export {
+  findServiceWanVlanMismatch,
+  healServiceWanVlanToPanel,
+  preferWanVlanHealMode,
+} from './infra/service-wan-vlan';
+export { assessServiceLanBind } from './infra/lan-bind';
 export { assessServiceRoute } from './models/generic-zte';
 export {
   HG8145X6_INFORM_INTERVAL_S,

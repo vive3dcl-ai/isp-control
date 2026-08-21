@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { apiFetch } from '../lib/api'
 import { canWriteCrm, clientDisplayName, type Client } from '../lib/crm'
@@ -11,11 +11,23 @@ import {
   matchesSearch,
 } from '../components/ListSearchInput'
 
+function isSuspendedClient(client: Client): boolean {
+  return (
+    !client.isLead &&
+    client.isActive &&
+    !!client.hasSuspendedService
+  )
+}
+
 export function ClientsPage() {
   const { user } = useAuth()
   const canWrite = canWriteCrm(user?.tenantRole)
   const [createOpen, setCreateOpen] = useState(false)
   const [search, setSearch] = useState('')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const statusFilter = searchParams.get('status') === 'suspended'
+    ? 'suspended'
+    : ''
 
   const clientsQuery = useQuery({
     queryKey: ['app', 'clients'],
@@ -34,20 +46,48 @@ export function ClientsPage() {
     return zonesQuery.data?.find((z) => z.id === zoneId)?.name ?? '—'
   }
 
-  const clients = (clientsQuery.data ?? [])
-    .filter((client) => client.isActive)
-    .filter((c) =>
-      matchesSearch(
-        search,
-        clientDisplayName(c),
-        c.email,
-        c.phone,
-        c.city,
-        c.companyName,
-        zoneName(c.zoneId),
-        c.isLead ? 'lead' : 'activo',
-      ),
+  const clients = useMemo(() => {
+    const zoneById = new Map(
+      (zonesQuery.data ?? []).map((z) => [z.id, z.name] as const),
     )
+    const zoneLabel = (zoneId: string | null | undefined) => {
+      if (!zoneId) return '—'
+      return zoneById.get(zoneId) ?? '—'
+    }
+
+    return (clientsQuery.data ?? [])
+      .filter((client) => client.isActive)
+      .filter((c) =>
+        statusFilter !== 'suspended' ? true : isSuspendedClient(c),
+      )
+      .filter((c) =>
+        matchesSearch(
+          search,
+          clientDisplayName(c),
+          c.email,
+          c.phone,
+          c.city,
+          c.companyName,
+          zoneLabel(c.zoneId),
+          c.isLead ? 'lead' : isSuspendedClient(c) ? 'suspendido' : 'activo',
+        ),
+      )
+  }, [clientsQuery.data, search, statusFilter, zonesQuery.data])
+
+  const clearStatusFilter = () => {
+    const next = new URLSearchParams(searchParams)
+    next.delete('status')
+    setSearchParams(next, { replace: true })
+  }
+
+  const emptyHint = (() => {
+    if (search.trim() || statusFilter) {
+      return 'Sin resultados para esa búsqueda.'
+    }
+    return canWrite
+      ? 'Sin clientes. Toca + para crear el primero.'
+      : 'Sin clientes todavía.'
+  })()
 
   return (
     <PanelShell
@@ -56,12 +96,26 @@ export function ClientsPage() {
       variant="tenant"
     >
       <div className="mb-4 flex flex-col gap-3 md:mb-6 md:flex-row md:items-center md:justify-between">
-        <ListSearchInput
-          value={search}
-          onChange={setSearch}
-          placeholder="Buscar cliente, email, ciudad…"
-          className="md:max-w-sm"
-        />
+        <div className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:items-center">
+          <ListSearchInput
+            value={search}
+            onChange={setSearch}
+            placeholder="Buscar cliente, email, ciudad…"
+            className="md:max-w-sm"
+          />
+          {statusFilter === 'suspended' && (
+            <button
+              type="button"
+              onClick={clearStatusFilter}
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs font-medium text-amber-300 hover:bg-amber-500/15"
+            >
+              Suspendidos
+              <span aria-hidden className="text-amber-200/80">
+                ×
+              </span>
+            </button>
+          )}
+        </div>
         {canWrite && (
           <button
             type="button"
@@ -86,11 +140,7 @@ export function ClientsPage() {
         )}
         {!clientsQuery.isLoading && clients.length === 0 && (
           <p className="rounded-xl border border-dashed border-[var(--border)] px-4 py-10 text-center text-sm text-[var(--text-muted)]">
-            {search.trim()
-              ? 'Sin resultados para esa búsqueda.'
-              : canWrite
-                ? 'Sin clientes. Toca + para crear el primero.'
-                : 'Sin clientes todavía.'}
+            {emptyHint}
           </p>
         )}
         {clients.map((c) => (
@@ -166,7 +216,7 @@ export function ClientsPage() {
                   colSpan={6}
                   className="px-4 py-6 text-center text-[var(--text-muted)]"
                 >
-                  {search.trim()
+                  {search.trim() || statusFilter
                     ? 'Sin resultados para esa búsqueda.'
                     : 'No hay clientes todavía.'}
                 </td>
@@ -210,7 +260,7 @@ export function ClientsPage() {
           type="button"
           onClick={() => setCreateOpen(true)}
           aria-label="Nuevo cliente"
-          className="fixed bottom-20 right-5 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-[var(--accent)] text-white shadow-lg shadow-black/25 hover:bg-[var(--accent-hover)] md:hidden"
+          className="app-fab-mobile fixed z-40 flex h-14 w-14 items-center justify-center rounded-full bg-[var(--accent)] text-white shadow-lg shadow-black/25 hover:bg-[var(--accent-hover)] md:hidden"
         >
           <svg
             width="28"
@@ -240,16 +290,23 @@ function StatusBadge({ client }: { client: Client }) {
       </span>
     )
   }
-  if (client.isActive) {
+  if (!client.isActive) {
     return (
-      <span className="inline-flex shrink-0 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-medium text-emerald-300">
-        Activo
+      <span className="inline-flex shrink-0 rounded-full bg-zinc-500/15 px-2 py-0.5 text-[10px] font-medium text-zinc-400">
+        Archivado
+      </span>
+    )
+  }
+  if (client.hasSuspendedService) {
+    return (
+      <span className="inline-flex shrink-0 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-300">
+        Suspendido
       </span>
     )
   }
   return (
-    <span className="inline-flex shrink-0 rounded-full bg-zinc-500/15 px-2 py-0.5 text-[10px] font-medium text-zinc-400">
-      Archivado
+    <span className="inline-flex shrink-0 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-medium text-emerald-300">
+      Activo
     </span>
   )
 }

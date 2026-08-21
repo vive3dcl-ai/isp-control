@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { apiFetch } from '../lib/api'
+import { buildNotificationHref } from '../lib/notification-nav'
 import {
   enablePushNotifications,
   pushPermission,
@@ -24,6 +25,7 @@ export type AppNotificationItem = {
   readAt: string | null
   createdAt: string
   type: string
+  meta?: Record<string, unknown>
 }
 
 function formatRelative(iso: string) {
@@ -159,7 +161,7 @@ export function NotificationBell({
           className={[
             'z-[60] overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] shadow-lg',
             // Móvil: panel fijo centrado bajo el header (no se sale de pantalla).
-            'fixed left-1/2 top-[calc(env(safe-area-inset-top,0px)+3.5rem)] w-[min(22rem,calc(100vw-1.5rem))] -translate-x-1/2',
+            'fixed left-1/2 top-[calc(var(--safe-top)+3.5rem)] w-[min(22rem,calc(100vw-1.5rem))] -translate-x-1/2',
             // Desktop: anclado a la campana.
             'sm:absolute sm:left-auto sm:right-0 sm:top-auto sm:mt-2 sm:w-[min(22rem,calc(100vw-2rem))] sm:translate-x-0',
           ].join(' ')}
@@ -205,7 +207,7 @@ export function NotificationBell({
             {items.map((n) => (
               <Link
                 key={n.id}
-                to={n.link || '#'}
+                to={buildNotificationHref(n.type, n.link, n.meta)}
                 onClick={() => {
                   if (!n.readAt) markRead.mutate(n.id)
                   setOpen(false)

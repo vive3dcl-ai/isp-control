@@ -23,8 +23,11 @@ export class BillingProcessor extends WorkerHost {
     switch (jobName) {
       case 'billing.periods':
         return this.billing.runMaintainPeriods(schemaName);
-      case 'billing.generate':
-        return this.billing.runGenerateInvoices(schemaName);
+      case 'billing.generate': {
+        const generated = await this.billing.runGenerateInvoices(schemaName);
+        const cutoff = await this.billing.runOverdueCutoff(schemaName);
+        return { ...generated, ...cutoff };
+      }
       case 'billing.send':
         return this.billing.runSendInvoices(schemaName);
       default:

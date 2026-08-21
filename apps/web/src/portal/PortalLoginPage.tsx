@@ -52,7 +52,7 @@ export function PortalLoginPage() {
 
   return (
     <PortalThemeRoot>
-      <div className="relative flex min-h-dvh items-start justify-center overflow-x-hidden px-4 pb-6 pt-8 sm:items-center sm:py-12">
+      <div className="relative flex min-h-dvh items-start justify-center overflow-x-hidden app-safe-page sm:items-center sm:py-12">
         <div
           className="pointer-events-none absolute inset-0 opacity-80"
           style={{

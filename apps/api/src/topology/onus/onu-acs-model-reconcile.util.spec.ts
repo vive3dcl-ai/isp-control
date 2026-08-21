@@ -24,6 +24,14 @@ describe('shouldApplyAcsModelToOnuType', () => {
     expect(shouldApplyAcsModelToOnuType('hg6143d', 'HG6143D')).toBe(false);
   });
 
+  it('canoniciza revisión HW (-10) aunque la base ya coincida', () => {
+    expect(shouldApplyAcsModelToOnuType('HG8145X6-10', 'HG8145X6')).toBe(true);
+    expect(shouldApplyAcsModelToOnuType('EG8145X6-13', 'EG8145X6-10')).toBe(
+      true,
+    );
+    expect(shouldApplyAcsModelToOnuType('HG8145X6', 'HG8145X6-10')).toBe(false);
+  });
+
   it('no aplica sin ProductClass ACS', () => {
     expect(shouldApplyAcsModelToOnuType('F600', null)).toBe(false);
     expect(shouldApplyAcsModelToOnuType('F600', '')).toBe(false);

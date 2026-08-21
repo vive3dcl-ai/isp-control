@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { apiFetch } from '../lib/api'
 import {
@@ -282,6 +283,9 @@ function fitView(
 
 export function TopologyPage() {
   const { user } = useAuth()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const deviceIdFromUrl = searchParams.get('deviceId')?.trim() ?? ''
+  const onuIdFromUrl = searchParams.get('onuId')?.trim() ?? ''
   const canWrite = canWriteTopology(user?.tenantRole)
   const [createOpen, setCreateOpen] = useState(false)
   const [vpnOpen, setVpnOpen] = useState(false)
@@ -336,6 +340,36 @@ export function TopologyPage() {
   const links = graphQuery.data?.links ?? []
 
   const onus = onusQuery.data?.onus ?? []
+
+  const clearDeepLinkParams = useCallback(
+    (...keys: string[]) => {
+      const next = new URLSearchParams(searchParams)
+      let changed = false
+      for (const key of keys) {
+        if (next.has(key)) {
+          next.delete(key)
+          changed = true
+        }
+      }
+      if (changed) setSearchParams(next, { replace: true })
+    },
+    [searchParams, setSearchParams],
+  )
+
+  useEffect(() => {
+    if (!deviceIdFromUrl || graphQuery.isLoading) return
+    if (!devices.some((d) => d.id === deviceIdFromUrl)) return
+    setDetailId(deviceIdFromUrl)
+    clearDeepLinkParams('deviceId')
+  }, [deviceIdFromUrl, devices, graphQuery.isLoading, clearDeepLinkParams])
+
+  useEffect(() => {
+    if (!onuIdFromUrl || onusQuery.isLoading) return
+    const hit = onus.find((o) => o.id === onuIdFromUrl)
+    if (!hit) return
+    setOnuSel({ oltId: hit.oltId, onuIf: hit.onuIf })
+    clearDeepLinkParams('onuId')
+  }, [onuIdFromUrl, onus, onusQuery.isLoading, clearDeepLinkParams])
 
   const positions = useMemo(
     () => layoutTopology(devices, links, ponClusterHeights(onus, devices)),

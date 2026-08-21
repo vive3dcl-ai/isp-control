@@ -4,14 +4,18 @@ import { ZteTitanOltClient } from '../../drivers/olt/zte/titan/cli';
 import { ZteTitanOltSnmpClient } from '../../drivers/olt/zte/titan/snmp';
 import {
   BadRequestException,
+  Inject,
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
+  forwardRef,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { ILike, In, Repository } from 'typeorm';
+import { ILike, In, Not, Repository } from 'typeorm';
 import type { AuthUser } from '../../auth/auth.types';
 import { TenantConnectionService } from '../../database/tenant-connection.service';
+import { CrmService } from '../../crm/crm.service';
 import {
   DEFAULT_OLT_PORTS,
   isHuaweiOltDevice,
@@ -32,6 +36,8 @@ import { OnuMetricSample } from '../shared/entities/onu-metric-sample.entity';
 import { OnuCatalogAdminService } from './onu-catalog-admin.service';
 import {
   isPlaceholderOnuModel,
+  normalizeOnuModelName,
+  resolveOnuTypeDisplayImage,
   usableOnuModelName,
 } from './onu-model-catalog';
 import {
@@ -51,18 +57,20 @@ import {
   shouldPurgeDeniedAlreadyConnected,
   uncfgHideReason,
 } from './onu-uncfg-visibility.util';
+import { isPonMoved } from './onu-pon-moved.util';
 import {
   deriveServiceState,
+  isOltAdminDisabled,
+  onuAccessStatus,
   pickLinkedService,
   type CrmServiceDesired,
   type ServiceStateView,
 } from './onu-service-state.util';
+import {
+  expectedInternetTcontUp,
+} from '../../drivers/olt/zte/shared/zte-olt-dba.util';
 import { NetworkAuditService } from './network-audit.service';
 import { NetworkAlarmService } from './network-alarm.service';
-
-function isAdminDisabled(state: string | null | undefined): boolean {
-  return /disable/i.test(state ?? '');
-}
 
 export type OnuImportSnapshot = {
   onuIf: string;
@@ -116,6 +124,9 @@ export class OnuConnectedService {
     private readonly alarms: NetworkAlarmService,
     @InjectRepository(Tenant)
     private readonly tenants: Repository<Tenant>,
+    @Optional()
+    @Inject(forwardRef(() => CrmService))
+    private readonly crm?: CrmService,
   ) {}
 
   private async auditOltOnuAction<T>(
@@ -411,12 +422,15 @@ export class OnuConnectedService {
       board: row.board,
       port: row.port,
       onuId: row.onuId,
-      status: row.status,
-      online: row.online,
+      status: onuAccessStatus(row),
+      online: isOltAdminDisabled(row.adminState) ? false : row.online,
       phaseState: row.phaseState,
       adminState: row.adminState,
       sn: row.sn,
-      onuType: row.onuType,
+      onuType: (() => {
+        const n = normalizeOnuModelName(row.onuType ?? '');
+        return n || row.onuType;
+      })(),
       name: row.name,
       description: row.description || null,
       signalDbm: row.signalDbm,
@@ -463,35 +477,50 @@ export class OnuConnectedService {
         // N/A / — / vacíos no se persisten ni pisan un type bueno.
       } else {
         const current = (row.onuType ?? '').trim();
-        const placeholder = isPlaceholderOnuModel(current);
+        const currentNorm = normalizeOnuModelName(current);
+        const placeholder =
+          isPlaceholderOnuModel(current) || isPlaceholderOnuModel(currentNorm);
         // El type OMCI de la OLT (p. ej. F600) no debe pisar un modelo ya
-        // curado por ACS/SW info (HG6143D, HG8145X6, …).
+        // curado por ACS/SW info (HG6143D, HG8145X6, …). Sí reescribe
+        // revisiones HW (HG8145X6-10 → HG8145X6).
         if (
           placeholder ||
-          current.toLowerCase() === incoming.toLowerCase()
+          currentNorm.toLowerCase() === incoming.toLowerCase()
         ) {
           row.onuType = incoming;
         }
       }
+    } else if (row.onuType) {
+      // Sin type nuevo del probe: canoniciza revisiones ya guardadas (-10/-13).
+      const canon = usableOnuModelName(row.onuType);
+      if (canon && canon !== row.onuType) row.onuType = canon;
     }
     // Ignore SmartOLT-style placeholders (ONU-6:1); keep the intended client label.
     if (snap.name && !/^ONU-\d+:\d+$/i.test(snap.name.trim())) {
       row.name = snap.name;
     }
     if (snap.description) row.description = snap.description;
-    if (snap.status) row.status = snap.status;
+    if (snap.status) {
+      row.status = isOltAdminDisabled(row.adminState)
+        ? 'disabled'
+        : snap.status;
+    }
     if (snap.phaseState != null) row.phaseState = snap.phaseState;
     if (snap.adminState != null) {
       if (
-        isAdminDisabled(row.adminState) &&
-        !isAdminDisabled(snap.adminState)
+        isOltAdminDisabled(row.adminState) &&
+        !isOltAdminDisabled(snap.adminState)
       ) {
         // Keep operator suspend; a probe after ONU reboot must not unsuspend.
       } else {
         row.adminState = snap.adminState;
       }
     }
-    if (snap.online != null) {
+    if (isOltAdminDisabled(row.adminState)) {
+      row.online = false;
+      row.status = 'disabled';
+      row.onlineSince = null;
+    } else if (snap.online != null) {
       const wasOnline = row.online;
       const nextOnline = !!snap.online;
       row.online = nextOnline;
@@ -811,6 +840,28 @@ export class OnuConnectedService {
       firstSeenAt: string | null;
       lastSeenAt: string | null;
     }> = [];
+    type PonMovedRow = {
+      sn: string;
+      /** Inventario (Conectadas) — ubicación antigua. */
+      inventoryOnuId: string;
+      inventoryOltId: string;
+      inventoryOltName: string;
+      inventoryOnuIf: string;
+      inventoryBoard: string;
+      inventoryPort: string;
+      inventoryAdminState: string | null;
+      inventoryOnline: boolean;
+      inventoryName: string | null;
+      /** Uncfg — ubicación actual. */
+      uncfgOltId: string;
+      uncfgOltName: string;
+      uncfgOltIf: string;
+      uncfgBoard: string;
+      uncfgPort: string;
+      uncfgState: string | null;
+      ponType: string;
+    };
+    const ponMoved: PonMovedRow[] = [];
     const errors: Array<{ oltId: string; oltName: string; error: string }> = [];
 
     const deniedRepo =
@@ -821,21 +872,35 @@ export class OnuConnectedService {
 
     const knownRows = await onuRepo
       .createQueryBuilder('o')
-      .select(['o.id', 'o.oltId', 'o.sn', 'o.onuType', 'o.adminState'])
+      .select([
+        'o.id',
+        'o.oltId',
+        'o.sn',
+        'o.onuIf',
+        'o.board',
+        'o.port',
+        'o.onuType',
+        'o.adminState',
+        'o.online',
+        'o.name',
+      ])
       .where('o.sn IS NOT NULL')
       .andWhere("o.sn <> ''")
       .getMany();
     const knownBySn = new Set<string>();
+    const inventoryBySn = new Map<string, (typeof knownRows)[number]>();
     const onuTypeBySn = new Map<string, string>();
     const suspendedKeys = new Set<string>();
     for (const r of knownRows) {
       const sn = onuSnKey(r.sn);
       if (!sn) continue;
       knownBySn.add(sn);
+      if (!inventoryBySn.has(sn)) inventoryBySn.set(sn, r);
       const t = r.onuType?.trim();
       if (t && !onuTypeBySn.has(sn)) onuTypeBySn.set(sn, t);
-      if (isAdminDisabled(r.adminState)) suspendedKeys.add(sn);
+      if (isOltAdminDisabled(r.adminState)) suspendedKeys.add(sn);
     }
+    const oltNameById = new Map(olts.map((o) => [o.id, o.name]));
 
     // Stale denylist: SN already in Conectadas must not stay in Bloqueadas
     await this.purgeDeniedAlreadyConnected(deniedRepo, knownBySn);
@@ -886,6 +951,44 @@ export class OnuConnectedService {
           if (hide === 'connected') {
             alsoInConnected += 1;
             if (suspendedKeys.has(sn)) hiddenSuspended += 1;
+            const inv = inventoryBySn.get(sn);
+            if (
+              inv &&
+              isPonMoved(
+                {
+                  oltId: inv.oltId,
+                  board: inv.board,
+                  port: inv.port,
+                  onuIf: inv.onuIf,
+                },
+                {
+                  oltId: olt.id,
+                  board: u.board,
+                  port: u.port,
+                  oltIf: u.oltIf,
+                },
+              )
+            ) {
+              ponMoved.push({
+                sn: u.sn,
+                inventoryOnuId: inv.id,
+                inventoryOltId: inv.oltId,
+                inventoryOltName: oltNameById.get(inv.oltId) ?? inv.oltId,
+                inventoryOnuIf: inv.onuIf,
+                inventoryBoard: inv.board ?? '',
+                inventoryPort: inv.port ?? '',
+                inventoryAdminState: inv.adminState ?? null,
+                inventoryOnline: !!inv.online,
+                inventoryName: inv.name ?? null,
+                uncfgOltId: olt.id,
+                uncfgOltName: olt.name,
+                uncfgOltIf: u.oltIf,
+                uncfgBoard: u.board ?? '',
+                uncfgPort: u.port ?? '',
+                uncfgState: u.state,
+                ponType: u.ponType,
+              });
+            }
             continue;
           }
           onus.push({
@@ -999,8 +1102,19 @@ export class OnuConnectedService {
     const deniedCount = await deniedRepo.count();
 
     const suspendedCount = suspendedKeys.size;
+    // Un SN puede aparecer en uncfg de varias OLTs; una entrada por SN.
+    const ponMovedDedup = new Map<string, PonMovedRow>();
+    for (const row of ponMoved) {
+      const key = onuSnKey(row.sn);
+      if (!key || ponMovedDedup.has(key)) continue;
+      ponMovedDedup.set(key, row);
+    }
+    const ponMovedList = [...ponMovedDedup.values()].sort((a, b) =>
+      a.sn.localeCompare(b.sn),
+    );
+
     this.logger.log(
-      `uncfg list: raw=${rawUncfg} shown=${onus.length} alsoInConnected=${alsoInConnected} hiddenDenied=${hiddenDenied} hiddenSuspended=${hiddenSuspended} acsModels=${acsModels.size} errors=${errors.length}`,
+      `uncfg list: raw=${rawUncfg} shown=${onus.length} alsoInConnected=${alsoInConnected} ponMoved=${ponMovedList.length} hiddenDenied=${hiddenDenied} hiddenSuspended=${hiddenSuspended} acsModels=${acsModels.size} errors=${errors.length}`,
     );
 
     return {
@@ -1010,6 +1124,8 @@ export class OnuConnectedService {
       total: onus.length,
       deniedCount,
       suspendedCount,
+      ponMoved: ponMovedList,
+      ponMovedCount: ponMovedList.length,
       rawUncfg,
       alsoInConnected,
       probedAt: new Date().toISOString(),
@@ -1757,6 +1873,18 @@ export class OnuConnectedService {
     const oltName = new Map(olts.map((o) => [o.id, o.name]));
     const onuRepo = await this.tenantConnections.getOnuRepository(schema);
     const rows = await onuRepo.find({ order: { onuIf: 'ASC' } });
+    // Alinea onu_type con Tipos de ONU (quita -10/-13, prefijos vendor).
+    const toCanon: Onu[] = [];
+    for (const r of rows) {
+      const canon = usableOnuModelName(r.onuType);
+      if (canon && r.onuType !== canon) {
+        r.onuType = canon;
+        toCanon.push(r);
+      }
+    }
+    if (toCanon.length) {
+      await onuRepo.save(toCanon);
+    }
     const portal = await this.tenantUsesPortal(user);
     const states = await this.serviceStatesByOnuId(schema, rows, portal);
     const onus = rows.map((r) =>
@@ -1772,6 +1900,7 @@ export class OnuConnectedService {
       errors: [] as Array<{ oltId: string; oltName: string; error: string }>,
       total: onus.length,
       online: onus.filter((o) => o.online).length,
+      suspended: onus.filter((o) => o.status === 'disabled').length,
       message:
         olts.length === 0
           ? 'No hay OLTs ZTE en topología.'
@@ -1849,6 +1978,7 @@ export class OnuConnectedService {
     // (soft-offline used to keep the SN and hide it from Huérfanas forever).
     for (const row of existing) {
       if (seen.has(row.onuIf.toLowerCase())) continue;
+      if (isOltAdminDisabled(row.adminState)) continue;
       await this.purgeOnuRow(schema, row);
       removed += 1;
     }
@@ -2607,16 +2737,95 @@ export class OnuConnectedService {
 
     const client = row ? await this.findClientForOnu(schema, row.id) : null;
 
+    let speedProfile: {
+      download: string | null;
+      upload: string | null;
+      name: string | null;
+      oltUpProfile: string | null;
+      actualUpProfile: string | null;
+      dbaOk: boolean | null;
+      dbaMessage: string | null;
+    } = {
+      download: null,
+      upload: null,
+      name: null,
+      oltUpProfile: null,
+      actualUpProfile: null,
+      dbaOk: null,
+      dbaMessage: null,
+    };
+    const planCheck = (
+      row?.verifyDetail as {
+        plan?: {
+          ok?: boolean;
+          message?: string;
+          meta?: { expected?: string; actual?: string | null };
+        };
+      } | null
+    )?.plan;
+    if (row) {
+      const svcRepo =
+        await this.tenantConnections.getClientServiceRepository(schema);
+      // Misma preferencia que findClientForOnu: activo primero, luego reciente.
+      const svc = await svcRepo
+        .createQueryBuilder('s')
+        .leftJoinAndSelect('s.servicePlan', 'plan')
+        .leftJoinAndSelect('plan.speedProfile', 'sp')
+        .where('s.onu_id = :onuDbId', { onuDbId: row.id })
+        .orderBy(`CASE WHEN s.status = 'ended' THEN 1 ELSE 0 END`, 'ASC')
+        .addOrderBy('s.createdAt', 'DESC')
+        .getOne();
+      const sp = svc?.servicePlan?.speedProfile ?? null;
+      const planLabel = sp?.name?.trim() || svc?.servicePlan?.name?.trim() || null;
+      if (planLabel) {
+        const expectedUp = expectedInternetTcontUp(sp?.name ?? null);
+        speedProfile = {
+          name: planLabel,
+          download: sp != null ? `${sp.downloadMbps} Mbps` : null,
+          upload: sp != null ? `${sp.uploadMbps} Mbps` : null,
+          oltUpProfile: expectedUp,
+          actualUpProfile:
+            (planCheck?.meta?.actual as string | null | undefined) ?? null,
+          dbaOk: planCheck?.ok ?? null,
+          dbaMessage:
+            sp == null
+              ? 'El plan CRM no tiene perfil de velocidad (speed profile) ligado'
+              : expectedUp == null
+                ? 'Perfil de velocidad sin nombre OLT válido'
+                : (planCheck?.message ?? null),
+        };
+      }
+    }
+
+    const displayOnuType = normalizeOnuModelName(
+      (o?.onuType ?? persisted.onuType ?? '').trim(),
+    );
+    let typeImageUrl: string | null = null;
+    const typeName = displayOnuType;
+    if (typeName) {
+      const typeRepo = await this.tenantConnections.getOnuTypeRepository(schema);
+      const typeRow = await typeRepo.findOne({ where: { name: typeName } });
+      if (typeRow) {
+        typeImageUrl = resolveOnuTypeDisplayImage(typeRow);
+      }
+    }
+
     return {
       probedAt: live?.probedAt ?? row?.lastProbedAt?.toISOString() ?? null,
       fromDatabase: !!row,
       client: client ? { ...client, serviceState } : null,
       onu: {
         ...persisted,
+        ...(displayOnuType ? { onuType: displayOnuType } : {}),
         ...(o
           ? {
               sn: o.sn ?? persisted.sn,
-              onuType: o.onuType ?? persisted.onuType,
+              onuType:
+                normalizeOnuModelName(
+                  (o.onuType ?? persisted.onuType ?? '').trim(),
+                ) ||
+                o.onuType ||
+                persisted.onuType,
               name: o.name ?? persisted.name,
               description: o.description ?? persisted.description,
               signalDbm: o.signalDbm ?? persisted.signalDbm,
@@ -2660,10 +2869,35 @@ export class OnuConnectedService {
         wifiPorts: o?.wifiPorts ?? [],
         voipSupported: o?.voipSupported ?? null,
         catvSupported: o?.catvSupported ?? null,
-        speedProfile: { download: null, upload: null },
-        imageUrl: null,
+        speedProfile,
+        imageUrl: typeImageUrl,
       },
     };
+  }
+
+  /** Persiste resultado de lectura DBA para mostrarlo en el detalle. */
+  async recordDbaPlanCheck(
+    schema: string,
+    onuId: string,
+    plan: {
+      ok: boolean;
+      message: string;
+      expected: string | null;
+      actual: string | null;
+    },
+  ): Promise<void> {
+    const onuRepo = await this.tenantConnections.getOnuRepository(schema);
+    const onu = await onuRepo.findOne({ where: { id: onuId } });
+    if (!onu) return;
+    const detail = (onu.verifyDetail ?? {}) as Record<string, unknown>;
+    detail.plan = {
+      ok: plan.ok,
+      message: plan.message,
+      meta: { expected: plan.expected, actual: plan.actual },
+    };
+    onu.verifyDetail = detail;
+    onu.verifyCheckedAt = new Date();
+    await onuRepo.save(onu);
   }
 
   /**
@@ -2720,9 +2954,61 @@ export class OnuConnectedService {
     });
   }
 
+  /**
+   * Cliente CRM ligado a esta ONU (servicio no finalizado).
+   * Si hay contrato, Disable/Enable de topología suspende/reactiva todo el cliente.
+   */
+  private async findCrmClientIdForOnu(
+    schema: string,
+    oltId: string,
+    onuIf: string,
+  ): Promise<string | null> {
+    const onuRepo = await this.tenantConnections.getOnuRepository(schema);
+    const onu = await onuRepo.findOne({ where: { oltId, onuIf } });
+    if (!onu) return null;
+    const serviceRepo =
+      await this.tenantConnections.getClientServiceRepository(schema);
+    const services = await serviceRepo.find({
+      where: { onuId: onu.id },
+      order: { updatedAt: 'DESC' },
+    });
+    const live = services.find(
+      (s) => s.status === 'active' || s.status === 'suspended',
+    );
+    return live?.clientId ?? null;
+  }
+
   /** Admin-disable ONU on OLT; keeps registration in Conectadas as offline. */
-  async disable(user: AuthUser, oltId: string, onuIf: string) {
+  async disable(
+    user: AuthUser,
+    oltId: string,
+    onuIf: string,
+    opts?: { fromCrm?: boolean },
+  ) {
     const schema = this.requireSchema(user);
+    if (!opts?.fromCrm && this.crm) {
+      const clientId = await this.findCrmClientIdForOnu(
+        schema,
+        oltId,
+        onuIf.trim(),
+      );
+      if (clientId) {
+        const result = await this.crm.setClientServicesStatus(
+          user,
+          clientId,
+          'suspended',
+        );
+        return {
+          ok: true as const,
+          message:
+            result.warning ||
+            result.message ||
+            'Cliente suspendido (todos los servicios)',
+          crm: result,
+        };
+      }
+    }
+
     const olt = await this.requireManagedOlt(schema, oltId);
     if (!onuIf?.trim()) {
       throw new BadRequestException('onuIf requerido');
@@ -2759,8 +3045,36 @@ export class OnuConnectedService {
   }
 
   /** Re-enable a previously admin-disabled ONU on OLT. */
-  async enable(user: AuthUser, oltId: string, onuIf: string) {
+  async enable(
+    user: AuthUser,
+    oltId: string,
+    onuIf: string,
+    opts?: { fromCrm?: boolean },
+  ) {
     const schema = this.requireSchema(user);
+    if (!opts?.fromCrm && this.crm) {
+      const clientId = await this.findCrmClientIdForOnu(
+        schema,
+        oltId,
+        onuIf.trim(),
+      );
+      if (clientId) {
+        const result = await this.crm.setClientServicesStatus(
+          user,
+          clientId,
+          'active',
+        );
+        return {
+          ok: true as const,
+          message:
+            result.warning ||
+            result.message ||
+            'Cliente reactivado (todos los servicios)',
+          crm: result,
+        };
+      }
+    }
+
     const olt = await this.requireManagedOlt(schema, oltId);
     if (!onuIf?.trim()) {
       throw new BadRequestException('onuIf requerido');
@@ -3244,7 +3558,7 @@ export class OnuConnectedService {
         { id: row.id },
         {
           online: false,
-          status: 'offline',
+          status: isOltAdminDisabled(row.adminState) ? 'disabled' : 'offline',
           lastProbedAt: now,
         },
       );
@@ -3350,7 +3664,7 @@ export class OnuConnectedService {
         { id: row.id },
         {
           online: false,
-          status: 'offline',
+          status: isOltAdminDisabled(row.adminState) ? 'disabled' : 'offline',
           lastProbedAt: now,
         },
       );

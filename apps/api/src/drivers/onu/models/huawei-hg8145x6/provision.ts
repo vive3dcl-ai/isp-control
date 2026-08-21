@@ -15,12 +15,14 @@ import {
   ensureMgmtReady,
   ensureOmciTr069,
   ensureReachable,
+  ensureServiceL2,
   ensureServiceSpv,
   ensureServiceWanIp,
   ensureServiceWcd,
   hg8145InformAlive,
   type Hg8145StepResult,
 } from './steps';
+import { huaweiInternetCarrierOk } from '../../infra/huawei-carrier';
 
 const PREP_STEPS: Array<{
   id: string;
@@ -39,6 +41,7 @@ const WAN_ONLY_STEPS: Array<{
   { id: 'ensure_service_wcd', run: ensureServiceWcd },
   { id: 'ensure_service_wanip', run: ensureServiceWanIp },
   { id: 'ensure_service_spv', run: ensureServiceSpv },
+  { id: 'ensure_service_l2', run: ensureServiceL2 },
 ];
 
 const ALL_ACS_STEP_IDS = [
@@ -72,11 +75,20 @@ async function runSteps(
     }
     const result = await step.run(ctx);
     notes.push(...result.notes);
+    const stepNote = result.notes.filter(Boolean).join(' · ').slice(0, 240);
     if (!result.ok || result.halt) {
       await ctx.onProgress?.({
         currentStepId: step.id,
         completed: [...completed],
         notes: result.notes.slice(-3),
+        history: [
+          {
+            id: step.id,
+            status: result.ok ? 'done' : 'error',
+            note: stepNote || undefined,
+            at: new Date().toISOString(),
+          },
+        ],
       });
       return {
         ok: result.ok,
@@ -85,6 +97,14 @@ async function runSteps(
           currentStepId: step.id,
           completed: [...completed],
           notes: result.notes,
+          history: [
+            {
+              id: step.id,
+              status: result.ok ? 'done' : 'error',
+              note: stepNote || undefined,
+              at: new Date().toISOString(),
+            },
+          ],
         },
       };
     }
@@ -93,6 +113,14 @@ async function runSteps(
       currentStepId: step.id,
       completed: [...completed],
       notes: result.notes.slice(-2),
+      history: [
+        {
+          id: step.id,
+          status: 'done',
+          note: stepNote || undefined,
+          at: new Date().toISOString(),
+        },
+      ],
     });
   }
   await ctx.onProgress?.({
@@ -115,6 +143,27 @@ export async function provisionHg8145x6(
   ctx: OnuModelProvisionCtx,
 ): Promise<OnuModelProvisionResult> {
   if (isServiceWanApplied(ctx.device, ctx.wan)) {
+    if (huaweiInternetCarrierOk(ctx.device) === false) {
+      await ctx.onProgress?.({
+        currentStepId: 'ensure_service_l2',
+        completed: ALL_ACS_STEP_IDS.filter((id) => id !== 'ensure_service_l2'),
+        notes: ['→ ensure_service_l2 (ERROR_NO_CARRIER)'],
+      });
+      const l2 = await ensureServiceL2(ctx);
+      return {
+        ok: l2.ok,
+        notes: [
+          'script huawei-hg8145x6',
+          `WAN INTERNET en vlan=${ctx.wan.wanVlan} ip=${ctx.wan.wanIp}`,
+          ...l2.notes,
+        ],
+        progress: {
+          currentStepId: 'ensure_service_l2',
+          completed: ALL_ACS_STEP_IDS.filter((id) => id !== 'ensure_service_l2'),
+          notes: l2.notes,
+        },
+      };
+    }
     const notes = [
       'script huawei-hg8145x6',
       `WAN INTERNET ya en vlan=${ctx.wan.wanVlan} ip=${ctx.wan.wanIp}`,

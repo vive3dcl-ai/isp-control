@@ -1,5 +1,6 @@
 import { huaweiHg8145x6Handler } from './models/huawei-hg8145x6';
 import { genericZteDriver } from './models/generic-zte';
+import { genericFiberhomeDriver } from './models/generic-fiberhome';
 import {
   mergeProgressState,
   resolveProgressPlan,
@@ -12,7 +13,29 @@ describe('ONU progressPlan', () => {
     expect(ids).toContain('ensure_connreq');
     expect(ids).toContain('ensure_service_spv');
     expect(ids).not.toContain('net_route');
+    expect(ids).not.toContain('net_arp');
     expect(ids).toContain('net_wan');
+    expect(ids).not.toContain('net_arp');
+    expect(plan.find((p) => p.id === 'ensure_connreq')?.label).toBe(
+      'Credenciales de administración',
+    );
+    expect(plan.find((p) => p.id === 'ensure_service_spv')?.label).toBe(
+      'Árbol de servicio',
+    );
+    expect(plan.find((p) => p.id === 'net_wan')?.label).toBe('WAN internet');
+    expect(plan.find((p) => p.id === 'net_lanBind')?.label).toBe('Bind NAT');
+    expect(plan.find((p) => p.id === 'net_traffic')?.label).toBe('Internet');
+    expect(ids.indexOf('net_lanBind')).toBeLessThan(ids.indexOf('net_traffic'));
+  });
+
+  it('generic FiberHome usa WAN de servicio y Árbol de servicio', () => {
+    const plan = resolveProgressPlan(genericFiberhomeDriver);
+    expect(plan.find((p) => p.id === 'ensure_service_wan')?.label).toBe(
+      'WAN de servicio',
+    );
+    expect(plan.find((p) => p.id === 'apply_service_spv')?.label).toBe(
+      'Árbol de servicio',
+    );
   });
 
   it('generic-ZTE plan includes net_route', () => {

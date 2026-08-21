@@ -7,6 +7,7 @@ describe('firmwareModelMatches', () => {
   it('casa tipo OLT con la clave de imagen (normalizada)', () => {
     expect(firmwareModelMatches('HG9', 'HG9')).toBe(true);
     expect(firmwareModelMatches('Huawei-HG8145X6', 'HG8145X6')).toBe(true);
+    expect(firmwareModelMatches('HG8145X6-10', 'HG8145X6')).toBe(true);
     expect(firmwareModelMatches('F660', 'F660')).toBe(true);
   });
 

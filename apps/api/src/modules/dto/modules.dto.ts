@@ -1,5 +1,6 @@
 import { Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
   ArrayUnique,
   IsArray,
   IsBoolean,
@@ -13,6 +14,7 @@ import {
   MaxLength,
   Min,
   MinLength,
+  ValidateNested,
 } from 'class-validator';
 import { MODULE_IDS } from '../module-catalog';
 
@@ -21,6 +23,14 @@ export class UpdateTenantModulesDto {
   @ArrayUnique()
   @IsString({ each: true })
   enabledModules!: string[];
+
+  /**
+   * Permitir modo «Interno» del Asistente IA (keys/cupos de plataforma).
+   * Si se omite, no se modifica.
+   */
+  @IsOptional()
+  @IsBoolean()
+  aiInternalEnabled?: boolean;
 }
 
 export class UpdateSmtpConfigDto {
@@ -114,6 +124,167 @@ export class UpdateWhatsAppConfigDto {
   templateLanguage?: string;
 }
 
+export class UpdateAsistenteIaConfigDto {
+  @IsIn(['own', 'internal'])
+  mode!: 'own' | 'internal';
+
+  @IsOptional()
+  @IsIn([
+    'openai',
+    'anthropic',
+    'grok',
+    'gemini',
+    'deepseek',
+    'latinrouter',
+  ])
+  provider?:
+    | 'openai'
+    | 'anthropic'
+    | 'grok'
+    | 'gemini'
+    | 'deepseek'
+    | 'latinrouter';
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  model?: string;
+
+  /** Vacío = conservar la key guardada. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(4000)
+  apiKey?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  enabled?: boolean;
+}
+
+export class ListAsistenteIaModelsDto {
+  @IsIn([
+    'openai',
+    'anthropic',
+    'grok',
+    'gemini',
+    'deepseek',
+    'latinrouter',
+  ])
+  provider!:
+    | 'openai'
+    | 'anthropic'
+    | 'grok'
+    | 'gemini'
+    | 'deepseek'
+    | 'latinrouter';
+
+  /** Vacío = usar la key guardada del tenant. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(4000)
+  apiKey?: string;
+}
+
+export class AsistenteChatActivityDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  id?: string;
+
+  @IsOptional()
+  @IsIn(['tool', 'skill', 'plan'])
+  kind?: 'tool' | 'skill' | 'plan';
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  slug?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  name?: string;
+
+  @IsOptional()
+  @IsIn(['running', 'done', 'error'])
+  status?: 'running' | 'done' | 'error';
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  detail?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  mutates?: boolean;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  at?: string;
+}
+
+export class AsistenteChatMessageDto {
+  @IsIn(['user', 'assistant', 'system'])
+  role!: 'user' | 'assistant' | 'system';
+
+  @IsString()
+  @MaxLength(12000)
+  content!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  id?: string;
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => AsistenteChatActivityDto)
+  @ArrayMaxSize(40)
+  activities?: AsistenteChatActivityDto[];
+}
+
+export class AsistenteChatDto {
+  @IsArray()
+  @ArrayMaxSize(40)
+  @ValidateNested({ each: true })
+  @Type(() => AsistenteChatMessageDto)
+  messages!: AsistenteChatMessageDto[];
+
+  /** Si true, el agente no puede modificar nada (solo leer / orientar). */
+  @IsOptional()
+  @IsBoolean()
+  readOnly?: boolean;
+
+  /**
+   * Si true, cada cambio del agente debe registrar un punto de restauración
+   * exacto para poder deshacerlo.
+   */
+  @IsOptional()
+  @IsBoolean()
+  restorePoints?: boolean;
+
+  /**
+   * Si true, el agente planifica y encadena más rondas de tools.
+   */
+  @IsOptional()
+  @IsBoolean()
+  thinking?: boolean;
+
+  /** Id de sesión de chat (agrupa restore points). */
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  sessionId?: string;
+
+  /** Resumen de contexto previo (sesiones largas compactadas). */
+  @IsOptional()
+  @IsString()
+  @MaxLength(4000)
+  contextSummary?: string;
+}
+
 export class WhatsAppBaileysStatusDto {
   @IsString()
   @MinLength(1)
@@ -148,6 +319,7 @@ export class UpdatePlatformPaymentMethodDto {
   @IsIn(['sandbox', 'production'])
   environment?: 'sandbox' | 'production';
 
+  /** Mercado Pago */
   @IsOptional()
   @IsString()
   @MaxLength(255)
@@ -162,6 +334,22 @@ export class UpdatePlatformPaymentMethodDto {
   @IsString()
   @MaxLength(255)
   webhookSecret?: string;
+
+  /** PayPal */
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  clientId?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  clientSecret?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  webhookId?: string;
 }
 
 export class UpdateModulePricingDto {

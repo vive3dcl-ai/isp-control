@@ -148,6 +148,15 @@ export async function ensureHuaweiServiceWan(
   const enqueueOnly = !!ctx.enqueueOnly;
   let device = ctx.device;
 
+  if (isServiceWanApplied(device, wan)) {
+    return {
+      ok: true,
+      notes: [
+        `WAN INTERNET ya en vlan=${wan.wanVlan} ip=${wan.wanIp}`,
+      ],
+    };
+  }
+
   if (!enqueueOnly) {
     await refreshWanTree(client, deviceId);
     const fresh = await client.findBySerial(ctx.sn);

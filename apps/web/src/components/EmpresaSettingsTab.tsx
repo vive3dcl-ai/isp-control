@@ -13,6 +13,7 @@ import type { TopologyDevice } from '../lib/topology'
 import { SettingsSubTabs } from './SettingsSubTabs'
 import { IntegracionesSettingsPanel } from './IntegracionesSettingsPanel'
 import { SuscripcionSettingsPanel } from './SuscripcionSettingsPanel'
+import { useSubscriptionAccess } from '../auth/useSubscriptionAccess'
 
 const inputClass =
   'w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2.5 outline-none ring-[var(--accent)] focus:ring-2'
@@ -64,6 +65,7 @@ const empty: FormState = {
 export function EmpresaSettingsTab({ canWrite }: { canWrite: boolean }) {
   const queryClient = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
+  const { blocked: subscriptionLocked } = useSubscriptionAccess()
   const sectionParam = searchParams.get('section')
   const initialSection: EmpresaSection =
     sectionParam === 'suscripcion' || sectionParam === 'integraciones'
@@ -72,6 +74,10 @@ export function EmpresaSettingsTab({ canWrite }: { canWrite: boolean }) {
   const [section, setSectionState] = useState<EmpresaSection>(initialSection)
 
   useEffect(() => {
+    if (subscriptionLocked) {
+      setSectionState('suscripcion')
+      return
+    }
     if (
       sectionParam === 'suscripcion' ||
       sectionParam === 'integraciones' ||
@@ -81,15 +87,26 @@ export function EmpresaSettingsTab({ canWrite }: { canWrite: boolean }) {
     } else if (!sectionParam) {
       setSectionState('datos')
     }
-  }, [sectionParam])
+  }, [sectionParam, subscriptionLocked])
 
   function setSection(next: EmpresaSection) {
+    if (subscriptionLocked && next !== 'suscripcion') return
     setSectionState(next)
     const params = new URLSearchParams(searchParams)
     if (next === 'datos') params.delete('section')
     else params.set('section', next)
+    if (subscriptionLocked) {
+      params.set('tab', 'empresa')
+      params.set('section', 'suscripcion')
+    }
     setSearchParams(params, { replace: true })
   }
+
+  const empresaTabs = subscriptionLocked
+    ? EMPRESA_TABS.filter((t) => t.id === 'suscripcion')
+    : EMPRESA_TABS
+
+  const activeSection = subscriptionLocked ? 'suscripcion' : section
   const [form, setForm] = useState<FormState>(empty)
   const [msg, setMsg] = useState<string | null>(null)
   const [logoError, setLogoError] = useState<string | null>(null)
@@ -252,24 +269,30 @@ export function EmpresaSettingsTab({ canWrite }: { canWrite: boolean }) {
 
   return (
     <div>
+      {subscriptionLocked && (
+        <div className="mb-5 rounded-xl border-2 border-red-400/50 bg-red-500/10 px-4 py-3 text-sm text-red-100">
+          Tu suscripción está en mora. Paga las facturas pendientes para
+          recuperar el acceso al panel.
+        </div>
+      )}
       <div className="mb-5">
         <SettingsSubTabs
-          tabs={EMPRESA_TABS}
-          value={section}
+          tabs={empresaTabs}
+          value={activeSection}
           onChange={setSection}
           aria-label="Secciones de empresa"
         />
       </div>
 
-      {section === 'integraciones' && (
+      {activeSection === 'integraciones' && (
         <IntegracionesSettingsPanel canWrite={canWrite} />
       )}
 
-      {section === 'suscripcion' && (
+      {activeSection === 'suscripcion' && (
         <SuscripcionSettingsPanel canWrite={canWrite} />
       )}
 
-      {section === 'datos' && (
+      {activeSection === 'datos' && (
         <div>
           <p className="mb-5 text-sm text-[var(--text-muted)]">
             Datos comerciales y legales de la empresa. La moneda se usará en

@@ -4,6 +4,7 @@ export type UserPlanCode =
   | 'users_100'
   | 'users_200'
   | 'users_500'
+  | 'lifetime'
 
 export type SystemPlan = {
   id: string
@@ -16,6 +17,8 @@ export type SystemPlan = {
   priceUsd: number
   /** Si true, landing y cobro tratan el plan como gratis. */
   isFree?: boolean
+  /** Pago único sin renovación mensual. */
+  isLifetime?: boolean
   enabled: boolean
   sortOrder?: number
 }
@@ -44,6 +47,18 @@ export type TenantSubscription = {
   planCode: UserPlanCode | null
   billingCycle: UserPlanCode | null
   status: string
+  subscriptionStatus?: string
+  isInternalCompany?: boolean
+  isLifetime?: boolean
+  /** Factura de renovación vencida (dueAt <= now); modal nag. */
+  invoiceOverdue?: boolean
+  /** Fuera de gracia: bloqueo duro del panel. */
+  accessBlocked?: boolean
+  graceEndsAt?: string | null
+  graceDays?: number
+  invoiceLeadDays?: number
+  daysUntilDue?: number | null
+  daysOverdue?: number | null
   periodStart: string | null
   periodEnd: string | null
   periodPriceUsd: number | null
@@ -65,6 +80,7 @@ export type TenantSubscription = {
   modulesMonthlyUsd: number
   nextCycleEstimateUsd: number | null
   pendingChargeId?: string | null
+  pendingCharge?: PlatformChargeRow | null
   charges?: PlatformChargeRow[]
 }
 
@@ -80,6 +96,7 @@ export type PlanChangeQuote = {
   chargeUsd: number
   periodStart: string
   periodEnd: string
+  isLifetime?: boolean
   note?: string
 }
 

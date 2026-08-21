@@ -70,7 +70,7 @@ function tendaDevice(opts?: {
                   DNSServers: leaf('8.8.8.8,8.8.4.4'),
                   NATEnabled: leaf(true),
                   X_TDTC_LanInterfaceBind: leaf(
-                    'WLAN0-AP1,WLAN0-AP2,WLAN0-AP3,WLAN0-AP4,WLAN1-AP1,WLAN1-AP2,WLAN1-AP3,WLAN1-AP4',
+                    'LAN1,LAN2,LAN3,LAN4,WLAN0-AP1,WLAN0-AP2,WLAN0-AP3,WLAN0-AP4,WLAN1-AP1,WLAN1-AP2,WLAN1-AP3,WLAN1-AP4',
                   ),
                 },
               },

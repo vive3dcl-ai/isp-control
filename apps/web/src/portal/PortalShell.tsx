@@ -62,7 +62,7 @@ export function PortalShell() {
 
   return (
     <PortalThemeRoot>
-      <div className="portal-shell mx-auto flex min-h-dvh max-w-6xl flex-col px-4 pb-10 pt-6 sm:px-6">
+      <div className="portal-shell mx-auto flex min-h-dvh max-w-6xl flex-col pl-[max(1rem,var(--safe-left))] pr-[max(1rem,var(--safe-right))] pb-[max(2.5rem,var(--safe-bottom))] pt-[max(1.5rem,var(--safe-top))] sm:pl-6 sm:pr-6">
         <header className="mb-8 flex flex-wrap items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             {branding.data?.logoUrl ? (

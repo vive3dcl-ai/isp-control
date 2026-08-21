@@ -64,6 +64,20 @@ export class UpdateBillingSettingsDto {
   defaultDueDays?: number;
 
   @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  @Max(30)
+  graceDaysAfterDue?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(28)
+  billingCycleDay?: number;
+
+  @IsOptional()
   @IsIn(['calendar_month', 'from_install'])
   billingRegime?: 'calendar_month' | 'from_install';
 }

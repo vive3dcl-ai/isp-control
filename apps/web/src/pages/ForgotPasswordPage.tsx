@@ -40,13 +40,13 @@ export function ForgotPasswordPage({
       className={
         mobile
           ? 'mobile-app flex min-h-dvh flex-col overflow-x-hidden bg-[var(--bg)] text-[var(--text)]'
-          : 'flex min-h-dvh items-start justify-center overflow-x-hidden px-4 pb-6 pt-8 sm:items-center sm:pt-0'
+          : 'flex min-h-dvh items-start justify-center overflow-x-hidden app-safe-page sm:items-center'
       }
     >
       <div
         className={
           mobile
-            ? 'relative mx-auto flex w-full max-w-md flex-1 flex-col justify-start px-4 pb-6 pt-8 sm:justify-center sm:py-10'
+            ? 'relative mx-auto flex w-full max-w-md flex-1 flex-col justify-start app-safe-page sm:justify-center sm:py-10'
             : 'w-full max-w-md'
         }
       >

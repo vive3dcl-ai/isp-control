@@ -1,11 +1,13 @@
 import {
   BadRequestException,
   Injectable,
+  Inject,
   Logger,
   NotFoundException,
+  forwardRef,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import type { AuthUser } from '../auth/auth.types';
 import { TenantConnectionService } from '../database/tenant-connection.service';
 import { Tenant } from '../tenants/entities/tenant.entity';
@@ -30,12 +32,18 @@ import {
   UpdateInvoiceTemplateDto,
 } from './dto/billing.dto';
 import { InvoicePdfService } from './invoice-pdf.service';
+import { CrmService } from '../crm/crm.service';
 import {
-  computeFirstPeriod as firstPeriodForRegime,
+  computeFirstPeriod as computePeriodForRegime,
+  computeServiceFirstPeriod,
   dateOnDayOfMonth,
   daysInclusive,
   effectiveBillingRegime,
+  formatIsoDate,
+  parseIsoDate,
+  addDays as addDaysUtc,
   rollPeriod,
+  rollServicePeriod,
   type BillingRegime,
 } from './billing-period.util';
 
@@ -50,6 +58,8 @@ export class BillingService {
     private readonly mailer: TenantMailerService,
     private readonly whatsapp: TenantWhatsAppService,
     private readonly invoicePdf: InvoicePdfService,
+    @Inject(forwardRef(() => CrmService))
+    private readonly crm: CrmService,
   ) {}
 
   private requireSchema(user: AuthUser): string {
@@ -88,6 +98,10 @@ export class BillingService {
       settings.sendCron = this.assertCron(dto.sendCron);
     if (dto.defaultDueDays !== undefined)
       settings.defaultDueDays = dto.defaultDueDays;
+    if (dto.graceDaysAfterDue !== undefined)
+      settings.graceDaysAfterDue = dto.graceDaysAfterDue;
+    if (dto.billingCycleDay !== undefined)
+      settings.billingCycleDay = dto.billingCycleDay;
     if (dto.billingRegime !== undefined) {
       settings.billingRegime = dto.billingRegime;
     }
@@ -136,6 +150,8 @@ export class BillingService {
       sendCron: s.sendCron,
       sendLastRunAt: s.sendLastRunAt,
       defaultDueDays: s.defaultDueDays,
+      graceDaysAfterDue: s.graceDaysAfterDue,
+      billingCycleDay: s.billingCycleDay,
       billingRegime: effectiveBillingRegime(s.billingRegime),
       updatedAt: s.updatedAt,
     };
@@ -299,6 +315,143 @@ export class BillingService {
     return rows.map((i) => this.serializeInvoice(i));
   }
 
+  /**
+   * Resumen contable: KPIs de cobranza + facturas con cliente,
+   * agrupables por mes de emisión (vista Contabilidad).
+   */
+  async accountingOverview(user: AuthUser) {
+    const schema = this.requireSchema(user);
+    const invRepo = await this.tenantConnections.getInvoiceRepository(schema);
+    const clientRepo =
+      await this.tenantConnections.getClientRepository(schema);
+
+    const rows = await invRepo.find({
+      order: { issueDate: 'DESC', createdAt: 'DESC' },
+      take: 5000,
+    });
+
+    const clientIds = [...new Set(rows.map((r) => r.clientId))];
+    const clients =
+      clientIds.length === 0
+        ? []
+        : await clientRepo.find({ where: { id: In(clientIds) } });
+    const clientById = new Map(clients.map((c) => [c.id, c]));
+
+    const now = new Date();
+    const monthStart = new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1),
+    )
+      .toISOString()
+      .slice(0, 10);
+    const monthEnd = new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0),
+    )
+      .toISOString()
+      .slice(0, 10);
+    const currentMonthKey = monthStart.slice(0, 7);
+
+    let salesThisMonth = 0;
+    let estimatedEarnings = 0;
+    let overdueTotal = 0;
+    let invoicedThisMonth = 0;
+    let paidCountThisMonth = 0;
+    let openInvoiceCount = 0;
+    let voidedThisMonth = 0;
+
+    const monthBuckets = new Map<
+      string,
+      {
+        key: string;
+        invoiceCount: number;
+        total: number;
+        paid: number;
+        pending: number;
+        overdue: number;
+      }
+    >();
+
+    const invoices = rows.map((inv) => {
+      const total = Number(inv.total) || 0;
+      const monthKey = (inv.issueDate || '').slice(0, 7);
+      const inCurrentMonth =
+        inv.issueDate >= monthStart && inv.issueDate <= monthEnd;
+      const isOpen =
+        inv.status === 'issued' ||
+        inv.status === 'sent' ||
+        inv.status === 'overdue';
+
+      if (inv.status === 'paid' && inCurrentMonth) {
+        salesThisMonth += total;
+        paidCountThisMonth += 1;
+      }
+      if (isOpen) {
+        estimatedEarnings += total;
+        openInvoiceCount += 1;
+      }
+      if (inv.status === 'overdue') overdueTotal += total;
+      if (inCurrentMonth && inv.status !== 'void' && inv.status !== 'draft') {
+        invoicedThisMonth += total;
+      }
+      if (inv.status === 'void' && inCurrentMonth) voidedThisMonth += total;
+
+      if (monthKey) {
+        let bucket = monthBuckets.get(monthKey);
+        if (!bucket) {
+          bucket = {
+            key: monthKey,
+            invoiceCount: 0,
+            total: 0,
+            paid: 0,
+            pending: 0,
+            overdue: 0,
+          };
+          monthBuckets.set(monthKey, bucket);
+        }
+        bucket.invoiceCount += 1;
+        if (inv.status !== 'void' && inv.status !== 'draft') {
+          bucket.total += total;
+        }
+        if (inv.status === 'paid') bucket.paid += total;
+        if (isOpen) bucket.pending += total;
+        if (inv.status === 'overdue') bucket.overdue += total;
+      }
+
+      const client = clientById.get(inv.clientId);
+      return {
+        ...this.serializeInvoice(inv),
+        items: [],
+        clientName: client ? accountingClientName(client) : 'Cliente',
+        clientEmail: client?.email ?? '',
+      };
+    });
+
+    const months = [...monthBuckets.values()].sort((a, b) =>
+      a.key < b.key ? 1 : a.key > b.key ? -1 : 0,
+    );
+
+    const collectionRateThisMonth =
+      invoicedThisMonth > 0
+        ? Math.round((salesThisMonth / invoicedThisMonth) * 1000) / 10
+        : 0;
+
+    return {
+      currentMonth: currentMonthKey,
+      kpis: {
+        salesThisMonth,
+        estimatedEarnings,
+        overdueTotal,
+        invoicedThisMonth,
+        paidCountThisMonth,
+        openInvoiceCount,
+        voidedThisMonth,
+        collectionRateThisMonth,
+        invoiceCount: rows.length,
+      },
+      months,
+      invoices,
+    };
+  }
+
   async listClientInvoices(user: AuthUser, clientId: string, limit = 100) {
     const schema = this.requireSchema(user);
     const clients = await this.tenantConnections.getClientRepository(schema);
@@ -323,6 +476,123 @@ export class BillingService {
       clientName: built.clientName,
       subject: built.subject,
       bodyHtml: built.bodyHtml,
+    };
+  }
+
+  /** Detalle compacto para el Asistente (sin HTML de email). */
+  async getInvoiceCompact(user: AuthUser, id: string) {
+    const schema = this.requireSchema(user);
+    const repo = await this.tenantConnections.getInvoiceRepository(schema);
+    const inv = await repo.findOne({
+      where: { id },
+      relations: { items: true },
+    });
+    if (!inv) throw new NotFoundException('Factura no encontrada');
+    const clients = await this.tenantConnections.getClientRepository(schema);
+    const client = await clients.findOne({ where: { id: inv.clientId } });
+    return {
+      ...this.serializeInvoice(inv),
+      clientName: client ? accountingClientName(client) : null,
+      clientPhone: client?.phone ?? null,
+      clientEmail: client?.email ?? null,
+    };
+  }
+
+  /**
+   * Busca facturas por número, cliente, estado o texto libre.
+   * status: paid|overdue|issued|sent|draft|void|open (open = issued+sent+overdue)
+   */
+  async searchInvoices(
+    user: AuthUser,
+    opts?: {
+      q?: string;
+      status?: string;
+      clientId?: string;
+      limit?: number;
+    },
+  ) {
+    const schema = this.requireSchema(user);
+    const limit = Math.min(Math.max(opts?.limit ?? 40, 1), 100);
+    const q = (opts?.q ?? '').trim().toLowerCase();
+    const status = (opts?.status ?? '').trim().toLowerCase();
+    const clientId = opts?.clientId?.trim() || '';
+
+    const repo = await this.tenantConnections.getInvoiceRepository(schema);
+    const where = clientId ? { clientId } : {};
+    const rows = await repo.find({
+      where,
+      relations: { items: true },
+      order: { createdAt: 'DESC' },
+      take: 2000,
+    });
+
+    const clientIds = [...new Set(rows.map((r) => r.clientId))];
+    const clients =
+      clientIds.length === 0
+        ? []
+        : await (
+            await this.tenantConnections.getClientRepository(schema)
+          ).find({ where: { id: In(clientIds) } });
+    const clientById = new Map(clients.map((c) => [c.id, c]));
+
+    const openStatuses = new Set(['issued', 'sent', 'overdue']);
+    let filtered = rows;
+    if (status === 'open' || status === 'debt' || status === 'deuda') {
+      filtered = filtered.filter((i) => openStatuses.has(i.status));
+    } else if (status === 'overdue' || status === 'vencida') {
+      filtered = filtered.filter((i) => i.status === 'overdue');
+    } else if (status) {
+      filtered = filtered.filter((i) => i.status === status);
+    }
+
+    if (q) {
+      filtered = filtered.filter((i) => {
+        const c = clientById.get(i.clientId);
+        const hay = [
+          i.number,
+          i.status,
+          i.notes,
+          i.periodStart,
+          i.periodEnd,
+          c?.firstName,
+          c?.lastName,
+          c?.companyName,
+          c?.phone,
+          c?.email,
+          c?.documentNumber,
+        ]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase();
+        return hay.includes(q);
+      });
+    }
+
+    const sliced = filtered.slice(0, limit);
+    let debtTotal = 0;
+    let overdueTotal = 0;
+    for (const i of filtered) {
+      const total = Number(i.total) || 0;
+      if (openStatuses.has(i.status)) debtTotal += total;
+      if (i.status === 'overdue') overdueTotal += total;
+    }
+
+    return {
+      q: q || null,
+      status: status || null,
+      clientId: clientId || null,
+      returned: sliced.length,
+      matched: filtered.length,
+      debtTotal: Number(debtTotal.toFixed(2)),
+      overdueTotal: Number(overdueTotal.toFixed(2)),
+      invoices: sliced.map((i) => {
+        const c = clientById.get(i.clientId);
+        return {
+          ...this.serializeInvoice(i),
+          clientName: c ? accountingClientName(c) : null,
+          clientPhone: c?.phone ?? null,
+        };
+      }),
     };
   }
 
@@ -617,9 +887,11 @@ export class BillingService {
     const services =
       await this.tenantConnections.getClientServiceRepository(schema);
     const from = await this.resolveServiceStartDate(schema, service, regime);
-    const { periodStart, periodEnd, nextBillingDate } = firstPeriodForRegime(
+    const { periodStart, periodEnd, nextBillingDate } = computeServiceFirstPeriod(
       from,
       regime,
+      !!service.billingProrate,
+      settings.billingCycleDay ?? 1,
     );
     service.activeFrom = service.activeFrom || from;
     service.periodStart = periodStart;
@@ -696,7 +968,7 @@ export class BillingService {
       (plan.billingAnchor === 'installation'
         ? 'from_install'
         : 'calendar_month');
-    return firstPeriodForRegime(activeFrom, resolved);
+    return computePeriodForRegime(activeFrom, resolved, 1);
   }
 
   /** Advance periods for services whose period already ended. */
@@ -706,6 +978,7 @@ export class BillingService {
     if (regime === 'from_install') {
       return { advanced: 0 };
     }
+    const cycleDay = settings.billingCycleDay ?? 1;
     const services =
       await this.tenantConnections.getClientServiceRepository(schema);
     const today = new Date().toISOString().slice(0, 10);
@@ -716,7 +989,7 @@ export class BillingService {
     let advanced = 0;
     for (const svc of active) {
       if (!svc.periodEnd || svc.periodEnd >= today) continue;
-      const next = rollPeriod(svc.periodEnd, regime);
+      const next = rollPeriod(svc.periodEnd, regime, cycleDay);
       svc.periodStart = next.periodStart;
       svc.periodEnd = next.periodEnd;
       svc.nextBillingDate = next.nextBillingDate;
@@ -773,9 +1046,12 @@ export class BillingService {
       for (const svc of clientServices) {
         const plan = planById.get(svc.servicePlanId)!;
         const monthly = Number(svc.price);
-        const regime = this.regimeOf(settings);
+        const companyRegime = this.regimeOf(settings);
+        const prorateEligible =
+          companyRegime === 'calendar_month' ||
+          (companyRegime === 'from_install' && svc.billingProrate);
         const isProrate =
-          regime === 'calendar_month' &&
+          prorateEligible &&
           svc.periodStart &&
           svc.periodEnd &&
           daysInclusive(svc.periodStart, svc.periodEnd) <
@@ -843,10 +1119,16 @@ export class BillingService {
       createdInvoiceIds.push(invoice.id);
 
       // Roll each included service's period forward after invoicing.
-      const regime = this.regimeOf(settings);
+      const companyRegime = this.regimeOf(settings);
+      const cycleDay = settings.billingCycleDay ?? 1;
       for (const svc of clientServices) {
         if (svc.periodEnd) {
-          const next = rollPeriod(svc.periodEnd, regime);
+          const next = rollServicePeriod(
+            svc.periodEnd,
+            companyRegime,
+            !!svc.billingProrate,
+            cycleDay,
+          );
           svc.periodStart = next.periodStart;
           svc.periodEnd = next.periodEnd;
           svc.nextBillingDate = next.nextBillingDate;
@@ -865,6 +1147,48 @@ export class BillingService {
     }
 
     return { created, sent };
+  }
+
+  /**
+   * Marca facturas vencidas y suspende servicios activos tras el plazo de gracia.
+   */
+  async runOverdueCutoff(schema: string) {
+    const settings = await this.ensureSettings(schema);
+    const grace = settings.graceDaysAfterDue ?? 2;
+    const invRepo = await this.tenantConnections.getInvoiceRepository(schema);
+    const today = new Date().toISOString().slice(0, 10);
+    const open = await invRepo.find({
+      where: { status: In(['issued', 'sent', 'overdue']) },
+    });
+
+    let markedOverdue = 0;
+    let suspendedServices = 0;
+    const clientsCut = new Set<string>();
+
+    for (const inv of open) {
+      if (!inv.dueDate) continue;
+      if (inv.dueDate < today && inv.status !== 'overdue') {
+        inv.status = 'overdue';
+        await invRepo.save(inv);
+        markedOverdue += 1;
+      }
+      const cutoff = formatIsoDate(
+        addDaysUtc(parseIsoDate(inv.dueDate), grace),
+      );
+      if (today <= cutoff || clientsCut.has(inv.clientId)) continue;
+      const n = await this.crm.autoSuspendClientForOverdue(schema, inv.clientId);
+      if (n > 0) {
+        clientsCut.add(inv.clientId);
+        suspendedServices += n;
+      }
+    }
+
+    if (markedOverdue > 0 || suspendedServices > 0) {
+      this.logger.log(
+        `Corte mora ${schema}: ${markedOverdue} vencidas, ${suspendedServices} servicios suspendidos`,
+      );
+    }
+    return { markedOverdue, suspendedServices };
   }
 
   /** Envía facturas emitidas por correo y, si corresponde, WhatsApp. */
@@ -1164,6 +1488,20 @@ export class BillingService {
 function parseDate(iso: string): Date {
   const [y, m, d] = iso.split('-').map(Number);
   return new Date(Date.UTC(y, m - 1, d));
+}
+
+function accountingClientName(c: {
+  firstName: string;
+  lastName: string;
+  companyName: string;
+  isCompany: boolean;
+}): string {
+  if (c.isCompany && c.companyName?.trim()) return c.companyName.trim();
+  const person = [c.firstName, c.lastName].filter(Boolean).join(' ').trim();
+  if (person && c.companyName?.trim()) {
+    return `${person} (${c.companyName.trim()})`;
+  }
+  return person || c.companyName?.trim() || 'Cliente';
 }
 
 function formatDate(d: Date): string {

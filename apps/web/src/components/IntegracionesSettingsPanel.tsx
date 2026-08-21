@@ -9,12 +9,14 @@ import { formatDate } from '../lib/platform'
 import { SmtpConfigModal } from './SmtpConfigModal'
 import { MercadoPagoConfigModal } from './MercadoPagoConfigModal'
 import { WhatsAppConfigModal } from './WhatsAppConfigModal'
+import { AsistenteIaConfigModal } from './AsistenteIaConfigModal'
 import { ContractModuleModal } from './ContractModuleModal'
 
 export function IntegracionesSettingsPanel({ canWrite }: { canWrite: boolean }) {
   const [smtpOpen, setSmtpOpen] = useState(false)
   const [mpOpen, setMpOpen] = useState(false)
   const [waOpen, setWaOpen] = useState(false)
+  const [aiOpen, setAiOpen] = useState(false)
   const [contractId, setContractId] = useState<string | null>(null)
 
   const query = useQuery({
@@ -130,6 +132,7 @@ export function IntegracionesSettingsPanel({ canWrite }: { canWrite: boolean }) 
                       if (m.id === 'smtp') setSmtpOpen(true)
                       if (m.id === 'mercadopago') setMpOpen(true)
                       if (m.id === 'whatsapp') setWaOpen(true)
+                      if (m.id === 'asistente_ia') setAiOpen(true)
                     }}
                     className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium hover:bg-[var(--bg-elevated)]"
                   >
@@ -157,6 +160,11 @@ export function IntegracionesSettingsPanel({ canWrite }: { canWrite: boolean }) 
         open={waOpen}
         canWrite={canWrite}
         onClose={() => setWaOpen(false)}
+      />
+      <AsistenteIaConfigModal
+        open={aiOpen}
+        canWrite={canWrite}
+        onClose={() => setAiOpen(false)}
       />
       {contractMod && (
         <ContractModuleModal

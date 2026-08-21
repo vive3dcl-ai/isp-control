@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { apiFetch } from '../lib/api'
 import { formatMoney, useCompanyCurrency } from '../lib/currency'
+import { buildOnuAlertHref } from '../lib/notification-nav'
 import { PanelShell } from '../components/PanelShell'
 import {
   OltDeviceCard,
@@ -18,6 +19,8 @@ interface DashboardAlert {
   severity: 'info' | 'warning' | 'critical'
   title: string
   message: string
+  onuId?: string | null
+  oltId?: string | null
 }
 
 interface DashboardData {
@@ -25,7 +28,7 @@ interface DashboardData {
   tenantSlug?: string
   clientCount: number
   activeServices: number
-  suspendedServices: number
+  suspendedClients: number
   salesThisMonth: number
   estimatedEarnings: number
   alertsCount: number
@@ -42,6 +45,8 @@ export function TenantDashboardPage() {
   const [metricsDevice, setMetricsDevice] = useState<TopologyDevice | null>(
     null,
   )
+  const [alertsOpen, setAlertsOpen] = useState(false)
+  const alertsRef = useRef<HTMLDivElement>(null)
 
   const { data, error, isLoading } = useQuery({
     queryKey: ['app', 'dashboard'],
@@ -76,6 +81,22 @@ export function TenantDashboardPage() {
     if (fresh) setMetricsDevice(fresh)
   }, [topologyQuery.data?.devices, metricsDevice?.id])
 
+  useEffect(() => {
+    if (!alertsOpen) return
+    function onDocClick(e: MouseEvent) {
+      if (!alertsRef.current?.contains(e.target as Node)) setAlertsOpen(false)
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setAlertsOpen(false)
+    }
+    document.addEventListener('mousedown', onDocClick)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDocClick)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [alertsOpen])
+
   return (
     <PanelShell
       title="Dashboard"
@@ -103,24 +124,30 @@ export function TenantDashboardPage() {
                 {data.clientCount ?? 0}
               </dd>
             </Link>
-            <div className="rounded-xl border border-[var(--border)] bg-[var(--bg)] p-4">
+            <Link
+              to="/app/settings?tab=onus"
+              className="rounded-xl border border-[var(--border)] bg-[var(--bg)] p-4 transition hover:border-[var(--accent)]"
+            >
               <dt className="text-sm text-[var(--text-muted)]">
                 Servicios activos
               </dt>
               <dd className="mt-1 text-xl font-medium">
                 {data.activeServices ?? 0}
               </dd>
-            </div>
-            <div className="rounded-xl border border-[var(--border)] bg-[var(--bg)] p-4">
+            </Link>
+            <Link
+              to="/app/clients?status=suspended"
+              className="rounded-xl border border-[var(--border)] bg-[var(--bg)] p-4 transition hover:border-[var(--accent)]"
+            >
               <dt className="text-sm text-[var(--text-muted)]">
-                Servicios suspendidos
+                Clientes suspendidos
               </dt>
               <dd className="mt-1 text-xl font-medium">
-                {data.suspendedServices ?? 0}
+                {data.suspendedClients ?? 0}
               </dd>
-            </div>
+            </Link>
             <Link
-              to="/app/settings?tab=facturacion"
+              to="/app/accounting?view=sales"
               className="rounded-xl border border-[var(--border)] bg-[var(--bg)] p-4 transition hover:border-[var(--accent)]"
             >
               <dt className="text-sm text-[var(--text-muted)]">
@@ -134,7 +161,7 @@ export function TenantDashboardPage() {
               </p>
             </Link>
             <Link
-              to="/app/settings?tab=facturacion"
+              to="/app/accounting?view=receivables"
               className="rounded-xl border border-[var(--border)] bg-[var(--bg)] p-4 transition hover:border-[var(--accent)]"
             >
               <dt className="text-sm text-[var(--text-muted)]">
@@ -147,16 +174,46 @@ export function TenantDashboardPage() {
                 Facturas emitidas pendientes de cobro
               </p>
             </Link>
-            <div className="rounded-xl border border-[var(--border)] bg-[var(--bg)] p-4">
-              <dt className="text-sm text-[var(--text-muted)]">Alertas</dt>
-              <dd className="mt-1 text-xl font-medium">
-                {data.alertsCount ?? 0}
-              </dd>
-              <p className="mt-1 text-[11px] text-[var(--text-muted)]">
-                {(data.alertsCount ?? 0) === 0
-                  ? 'Sin alertas por ahora'
-                  : 'Requieren atención'}
-              </p>
+            <div className="relative" ref={alertsRef}>
+              <button
+                type="button"
+                onClick={() => setAlertsOpen((v) => !v)}
+                aria-expanded={alertsOpen}
+                className="w-full rounded-xl border border-[var(--border)] bg-[var(--bg)] p-4 text-left transition hover:border-[var(--accent)]"
+              >
+                <dt className="text-sm text-[var(--text-muted)]">Alertas</dt>
+                <dd className="mt-1 text-xl font-medium">
+                  {data.alertsCount ?? 0}
+                </dd>
+                <p className="mt-1 text-[11px] text-[var(--text-muted)]">
+                  {(data.alertsCount ?? 0) === 0
+                    ? 'Sin alertas por ahora'
+                    : 'Clic para ver detalle'}
+                </p>
+              </button>
+              {alertsOpen && (data.alerts?.length ?? 0) > 0 && (
+                <div className="absolute left-0 right-0 z-20 mt-2 max-h-72 overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] shadow-lg">
+                  {data.alerts.map((a) => (
+                    <Link
+                      key={a.id}
+                      to={
+                        a.onuId
+                          ? buildOnuAlertHref(a.onuId)
+                          : '/app/settings?tab=onus'
+                      }
+                      onClick={() => setAlertsOpen(false)}
+                      className="block border-b border-[var(--border)] px-3 py-2.5 transition last:border-0 hover:bg-[var(--bg)]"
+                    >
+                      <p className="text-sm font-medium leading-snug">
+                        {a.title}
+                      </p>
+                      <p className="mt-0.5 line-clamp-2 text-xs text-[var(--text-muted)]">
+                        {a.message}
+                      </p>
+                    </Link>
+                  ))}
+                </div>
+              )}
             </div>
           </dl>
 

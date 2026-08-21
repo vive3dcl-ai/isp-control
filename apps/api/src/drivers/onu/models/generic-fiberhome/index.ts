@@ -10,6 +10,7 @@ import {
   detectDataModelRoot,
   shouldWriteConnReqCredentials,
 } from '../../infra/connreq-credentials';
+import { serviceWanCarrierOk } from '../../infra/service-carrier';
 import { genieGet, strVal } from '../../../../topology/shared/genieacs-nbi.client';
 import type {
   ApplyServiceSpvParams,
@@ -38,13 +39,28 @@ function diagnoseGaps(
   return {
     connreqOurs: !shouldWriteConnReqCredentials(user),
     reachable: opts?.reachable,
+    serviceCarrierOk: serviceWanCarrierOk(device),
   };
 }
 
 async function verifyHeal(
   ctx: OnuVerifyHealCtx,
 ): Promise<OnuModelProvisionResult> {
-  return ensureGenericServiceWan(ctx, 'fiberhome_hgu');
+  const notes: string[] = [];
+  // Con verifyHeal el poller omite ensureCredentialsFirst central: hay que
+  // tomar connreq aquí (ONUs migradas con RMS).
+  const root = detectDataModelRoot(ctx.device);
+  const user = strVal(
+    genieGet(
+      ctx.device,
+      `${root}.ManagementServer.ConnectionRequestUsername`,
+    ),
+  );
+  if (shouldWriteConnReqCredentials(user)) {
+    notes.push(await ctx.preloadConnReq());
+  }
+  const r = await ensureGenericServiceWan(ctx, 'fiberhome_hgu');
+  return { ok: r.ok, notes: [...notes, ...r.notes], progress: r.progress };
 }
 
 export const genericFiberhomeDriver: OnuDriver = {
@@ -57,6 +73,10 @@ export const genericFiberhomeDriver: OnuDriver = {
   progressPlan: GENERIC_FIBERHOME_PROGRESS_PLAN,
   supportsTr181RouteHeal: false,
   matches(ctx: OnuModelProvisionMatchCtx): boolean {
+    return vendorFromSn(ctx.sn) === 'fiberhome';
+  },
+  // Sin esto el checker no llama verifyHeal si connreq es ajeno (RMS).
+  ownsWanSelection(ctx: OnuModelProvisionMatchCtx): boolean {
     return vendorFromSn(ctx.sn) === 'fiberhome';
   },
   async ensureServiceWan(

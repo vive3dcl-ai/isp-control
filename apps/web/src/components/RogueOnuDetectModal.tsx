@@ -2,6 +2,12 @@ import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '../lib/api'
 import { ModalPortal } from './ModalPortal'
+import {
+  DesktopTableWrap,
+  MobileList,
+  MobileListCard,
+  MobileListMeta,
+} from './MobileList'
 
 
 type RogueCard = {
@@ -197,54 +203,103 @@ export function RogueOnuDetectModal({
           )}
 
           {cards.length > 0 && (
-            <div className="overflow-x-auto rounded-lg border border-[var(--border)]">
-              <table className="w-full text-left text-sm">
-                <thead>
-                  <tr className="border-b border-[var(--border)] bg-[var(--bg)] text-[var(--text-muted)]">
-                    <th className="px-3 py-2">
+            <>
+              <label className="flex items-center gap-2 md:hidden">
+                <input
+                  type="checkbox"
+                  checked={allSelected}
+                  onChange={toggleAll}
+                  aria-label="Seleccionar todas"
+                />
+                <span className="text-xs text-[var(--text-muted)]">
+                  Seleccionar todas
+                </span>
+              </label>
+              <MobileList>
+                {cards.map((c) => (
+                  <MobileListCard key={c.slot}>
+                    <div className="flex items-start gap-2">
                       <input
                         type="checkbox"
-                        checked={allSelected}
-                        onChange={toggleAll}
-                        aria-label="Seleccionar todas"
+                        className="mt-1"
+                        checked={selected.includes(c.slot)}
+                        onChange={() => toggleSlot(c.slot)}
                       />
-                    </th>
-                    <th className="px-3 py-2 font-medium">Ranura OLT</th>
-                    <th className="px-3 py-2 font-medium">Tipo</th>
-                    <th className="px-3 py-2 font-medium">Detectar</th>
-                    <th className="px-3 py-2 font-medium">Localizar</th>
-                    <th className="px-3 py-2 font-medium">Apagado auto</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {cards.map((c) => (
-                    <tr
-                      key={c.slot}
-                      className="border-b border-[var(--border)] last:border-0"
-                    >
-                      <td className="px-3 py-2.5">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-semibold">
+                          Ranura {c.slot}
+                        </p>
+                        <p className="text-xs text-[var(--text-muted)]">
+                          {c.boardType}
+                        </p>
+                        <MobileListMeta>
+                          <span>
+                            Detectar: <StatusBadge enabled={c.detect} />
+                          </span>
+                          <span>·</span>
+                          <span>
+                            Localizar: <StatusBadge enabled={c.locate} />
+                          </span>
+                          <span>·</span>
+                          <span>
+                            Apagado: <StatusBadge enabled={c.autoShutdown} />
+                          </span>
+                        </MobileListMeta>
+                      </div>
+                    </div>
+                  </MobileListCard>
+                ))}
+              </MobileList>
+
+              <DesktopTableWrap>
+                <table className="w-full text-left text-sm">
+                  <thead>
+                    <tr className="border-b border-[var(--border)] bg-[var(--bg)] text-[var(--text-muted)]">
+                      <th className="px-3 py-2">
                         <input
                           type="checkbox"
-                          checked={selected.includes(c.slot)}
-                          onChange={() => toggleSlot(c.slot)}
+                          checked={allSelected}
+                          onChange={toggleAll}
+                          aria-label="Seleccionar todas"
                         />
-                      </td>
-                      <td className="px-3 py-2.5 font-medium">{c.slot}</td>
-                      <td className="px-3 py-2.5">{c.boardType}</td>
-                      <td className="px-3 py-2.5">
-                        <StatusBadge enabled={c.detect} />
-                      </td>
-                      <td className="px-3 py-2.5">
-                        <StatusBadge enabled={c.locate} />
-                      </td>
-                      <td className="px-3 py-2.5">
-                        <StatusBadge enabled={c.autoShutdown} />
-                      </td>
+                      </th>
+                      <th className="px-3 py-2 font-medium">Ranura OLT</th>
+                      <th className="px-3 py-2 font-medium">Tipo</th>
+                      <th className="px-3 py-2 font-medium">Detectar</th>
+                      <th className="px-3 py-2 font-medium">Localizar</th>
+                      <th className="px-3 py-2 font-medium">Apagado auto</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {cards.map((c) => (
+                      <tr
+                        key={c.slot}
+                        className="border-b border-[var(--border)] last:border-0"
+                      >
+                        <td className="px-3 py-2.5">
+                          <input
+                            type="checkbox"
+                            checked={selected.includes(c.slot)}
+                            onChange={() => toggleSlot(c.slot)}
+                          />
+                        </td>
+                        <td className="px-3 py-2.5 font-medium">{c.slot}</td>
+                        <td className="px-3 py-2.5">{c.boardType}</td>
+                        <td className="px-3 py-2.5">
+                          <StatusBadge enabled={c.detect} />
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <StatusBadge enabled={c.locate} />
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <StatusBadge enabled={c.autoShutdown} />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </DesktopTableWrap>
+            </>
           )}
 
           <div className="space-y-2">

@@ -56,6 +56,10 @@ import {
   parseHuaweiLineProfiles,
   parseHuaweiSrvProfiles,
 } from './huawei-olt-profile.util';
+import {
+  parseHuaweiLineProfileTconts,
+  parseHuaweiOntLineProfileId,
+} from './huawei-olt-dba.util';
 
 type CliParams = {
   host: string;
@@ -790,6 +794,168 @@ export class HuaweiOltClient {
       await io.read();
       return `Eliminados ${matches.length} perfil(es) DBA relacionados con «${params.name}»`;
     });
+  }
+
+  /**
+   * Lee T-CONT 1 (internet) de la ONT vía line-profile / DBA.
+   * Misma forma que ZTE `readOnuTcontBinds` para syncInternetDba.
+   */
+  async readOnuTcontBinds(
+    params: CliParams & {
+      onuIf: string;
+      firmwareHint?: string | null;
+      subtypeHint?: string | null;
+    },
+  ): Promise<{
+    ok: boolean;
+    error?: string;
+    out: string;
+    tconts: Array<{ tcontId: number; profile: string }>;
+  }> {
+    const point = parseHuaweiOnuIf(params.onuIf);
+    if (!point) {
+      return {
+        ok: false,
+        error: 'Interfaz ONU Huawei inválida',
+        out: '',
+        tconts: [],
+      };
+    }
+    try {
+      const result = await this.run(params, false, async (io) => {
+        const chunks: string[] = [];
+        await io.send(`display ont info ${point.port} ${point.ontId}`);
+        const info = await io.read();
+        chunks.push(info);
+        let lineId = parseHuaweiOntLineProfileId(info);
+        if (lineId == null) {
+          await io.send(
+            `display current-configuration ont ${point.port} ${point.ontId}`,
+          );
+          const cfg = await io.read();
+          chunks.push(cfg);
+          lineId = parseHuaweiOntLineProfileId(cfg);
+        }
+        await io.send('display dba-profile all');
+        const dbaRaw = await io.read();
+        chunks.push(dbaRaw);
+        const dbas = parseHuaweiDbaProfiles(dbaRaw);
+        const byId = new Map<number, string>();
+        for (const p of dbas) {
+          if (p.id != null) byId.set(p.id, p.name);
+        }
+        let tconts: Array<{ tcontId: number; profile: string }> = [];
+        if (lineId != null) {
+          await io.send(
+            `display ont-lineprofile gpon profile-id ${lineId}`,
+          );
+          const lineOut = await io.read();
+          chunks.push(lineOut);
+          tconts = parseHuaweiLineProfileTconts(lineOut, byId);
+        }
+        if (!tconts.length) {
+          await io.send(`display ont info ${point.port} ${point.ontId} 1`);
+          const detail = await io.read();
+          chunks.push(detail);
+          tconts = parseHuaweiLineProfileTconts(detail, byId);
+        }
+        return { out: chunks.join('\n'), tconts };
+      });
+      return { ok: true, out: result.out, tconts: result.tconts };
+    } catch (error) {
+      return {
+        ok: false,
+        error: this.message(error),
+        out: '',
+        tconts: [],
+      };
+    }
+  }
+
+  /**
+   * Aplica DBA de internet (T-CONT 1) a la ONT vía `tcont bind-profile`.
+   * No modifica el line-profile compartido salvo último recurso.
+   */
+  async applyOnuInternetTcont(
+    params: CliParams & {
+      onuIf: string;
+      upProfile: string;
+      downProfile?: string | null;
+      firmwareHint?: string | null;
+      subtypeHint?: string | null;
+    },
+  ): Promise<{ ok: boolean; error?: string; message?: string }> {
+    const point = parseHuaweiOnuIf(params.onuIf);
+    if (!point) return { ok: false, error: 'Interfaz ONU Huawei inválida' };
+    const up = params.upProfile.trim();
+    if (!up) return { ok: false, error: 'perfil T-CONT vacío' };
+    try {
+      return await this.write(params, async (io) => {
+        await this.config(io);
+        await io.send('display dba-profile all');
+        const dbas = parseHuaweiDbaProfiles(await io.read());
+        const hit = dbas.find(
+          (p) => p.name.trim().toUpperCase() === up.toUpperCase(),
+        );
+        await io.send(`interface gpon 0/${point.slot}`);
+        await io.read();
+        let out = '';
+        if (hit?.id != null) {
+          await io.send(
+            `tcont bind-profile ${point.port} ${point.ontId} 1 profile-id ${hit.id}`,
+          );
+          out = await io.read();
+        }
+        const bindFailed =
+          !hit?.id ||
+          cliRejected(out) ||
+          /fail|error|invalid|unknown|not\s+support/i.test(out);
+        if (bindFailed) {
+          await io.send(
+            `tcont bind-profile ${point.port} ${point.ontId} 1 profile-name "${up}"`,
+          );
+          out = await io.read();
+        }
+        const stillFailed =
+          cliRejected(out) ||
+          /fail|error|invalid|unknown|not\s+support/i.test(out);
+        if (stillFailed) {
+          await io.send('quit');
+          await io.read();
+          await io.send(`display ont info ${point.port} ${point.ontId}`);
+          const info = await io.read();
+          const lineId = parseHuaweiOntLineProfileId(info);
+          if (lineId == null || hit?.id == null) {
+            throw new Error(
+              `tcont bind-profile falló: ${out.slice(0, 160) || 'sin respuesta'}`,
+            );
+          }
+          await io.send(`ont-lineprofile gpon profile-id ${lineId}`);
+          await io.read();
+          await io.send(`tcont 1 dba-profile-id ${hit.id}`);
+          out = await io.read();
+          await io.send('commit');
+          await io.read();
+          await io.send('quit');
+          await io.read();
+          if (cliRejected(out) || /fail|error|invalid/i.test(out)) {
+            throw new Error(
+              `line-profile tcont 1 dba-profile-id ${hit.id}: ${out.slice(0, 160)}`,
+            );
+          }
+          await io.send('quit');
+          await io.read();
+          return `tcont 1 dba-profile-id ${hit.id} (line-profile ${lineId})`;
+        }
+        await io.send('quit');
+        await io.read();
+        await io.send('quit');
+        await io.read();
+        return `tcont 1 ← ${up}`;
+      });
+    } catch (error) {
+      return { ok: false, error: this.message(error) };
+    }
   }
 
   async rebootOnusOnIf(params: CliParams & { ifName: string }) {

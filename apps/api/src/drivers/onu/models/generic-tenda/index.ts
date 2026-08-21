@@ -7,6 +7,7 @@ import { resolveGenericServiceWan } from '../../infra/resolve-service-wan';
 import { applyGenericServiceSpv } from '../../infra/service-spv';
 import { ensureGenericServiceWan } from '../../infra/ensure-generic-service-wan';
 import { ACS_HGU_PARAM_OWNERS } from '../../param-owners';
+import { serviceWanCarrierOk } from '../../infra/service-carrier';
 import type {
   ApplyServiceSpvParams,
   OnuDriver,
@@ -44,11 +45,14 @@ export const genericTendaDriver: OnuDriver = {
     return ensureGenericServiceWan(ctx, 'tenda');
   },
   diagnoseGaps(
-    _device: Record<string, unknown>,
+    device: Record<string, unknown>,
     _wan: OnuModelProvisionWanPlan,
     opts?: { reachable?: boolean },
   ): OnuHealGaps {
-    return { reachable: opts?.reachable };
+    return {
+      reachable: opts?.reachable,
+      serviceCarrierOk: serviceWanCarrierOk(device),
+    };
   },
   verifyHeal,
   healOne: verifyHeal,

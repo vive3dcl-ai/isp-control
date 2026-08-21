@@ -18,7 +18,8 @@ export type ModuleId =
   | 'mapa_red'
   | 'whatsapp'
   | 'onu_unlock'
-  | 'client_portal';
+  | 'client_portal'
+  | 'asistente_ia';
 
 export type ModuleDefinition = {
   id: ModuleId;
@@ -167,6 +168,17 @@ export const MODULE_CATALOG: ModuleDefinition[] = [
     availableCountries: null,
     hasConfig: false,
   },
+  {
+    id: 'asistente_ia',
+    name: 'Asistente IA',
+    description:
+      'Asistente agentico para operar tu ISP: usa tu propia API (OpenAI, Anthropic, Grok, Gemini, DeepSeek, LatinRouter) o el proveedor interno de la plataforma con cupos diarios.',
+    alwaysEnabled: false,
+    billable: true,
+    priceMonthly: 29.9,
+    priceCurrency: 'USD',
+    availableCountries: null,
+  },
 ];
 
 /** Máximo de tenants con provider Baileys a la vez en toda la plataforma. */
@@ -252,6 +264,37 @@ export function isMercadoPagoConfigured(
   return !!(cfg.publicKey?.trim() && cfg.accessToken?.trim());
 }
 
+export type PayPalEnvironment = 'sandbox' | 'production';
+
+/**
+ * Credenciales PayPal Checkout (Orders API).
+ * clientSecret no se expone; se usa hasClientSecret en la API.
+ */
+export type PayPalModuleConfig = {
+  environment: PayPalEnvironment;
+  /** Checkout con Orders API v2. */
+  integration: 'checkout';
+  clientId: string;
+  clientSecret: string;
+  /** Webhook ID de la app PayPal (opcional). */
+  webhookId: string;
+};
+
+export const EMPTY_PAYPAL_CONFIG: PayPalModuleConfig = {
+  environment: 'sandbox',
+  integration: 'checkout',
+  clientId: '',
+  clientSecret: '',
+  webhookId: '',
+};
+
+export function isPayPalConfigured(
+  cfg: Partial<PayPalModuleConfig> | null | undefined,
+): boolean {
+  if (!cfg) return false;
+  return !!(cfg.clientId?.trim() && cfg.clientSecret?.trim());
+}
+
 export type WhatsAppProvider = 'cloud_api' | 'baileys';
 export type WhatsAppBaileysStatus =
   'disconnected' | 'qr' | 'connected' | 'connecting';
@@ -306,6 +349,42 @@ export function isWhatsAppConfigured(
   );
 }
 
+/** Modo del módulo Asistente IA. */
+export type AsistenteIaMode = 'own' | 'internal';
+
+export type AsistenteIaOwnProvider =
+  | 'openai'
+  | 'anthropic'
+  | 'grok'
+  | 'gemini'
+  | 'deepseek'
+  | 'latinrouter';
+
+export type AsistenteIaModuleConfig = {
+  mode: AsistenteIaMode;
+  /** Proveedor cuando mode=own. */
+  provider: AsistenteIaOwnProvider;
+  model: string;
+  apiKey: string;
+  enabled: boolean;
+};
+
+export const EMPTY_ASISTENTE_IA_CONFIG: AsistenteIaModuleConfig = {
+  mode: 'internal',
+  provider: 'openai',
+  model: 'gpt-4.1-mini',
+  apiKey: '',
+  enabled: true,
+};
+
+export function isAsistenteIaConfigured(
+  cfg: Partial<AsistenteIaModuleConfig> | null | undefined,
+): boolean {
+  if (!cfg || cfg.enabled === false) return false;
+  if (cfg.mode === 'internal') return true;
+  return !!(cfg.provider && cfg.model?.trim() && cfg.apiKey?.trim());
+}
+
 /** Banner / modal: unexpected drop — not intentional logout or fresh QR pair. */
 export function baileysNeedsAttention(
   cfg: Partial<WhatsAppModuleConfig> | null | undefined,
@@ -346,7 +425,21 @@ export const PLATFORM_PAYMENT_PROVIDERS = [
       'Cobro de suscripciones de la plataforma con Checkout Pro (sandbox y producción).',
     integration: 'checkout_pro' as const,
   },
+  {
+    id: 'paypal' as const,
+    name: 'PayPal',
+    description:
+      'Cobro de suscripciones de la plataforma con PayPal Checkout (sandbox y producción).',
+    integration: 'checkout' as const,
+  },
 ];
 
 export type PlatformPaymentProviderId =
   (typeof PLATFORM_PAYMENT_PROVIDERS)[number]['id'];
+
+export function emptyPlatformPaymentConfig(
+  provider: PlatformPaymentProviderId,
+): Record<string, unknown> {
+  if (provider === 'paypal') return { ...EMPTY_PAYPAL_CONFIG };
+  return { ...EMPTY_MERCADOPAGO_CONFIG };
+}

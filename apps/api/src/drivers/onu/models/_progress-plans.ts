@@ -10,52 +10,65 @@ import {
 
 export const ACS_ENSURE_SERVICE_STEP: OnuProgressStepDef = {
   id: 'ensure_service_wan',
-  label: 'Aprovisionar / curar WAN de servicio (ACS)',
+  label: 'WAN de servicio',
   phase: 'acs',
+};
+
+export const OLT_SERVICE_L2_STEP: OnuProgressStepDef = {
+  id: 'ensure_service_l2',
+  label: 'OLT service-port / flow (carrier)',
+  phase: 'olt',
 };
 
 export const ACS_SPV_STEP: OnuProgressStepDef = {
   id: 'apply_service_spv',
-  label: 'Empujar hojas WAN (SPV)',
+  label: 'Árbol de servicio',
   phase: 'acs',
 };
 
 export const HGU_VEIP_PROGRESS_PLAN: OnuProgressStepDef[] = [
   ACS_ENSURE_SERVICE_STEP,
+  OLT_SERVICE_L2_STEP,
   ...netStepsFromVerifyChecks(TR098_VERIFY_CHECKS),
 ];
 
 export const FIBERHOME_HG6143D_PROGRESS_PLAN: OnuProgressStepDef[] = [
   ACS_ENSURE_SERVICE_STEP,
+  OLT_SERVICE_L2_STEP,
   ...netStepsFromVerifyChecks(TR098_VERIFY_CHECKS),
 ];
 
 export const GENERIC_HUAWEI_PROGRESS_PLAN: OnuProgressStepDef[] = [
   ACS_ENSURE_SERVICE_STEP,
   ACS_SPV_STEP,
+  OLT_SERVICE_L2_STEP,
   ...netStepsFromVerifyChecks(TR098_VERIFY_CHECKS),
 ];
 
 export const GENERIC_FIBERHOME_PROGRESS_PLAN: OnuProgressStepDef[] = [
   ACS_ENSURE_SERVICE_STEP,
   ACS_SPV_STEP,
+  OLT_SERVICE_L2_STEP,
   ...netStepsFromVerifyChecks(TR098_VERIFY_CHECKS),
 ];
 
 export const GENERIC_ZTE_PROGRESS_PLAN: OnuProgressStepDef[] = [
   ACS_ENSURE_SERVICE_STEP,
   ACS_SPV_STEP,
+  OLT_SERVICE_L2_STEP,
   ...netStepsFromVerifyChecks(DEFAULT_VERIFY_CHECKS),
 ];
 
 export const GENERIC_UNKNOWN_PROGRESS_PLAN: OnuProgressStepDef[] = [
   ACS_ENSURE_SERVICE_STEP,
   ACS_SPV_STEP,
+  OLT_SERVICE_L2_STEP,
   ...netStepsFromVerifyChecks(DEFAULT_VERIFY_CHECKS),
 ];
 
 export const GENERIC_TENDA_PROGRESS_PLAN: OnuProgressStepDef[] = [
   ACS_ENSURE_SERVICE_STEP,
   ACS_SPV_STEP,
+  OLT_SERVICE_L2_STEP,
   ...netStepsFromVerifyChecks(TR098_VERIFY_CHECKS),
 ];

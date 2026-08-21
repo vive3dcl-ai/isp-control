@@ -94,6 +94,11 @@ export class CreateClientServiceDto {
   @IsInt()
   @Min(0)
   additionalDecoCount?: number;
+
+  /** Cobro proporcional hasta fin de mes (régimen desde instalación). */
+  @IsOptional()
+  @IsBoolean()
+  billingProrate?: boolean;
 }
 
 export class UpdateClientServiceDto {

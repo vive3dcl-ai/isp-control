@@ -21,6 +21,13 @@ import { useNotify } from './NotifyProvider'
 import { SettingsSubTabs } from './SettingsSubTabs'
 import { CreateInvoiceModal } from './CreateInvoiceModal'
 import { ModalPortal } from './ModalPortal'
+import {
+  DesktopTableWrap,
+  MobileList,
+  MobileListCard,
+  MobileListEmpty,
+  MobileListMeta,
+} from './MobileList'
 
 
 const inputClass =
@@ -141,6 +148,8 @@ function BillingCronsPanel({ canWrite }: { canWrite: boolean }) {
       sendEnabled: form!.sendEnabled,
       sendCron: form!.sendCron,
       defaultDueDays: form!.defaultDueDays,
+      graceDaysAfterDue: form!.graceDaysAfterDue,
+      billingCycleDay: form!.billingCycleDay,
       billingRegime: form!.billingRegime ?? 'calendar_month',
     })
   }
@@ -235,16 +244,60 @@ function BillingCronsPanel({ canWrite }: { canWrite: boolean }) {
               </span>
               <input
                 type="number"
-                min={0}
+                min={1}
                 max={90}
                 className={inputClass}
                 disabled={!canWrite}
-                value={form.defaultDueDays ?? 10}
+                value={form.defaultDueDays ?? 5}
                 onChange={(e) =>
                   set('defaultDueDays', Number(e.target.value))
                 }
               />
+              <span className="mt-1 block text-[11px] text-[var(--text-muted)]">
+                Plazo desde la emisión de la factura (p. ej. 5 = vence 5 días
+                después).
+              </span>
             </label>
+            <label className="block text-sm">
+              <span className="mb-1 block text-[var(--text-muted)]">
+                Días de gracia tras vencimiento
+              </span>
+              <input
+                type="number"
+                min={0}
+                max={30}
+                className={inputClass}
+                disabled={!canWrite}
+                value={form.graceDaysAfterDue ?? 2}
+                onChange={(e) =>
+                  set('graceDaysAfterDue', Number(e.target.value))
+                }
+              />
+              <span className="mt-1 block text-[11px] text-[var(--text-muted)]">
+                Tras el vencimiento, antes del corte automático del servicio.
+              </span>
+            </label>
+            {form.billingRegime !== 'from_install' && (
+              <label className="block text-sm">
+                <span className="mb-1 block text-[var(--text-muted)]">
+                  Día de inicio del ciclo
+                </span>
+                <input
+                  type="number"
+                  min={1}
+                  max={28}
+                  className={inputClass}
+                  disabled={!canWrite}
+                  value={form.billingCycleDay ?? 1}
+                  onChange={(e) =>
+                    set('billingCycleDay', Number(e.target.value))
+                  }
+                />
+                <span className="mt-1 block text-[11px] text-[var(--text-muted)]">
+                  Día del mes en que se genera la factura mensual (1–28).
+                </span>
+              </label>
+            )}
           </div>
           <fieldset className="mt-4 space-y-2">
             <legend className="text-sm font-medium text-[var(--text)]">
@@ -264,9 +317,10 @@ function BillingCronsPanel({ canWrite }: { canWrite: boolean }) {
               <span>
                 <span className="font-medium">Facturación mensual</span>
                 <span className="mt-0.5 block text-[11px] text-[var(--text-muted)]">
-                  Cobro fijo una vez al mes (calendario). El primer mes se
-                  prorratea. Se mantienen los períodos, el envío y los días de
-                  gracia.
+                  Cobro fijo una vez al mes. El primer mes se prorratea. Usa el
+                  día de inicio del ciclo, {form.defaultDueDays ?? 5} días para
+                  pagar y {form.graceDaysAfterDue ?? 2} días de gracia antes del
+                  corte automático.
                 </span>
               </span>
             </label>
@@ -282,10 +336,11 @@ function BillingCronsPanel({ canWrite }: { canWrite: boolean }) {
               <span>
                 <span className="font-medium">Desde instalación</span>
                 <span className="mt-0.5 block text-[11px] text-[var(--text-muted)]">
-                  Cada cliente factura el día del mes en que se instaló. Sin
-                  prorrateo de calendario. El envío y el tiempo de gracia
-                  siguen iguales. En clientes importados sin fecha de alta se
-                  pide el día de instalación.
+                  Cada cliente factura el día del mes en que se instaló (o cobro
+                  proporcional opcional al alta). {form.defaultDueDays ?? 5}{' '}
+                  días para pagar y {form.graceDaysAfterDue ?? 2} de gracia antes
+                  del corte. En importados sin fecha se pide el día de
+                  instalación.
                 </span>
               </span>
             </label>
@@ -549,7 +604,81 @@ function BillingTemplatesPanel({ canWrite }: { canWrite: boolean }) {
         )}
       </div>
 
-      <div className="overflow-x-auto overflow-hidden rounded-xl border border-[var(--border)]">
+      <MobileList>
+        {query.isLoading && <MobileListEmpty>Cargando…</MobileListEmpty>}
+        {!query.isLoading && templates.length === 0 && (
+          <MobileListEmpty>Sin plantillas.</MobileListEmpty>
+        )}
+        {templates.map((t) => (
+          <MobileListCard key={t.id}>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-semibold">{t.name}</p>
+              <p className="truncate text-xs text-[var(--text-muted)]">
+                {t.subject}
+              </p>
+            </div>
+            <MobileListMeta>
+              <span>
+                {TEMPLATE_TYPE_LABELS[t.type] ?? t.type}
+                {t.isDefault ? ' (default)' : ''}
+              </span>
+              <span>·</span>
+              <span>{t.isActive ? 'Activa' : 'Inactiva'}</span>
+            </MobileListMeta>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              <button
+                type="button"
+                className="rounded-md border border-[var(--border)] px-2 py-1 text-xs hover:bg-[var(--bg)]"
+                onClick={() =>
+                  setPreview({
+                    name: t.name,
+                    subject: t.subject,
+                    bodyHtml: t.bodyHtml,
+                  })
+                }
+              >
+                Preview
+              </button>
+              {canWrite && (
+                <>
+                  <button
+                    type="button"
+                    className="rounded-md border border-[var(--border)] px-2 py-1 text-xs hover:bg-[var(--bg)]"
+                    onClick={() => {
+                      setEdit(t)
+                      setCreating(false)
+                    }}
+                  >
+                    Editar
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-md border border-red-500/40 px-2 py-1 text-xs text-red-300 hover:bg-red-500/10"
+                    onClick={() => {
+                      void (async () => {
+                        if (
+                          !(await confirm(`¿Eliminar «${t.name}»?`, {
+                            title: 'Eliminar plantilla',
+                            confirmLabel: 'Eliminar',
+                            danger: true,
+                          }))
+                        ) {
+                          return
+                        }
+                        deleteMutation.mutate(t.id)
+                      })()
+                    }}
+                  >
+                    Eliminar
+                  </button>
+                </>
+              )}
+            </div>
+          </MobileListCard>
+        ))}
+      </MobileList>
+
+      <DesktopTableWrap>
         <table className="w-full min-w-[640px] text-left text-sm">
           <thead className="bg-[var(--bg)] text-[var(--text-muted)]">
             <tr>
@@ -648,7 +777,7 @@ function BillingTemplatesPanel({ canWrite }: { canWrite: boolean }) {
             ))}
           </tbody>
         </table>
-      </div>
+      </DesktopTableWrap>
 
       {(creating || edit) && (
         <TemplateFormModal
@@ -959,53 +1088,88 @@ function BillingInvoicesPanel({ canWrite }: { canWrite: boolean }) {
         )}
       </div>
 
-      <div className="overflow-x-auto overflow-hidden rounded-xl border border-[var(--border)]">
-      <table className="w-full min-w-[720px] text-left text-sm">
-        <thead className="bg-[var(--bg)] text-[var(--text-muted)]">
-          <tr>
-            <th className="px-4 py-3 font-medium">Número</th>
-            <th className="px-4 py-3 font-medium">Tipo</th>
-            <th className="px-4 py-3 font-medium">Estado</th>
-            <th className="px-4 py-3 font-medium">Período</th>
-            <th className="px-4 py-3 font-medium">Total</th>
-            <th className="px-4 py-3 font-medium">Emisión</th>
-          </tr>
-        </thead>
-        <tbody>
-          {query.isLoading && (
-            <tr>
-              <td colSpan={6} className="px-4 py-6 text-[var(--text-muted)]">
-                Cargando…
-              </td>
-            </tr>
-          )}
-          {!query.isLoading && rows.length === 0 && (
-            <tr>
-              <td colSpan={6} className="px-4 py-6 text-[var(--text-muted)]">
-                Aún no hay facturas. Se crean al alta (instalación) o por el cron
-                de generación.
-              </td>
-            </tr>
-          )}
-          {rows.map((inv) => (
-            <tr key={inv.id} className="border-t border-[var(--border)]">
-              <td className="px-4 py-3 font-medium">{inv.number}</td>
-              <td className="px-4 py-3">{inv.type}</td>
-              <td className="px-4 py-3">{inv.status}</td>
-              <td className="px-4 py-3 text-xs text-[var(--text-muted)]">
-                {inv.periodStart && inv.periodEnd
-                  ? `${inv.periodStart} → ${inv.periodEnd}`
-                  : '—'}
-              </td>
-              <td className="px-4 py-3">
+      <MobileList>
+        {query.isLoading && <MobileListEmpty>Cargando…</MobileListEmpty>}
+        {!query.isLoading && rows.length === 0 && (
+          <MobileListEmpty>
+            Aún no hay facturas. Se crean al alta (instalación) o por el cron de
+            generación.
+          </MobileListEmpty>
+        )}
+        {rows.map((inv) => (
+          <MobileListCard key={inv.id}>
+            <div className="flex items-start justify-between gap-2">
+              <p className="truncate text-sm font-semibold">{inv.number}</p>
+              <span className="shrink-0 text-sm font-medium">
                 {formatMoney(inv.total, inv.currency || currency)}
-              </td>
-              <td className="px-4 py-3">{inv.issueDate}</td>
+              </span>
+            </div>
+            <MobileListMeta>
+              <span>{inv.type}</span>
+              <span>·</span>
+              <span>{inv.status}</span>
+              <span>·</span>
+              <span>{inv.issueDate}</span>
+              {inv.periodStart && inv.periodEnd ? (
+                <>
+                  <span>·</span>
+                  <span>
+                    {inv.periodStart} → {inv.periodEnd}
+                  </span>
+                </>
+              ) : null}
+            </MobileListMeta>
+          </MobileListCard>
+        ))}
+      </MobileList>
+
+      <DesktopTableWrap>
+        <table className="w-full min-w-[720px] text-left text-sm">
+          <thead className="bg-[var(--bg)] text-[var(--text-muted)]">
+            <tr>
+              <th className="px-4 py-3 font-medium">Número</th>
+              <th className="px-4 py-3 font-medium">Tipo</th>
+              <th className="px-4 py-3 font-medium">Estado</th>
+              <th className="px-4 py-3 font-medium">Período</th>
+              <th className="px-4 py-3 font-medium">Total</th>
+              <th className="px-4 py-3 font-medium">Emisión</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-      </div>
+          </thead>
+          <tbody>
+            {query.isLoading && (
+              <tr>
+                <td colSpan={6} className="px-4 py-6 text-[var(--text-muted)]">
+                  Cargando…
+                </td>
+              </tr>
+            )}
+            {!query.isLoading && rows.length === 0 && (
+              <tr>
+                <td colSpan={6} className="px-4 py-6 text-[var(--text-muted)]">
+                  Aún no hay facturas. Se crean al alta (instalación) o por el cron
+                  de generación.
+                </td>
+              </tr>
+            )}
+            {rows.map((inv) => (
+              <tr key={inv.id} className="border-t border-[var(--border)]">
+                <td className="px-4 py-3 font-medium">{inv.number}</td>
+                <td className="px-4 py-3">{inv.type}</td>
+                <td className="px-4 py-3">{inv.status}</td>
+                <td className="px-4 py-3 text-xs text-[var(--text-muted)]">
+                  {inv.periodStart && inv.periodEnd
+                    ? `${inv.periodStart} → ${inv.periodEnd}`
+                    : '—'}
+                </td>
+                <td className="px-4 py-3">
+                  {formatMoney(inv.total, inv.currency || currency)}
+                </td>
+                <td className="px-4 py-3">{inv.issueDate}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </DesktopTableWrap>
 
       {createOpen && (
         <CreateInvoiceModal

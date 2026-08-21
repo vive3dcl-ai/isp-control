@@ -29,16 +29,34 @@ export function normalizeOnuModelName(raw: string): string {
   if (!s) return '';
   s = s.replace(/^(Huawei|ZTE|FiberHome|Alcatel|Nokia)\s*[-_/]\s*/i, '');
   s = s.replace(/\s+/g, '');
+  // Revisiones HW ACS/OLT (HG8145X6-10, EG8145X6-13, …) → modelo base.
+  s = s.replace(/-\d{1,3}$/i, '');
   return s;
 }
 
-/** Placeholders que la OLT/ACS a veces ponen en Model/Type (no son modelos reales). */
+/**
+ * Placeholders / basura que OLT/ACS a veces ponen en Model/Type
+ * (no son modelos reales y no deben listarse en Tipos de ONU).
+ */
 export function isPlaceholderOnuModel(
   raw: string | null | undefined,
 ): boolean {
   const s = (raw ?? '').trim();
   if (!s) return true;
-  return /^(n\/a|na|—|–|-|none|null|unknown|\.+)$/i.test(s);
+  // Nombres literales basura o campos ACS mal mapeados (SN, ProductClass, …).
+  if (
+    /^(n\/a|na|—|–|-|none|null|undefined|unknown|other|default|\.+)$/i.test(s)
+  ) {
+    return true;
+  }
+  if (
+    /^(sn|serial|serialno|serialnumber|serial_number|productclass|product_class|model|type|onu|ont|device|equipid|equip_id)$/i.test(
+      s,
+    )
+  ) {
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -314,4 +332,61 @@ export function imageKeyForVendorCapability(
   const isBridge = capability === 'bridging';
   if (isHuawei) return isBridge ? 'huawei-sfu' : 'huawei-hgu';
   return isBridge ? 'zte-sfu' : 'zte-hgu';
+}
+
+export function resolveOnuTypeDisplayImage(type: {
+  vendor: string;
+  capability: string;
+  useDefaultImage: boolean;
+  imageUrl: string | null;
+}): string {
+  const localFallback = resolveOnuImageUrl(
+    imageKeyForVendorCapability(type.vendor, type.capability),
+  );
+  const stored = type.imageUrl?.trim() || null;
+  const custom =
+    !type.useDefaultImage && stored && !stored.startsWith('/onu/')
+      ? stored
+      : null;
+  return custom ?? localFallback;
+}
+
+export function resolveOnuCatalogDisplayImage(item: {
+  imageKey: string;
+  customImageUrl?: string | null;
+}): string {
+  const custom = item.customImageUrl?.trim();
+  if (custom) return custom;
+  return resolveOnuImageUrl(item.imageKey);
+}
+
+/** ~3 MB file as base64 data URL */
+const MAX_ONU_IMAGE_DATA_URL_CHARS = 4_200_000;
+
+/** Image data URL or http(s) for catalog / tenant ONU photos. */
+export function sanitizeOnuImageInput(raw: string): string {
+  const value = raw.trim();
+  if (!value) {
+    throw new Error('Imagen de ONU requerida');
+  }
+  const ok =
+    /^data:image\/(png|jpe?g|gif|webp|svg\+xml);base64,/i.test(value) ||
+    /^https?:\/\//i.test(value);
+  if (!ok) {
+    throw new Error(
+      'Imagen inválida: usa PNG, JPG, SVG o WebP (máx. 3 MB) o una URL http(s)',
+    );
+  }
+  if (
+    value.startsWith('data:') &&
+    value.length > MAX_ONU_IMAGE_DATA_URL_CHARS
+  ) {
+    throw new Error('La imagen supera 3 MB; usa una más liviana');
+  }
+  return value;
+}
+
+export function isCustomOnuImageUrl(url: string | null | undefined): boolean {
+  const v = url?.trim() || '';
+  return !!v && !v.startsWith('/onu/');
 }

@@ -85,8 +85,23 @@ ACS (SPV / AddObject / refresh / preload-sin-CR). **No** se usa
 | `ensure_service_wcd` | AddObject WCD nuevo | si falta INTERNET y no hay hueco |
 | `ensure_service_wanip` | AddObject WANIP bajo WCD vacío | si WCD vacío sin WANIP |
 | `ensure_service_spv` | SPV INTERNET (IP/VLAN/DNS/NAT/LANBIND) | si WAN mal / blank |
+| `ensure_service_l2` | OLT service-port/flow VLAN | si `ERROR_NO_CARRIER` / Connecting |
 
 Archivos: `models/huawei-hg8145x6/{steps,provision,verify,wan}.ts`.
+
+### Carrier L2 (todos los ACS HGU)
+
+Si `omciPlan.serviceWanOmci === 'skip'`, la IP/VLAN van por ACS pero el
+**service-port OLT** sigue siendo obligatorio. El gap `serviceCarrierOk` y el
+callback `ensureServiceL2` (cableado en topology) curan `ERROR_NO_CARRIER` /
+`Connecting` sin quedarse solo en SPV.
+
+| Driver | Carrier L2 en heal |
+|--------|-------------------|
+| `huawei-hg8145x6` | paso atómico `ensure_service_l2` |
+| `huawei-hgu-veip` | `healServiceL2IfNeeded` |
+| `fiberhome-hg6143d`, `tenda-hg9` | idem |
+| `generic-huawei/fiberhome/tenda/zte/unknown` | vía `ensureGenericServiceWan` |
 
 Regla de oro: **nunca** encolar WCD+SPV junto al preload del reboot. Tras el
 Inform post-reboot, provision/verify retoman desde el siguiente paso.

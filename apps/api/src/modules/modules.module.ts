@@ -13,6 +13,7 @@ import { PlatformModulePricing } from './entities/platform-module-pricing.entity
 import { PlatformFxRate } from './entities/platform-fx-rate.entity';
 import { FxService } from './fx.service';
 import { PlatformModule } from '../platform/platform.module';
+import { AiModule } from '../ai/ai.module';
 import { WhatsAppBaileysClient } from './whatsapp-baileys.client';
 import { WhatsAppBaileysInternalController } from './whatsapp-baileys.internal.controller';
 import { TenantWhatsAppService } from './tenant-whatsapp.service';
@@ -21,6 +22,7 @@ import { TenantWhatsAppService } from './tenant-whatsapp.service';
   imports: [
     DatabaseModule,
     forwardRef(() => PlatformModule),
+    AiModule,
     TypeOrmModule.forFeature([
       Tenant,
       PlatformPaymentMethod,

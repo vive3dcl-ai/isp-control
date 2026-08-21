@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { AuthProvider } from './auth/AuthContext'
 import { GuestRoute, ProtectedRoute } from './auth/ProtectedRoute'
+import { SubscriptionAccessGate } from './auth/SubscriptionAccessGate'
 import { NotifyProvider } from './components/NotifyProvider'
 import { LoginPage } from './pages/LoginPage'
 import { ForgotPasswordPage } from './pages/ForgotPasswordPage'
@@ -20,6 +21,7 @@ import { AdminOnusPage } from './pages/AdminOnusPage'
 import { AdminPaymentMethodsPage } from './pages/AdminPaymentMethodsPage'
 import { AdminModulesPage } from './pages/AdminModulesPage'
 import { AdminSettingsPage } from './pages/AdminSettingsPage'
+import { AdminAiPage } from './pages/AdminAiPage'
 import {
   AdminTicketDetailPage,
   AdminTicketsPage,
@@ -30,6 +32,7 @@ import {
 } from './pages/TenantSupportPage'
 import { UsersPage } from './pages/UsersPage'
 import { CalendarPage } from './pages/CalendarPage'
+import { AccountingPage } from './pages/AccountingPage'
 import { AdminTenantUsersPage } from './pages/AdminTenantUsersPage'
 import { PortalRoutes } from './portal/PortalRoutes'
 import { MobileRoutes } from './mobile/MobileRoutes'
@@ -44,6 +47,7 @@ import {
   syncPwaKindFromLocation,
 } from './lib/pwa'
 import { PLATFORM_ROLES } from './lib/api'
+import { AsistenteTenantLayout } from './asistente/AsistenteTenantLayout'
 
 /** Un solo punto: manifest Técnico en /movil, Administración en el resto. */
 function DualPwaHost() {
@@ -96,6 +100,7 @@ export default function App() {
             />
             <Route path="/admin/onus" element={<AdminOnusPage />} />
             <Route path="/admin/modules" element={<AdminModulesPage />} />
+            <Route path="/admin/ai" element={<AdminAiPage />} />
             <Route
               path="/admin/tenant-users"
               element={<AdminTenantUsersPage />}
@@ -108,24 +113,29 @@ export default function App() {
           </Route>
 
           <Route element={<ProtectedRoute roles={['tenant_user']} />}>
-            <Route path="/app" element={<TenantDashboardPage />} />
-            <Route path="/app/clients" element={<ClientsPage />} />
-            <Route path="/app/clients/:id" element={<ClientDetailPage />} />
-            <Route path="/app/calendar" element={<CalendarPage />} />
-            <Route path="/app/users" element={<UsersPage />} />
-            <Route
-              path="/app/plans"
-              element={<Navigate to="/app/settings?tab=plans" replace />}
-            />
-            <Route path="/app/topology" element={<TopologyPage />} />
-            <Route path="/app/network-map" element={<NetworkMapPage />} />
-            <Route path="/app/inventory" element={<InventoryPage />} />
-            <Route path="/app/support" element={<TenantSupportPage />} />
-            <Route
-              path="/app/support/:id"
-              element={<TenantSupportDetailPage />}
-            />
-            <Route path="/app/settings" element={<SettingsPage />} />
+            <Route element={<SubscriptionAccessGate />}>
+              <Route element={<AsistenteTenantLayout />}>
+                <Route path="/app" element={<TenantDashboardPage />} />
+                <Route path="/app/clients" element={<ClientsPage />} />
+                <Route path="/app/clients/:id" element={<ClientDetailPage />} />
+                <Route path="/app/accounting" element={<AccountingPage />} />
+                <Route path="/app/calendar" element={<CalendarPage />} />
+                <Route path="/app/users" element={<UsersPage />} />
+                <Route
+                  path="/app/plans"
+                  element={<Navigate to="/app/settings?tab=plans" replace />}
+                />
+                <Route path="/app/topology" element={<TopologyPage />} />
+                <Route path="/app/network-map" element={<NetworkMapPage />} />
+                <Route path="/app/inventory" element={<InventoryPage />} />
+                <Route path="/app/support" element={<TenantSupportPage />} />
+                <Route
+                  path="/app/support/:id"
+                  element={<TenantSupportDetailPage />}
+                />
+                <Route path="/app/settings" element={<SettingsPage />} />
+              </Route>
+            </Route>
           </Route>
 
           <Route path="/movil/*" element={<MobileRoutes />} />

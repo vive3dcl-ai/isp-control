@@ -38,6 +38,12 @@ import { OltUplinksPanel } from './OltUplinksPanel'
 import { OltVlansPanel } from './OltVlansPanel'
 import { OltSpeedProfilesPanel } from './OltSpeedProfilesPanel'
 import { OltConfigBackupPanel } from './OltConfigBackupPanel'
+import {
+  DesktopTableWrap,
+  MobileList,
+  MobileListCard,
+  MobileListMeta,
+} from './MobileList'
 import { SwitchBridgeVlansPanel } from './SwitchBridgeVlansPanel'
 import { OnuImportModal } from './OnuImportModal'
 import { useNotify } from './NotifyProvider'
@@ -80,12 +86,15 @@ export function DeviceDetailModal({
   deviceId,
   canWrite,
   onEditDevice,
+  embedded = false,
 }: {
   open: boolean
   onClose: () => void
   deviceId: string | null
   canWrite: boolean
   onEditDevice: () => void
+  /** Sin portal/backdrop (panel del Asistente). */
+  embedded?: boolean
 }) {
   const queryClient = useQueryClient()
   const { confirm } = useNotify()
@@ -356,7 +365,7 @@ export function DeviceDetailModal({
     },
   })
 
-  if (!open || !deviceId) return null
+  if ((!open && !embedded) || !deviceId) return null
 
   const device = deviceQuery.data
   const isRouter = device?.type === 'router'
@@ -394,14 +403,17 @@ export function DeviceDetailModal({
     saveConnMutation.mutate()
   }
 
-  return (
-    <>
-      <ModalPortal><div className="fixed inset-0 z-[100] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/60 sm:items-center sm:p-4">
+  const panelClass = embedded
+    ? 'flex h-full min-h-0 w-full flex-1 flex-col overflow-hidden bg-[var(--bg-elevated)]'
+    : 'flex h-[100dvh] max-h-[100dvh] w-full max-w-6xl flex-col overflow-hidden rounded-none border-0 sm:h-auto sm:max-h-[min(92dvh,920px)] sm:rounded-xl sm:border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl'
+
+  const panel = (
         <div
           role="dialog"
-          aria-modal="true"
-          className="flex h-[100dvh] max-h-[100dvh] w-full max-w-6xl flex-col overflow-hidden rounded-none border-0 sm:h-auto sm:max-h-[min(92dvh,920px)] sm:rounded-xl sm:border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl"
+          aria-modal={!embedded}
+          className={panelClass}
         >
+            {!embedded && (
             <div className="flex shrink-0 flex-wrap items-start justify-between gap-2 border-b border-[var(--border)] px-4 py-3 sm:px-5 sm:py-4">
             <div className="min-w-0">
               <h2 className="truncate text-lg font-semibold">
@@ -426,6 +438,7 @@ export function DeviceDetailModal({
               ✕
             </button>
           </div>
+            )}
 
           {device && (
             <div className="flex shrink-0 gap-1 overflow-x-auto overscroll-x-contain border-b border-[var(--border)] px-3 sm:px-5">
@@ -1583,91 +1596,165 @@ export function DeviceDetailModal({
                   )}
 
                 {(cardsQuery.data?.cards.length ?? 0) > 0 && (
-                  <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
-                    <table className="w-full min-w-[800px] text-left text-sm">
-                      <thead>
-                        <tr className="border-b border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--text-muted)]">
-                          <th className="px-3 py-2 font-medium">Slot</th>
-                          <th className="px-3 py-2 font-medium">Type</th>
-                          <th className="px-3 py-2 font-medium">Real type</th>
-                          <th className="px-3 py-2 font-medium">Ports</th>
-                          <th className="px-3 py-2 font-medium">SW</th>
-                          <th className="px-3 py-2 font-medium">Status</th>
-                          <th className="px-3 py-2 font-medium">Role</th>
-                          <th className="px-3 py-2 font-medium">
-                            Info updated
-                          </th>
-                          <th className="px-3 py-2 font-medium" />
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {cardsQuery.data!.cards.map((c) => (
-                          <tr
-                            key={`${c.rack}-${c.shelf}-${c.slot}`}
-                            className="border-b border-[var(--border)] last:border-0"
-                          >
-                            <td className="px-3 py-2.5 font-medium">
-                              {c.slot}
-                            </td>
-                            <td className="px-3 py-2.5">{c.cfgType}</td>
-                            <td className="px-3 py-2.5">{c.realType}</td>
-                            <td className="px-3 py-2.5">
-                              {c.ports ?? '—'}
-                            </td>
-                            <td className="px-3 py-2.5 font-mono text-xs">
-                              {c.softVer ?? '—'}
-                            </td>
-                            <td className="px-3 py-2.5">{c.status}</td>
-                            <td className="px-3 py-2.5">
-                              {c.role ?? '—'}
-                            </td>
-                            <td className="px-3 py-2.5 text-xs text-[var(--text-muted)]">
-                              {new Date(c.infoUpdated).toLocaleString(
-                                undefined,
-                                {
-                                  year: 'numeric',
-                                  month: '2-digit',
-                                  day: '2-digit',
-                                  hour: '2-digit',
-                                  minute: '2-digit',
-                                  second: '2-digit',
-                                  hour12: false,
-                                },
-                              )}
-                            </td>
-                            <td className="px-3 py-2.5 text-right">
-                              {canWrite && (
-                                <button
-                                  type="button"
-                                  disabled={rebootCardMutation.isPending}
-                                  className="rounded-md bg-[var(--accent)] px-2.5 py-1 text-xs font-medium text-white hover:bg-[var(--accent-hover)] disabled:opacity-60"
-                                  onClick={() => {
-                                    void confirm(
-                                      `¿Reiniciar tarjeta slot ${c.slot} (${c.cfgType})?`,
-                                      {
-                                        title: 'Reiniciar tarjeta',
-                                        danger: true,
-                                        confirmLabel: 'Reiniciar',
-                                      },
-                                    ).then((ok) => {
-                                      if (!ok) return
-                                      rebootCardMutation.mutate({
-                                        slot: c.slot,
-                                        rack: c.rack,
-                                        shelf: c.shelf,
-                                      })
-                                    })
-                                  }}
-                                >
-                                  Reboot-card
-                                </button>
-                              )}
-                            </td>
+                  <>
+                    <MobileList>
+                      {cardsQuery.data!.cards.map((c) => (
+                        <MobileListCard
+                          key={`${c.rack}-${c.shelf}-${c.slot}`}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <p className="text-sm font-semibold">
+                                Slot {c.slot}
+                              </p>
+                              <p className="text-xs text-[var(--text-muted)]">
+                                {c.cfgType}
+                                {c.realType && c.realType !== c.cfgType
+                                  ? ` · ${c.realType}`
+                                  : ''}
+                              </p>
+                            </div>
+                            <span className="shrink-0 text-xs">{c.status}</span>
+                          </div>
+                          <MobileListMeta>
+                            <span>Ports {c.ports ?? '—'}</span>
+                            <span>·</span>
+                            <span className="font-mono">
+                              SW {c.softVer ?? '—'}
+                            </span>
+                            {c.role ? (
+                              <>
+                                <span>·</span>
+                                <span>{c.role}</span>
+                              </>
+                            ) : null}
+                          </MobileListMeta>
+                          <p className="mt-1 text-[11px] text-[var(--text-muted)]">
+                            {new Date(c.infoUpdated).toLocaleString(undefined, {
+                              year: 'numeric',
+                              month: '2-digit',
+                              day: '2-digit',
+                              hour: '2-digit',
+                              minute: '2-digit',
+                              second: '2-digit',
+                              hour12: false,
+                            })}
+                          </p>
+                          {canWrite && (
+                            <button
+                              type="button"
+                              disabled={rebootCardMutation.isPending}
+                              className="mt-2 rounded-md bg-[var(--accent)] px-2.5 py-1 text-xs font-medium text-white hover:bg-[var(--accent-hover)] disabled:opacity-60"
+                              onClick={() => {
+                                void confirm(
+                                  `¿Reiniciar tarjeta slot ${c.slot} (${c.cfgType})?`,
+                                  {
+                                    title: 'Reiniciar tarjeta',
+                                    danger: true,
+                                    confirmLabel: 'Reiniciar',
+                                  },
+                                ).then((ok) => {
+                                  if (!ok) return
+                                  rebootCardMutation.mutate({
+                                    slot: c.slot,
+                                    rack: c.rack,
+                                    shelf: c.shelf,
+                                  })
+                                })
+                              }}
+                            >
+                              Reboot-card
+                            </button>
+                          )}
+                        </MobileListCard>
+                      ))}
+                    </MobileList>
+                    <DesktopTableWrap>
+                      <table className="w-full min-w-[800px] text-left text-sm">
+                        <thead>
+                          <tr className="border-b border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--text-muted)]">
+                            <th className="px-3 py-2 font-medium">Slot</th>
+                            <th className="px-3 py-2 font-medium">Type</th>
+                            <th className="px-3 py-2 font-medium">Real type</th>
+                            <th className="px-3 py-2 font-medium">Ports</th>
+                            <th className="px-3 py-2 font-medium">SW</th>
+                            <th className="px-3 py-2 font-medium">Status</th>
+                            <th className="px-3 py-2 font-medium">Role</th>
+                            <th className="px-3 py-2 font-medium">
+                              Info updated
+                            </th>
+                            <th className="px-3 py-2 font-medium" />
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                        </thead>
+                        <tbody>
+                          {cardsQuery.data!.cards.map((c) => (
+                            <tr
+                              key={`${c.rack}-${c.shelf}-${c.slot}`}
+                              className="border-b border-[var(--border)] last:border-0"
+                            >
+                              <td className="px-3 py-2.5 font-medium">
+                                {c.slot}
+                              </td>
+                              <td className="px-3 py-2.5">{c.cfgType}</td>
+                              <td className="px-3 py-2.5">{c.realType}</td>
+                              <td className="px-3 py-2.5">
+                                {c.ports ?? '—'}
+                              </td>
+                              <td className="px-3 py-2.5 font-mono text-xs">
+                                {c.softVer ?? '—'}
+                              </td>
+                              <td className="px-3 py-2.5">{c.status}</td>
+                              <td className="px-3 py-2.5">
+                                {c.role ?? '—'}
+                              </td>
+                              <td className="px-3 py-2.5 text-xs text-[var(--text-muted)]">
+                                {new Date(c.infoUpdated).toLocaleString(
+                                  undefined,
+                                  {
+                                    year: 'numeric',
+                                    month: '2-digit',
+                                    day: '2-digit',
+                                    hour: '2-digit',
+                                    minute: '2-digit',
+                                    second: '2-digit',
+                                    hour12: false,
+                                  },
+                                )}
+                              </td>
+                              <td className="px-3 py-2.5 text-right">
+                                {canWrite && (
+                                  <button
+                                    type="button"
+                                    disabled={rebootCardMutation.isPending}
+                                    className="rounded-md bg-[var(--accent)] px-2.5 py-1 text-xs font-medium text-white hover:bg-[var(--accent-hover)] disabled:opacity-60"
+                                    onClick={() => {
+                                      void confirm(
+                                        `¿Reiniciar tarjeta slot ${c.slot} (${c.cfgType})?`,
+                                        {
+                                          title: 'Reiniciar tarjeta',
+                                          danger: true,
+                                          confirmLabel: 'Reiniciar',
+                                        },
+                                      ).then((ok) => {
+                                        if (!ok) return
+                                        rebootCardMutation.mutate({
+                                          slot: c.slot,
+                                          rack: c.rack,
+                                          shelf: c.shelf,
+                                        })
+                                      })
+                                    }}
+                                  >
+                                    Reboot-card
+                                  </button>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </DesktopTableWrap>
+                  </>
                 )}
               </div>
             )}
@@ -1703,7 +1790,19 @@ export function DeviceDetailModal({
             )}
           </div>
         </div>
-      </div></ModalPortal>
+  )
+
+  return (
+    <>
+      {embedded ? (
+        panel
+      ) : (
+        <ModalPortal>
+          <div className="fixed inset-0 z-[100] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/60 sm:items-center sm:p-4">
+            {panel}
+          </div>
+        </ModalPortal>
+      )}
 
       <PortSelectModal
         open={!!selectPortId}

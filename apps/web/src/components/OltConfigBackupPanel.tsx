@@ -10,6 +10,13 @@ import {
   type OltConfigSnapshot,
 } from '../lib/olt-config-backup'
 import { useNotify } from './NotifyProvider'
+import {
+  DesktopTableWrap,
+  MobileList,
+  MobileListCard,
+  MobileListEmpty,
+  MobileListMeta,
+} from './MobileList'
 
 const btnPrimary =
   'rounded-lg bg-[var(--accent)] px-3 py-2 text-sm font-medium text-white hover:bg-[var(--accent-hover)] disabled:opacity-60'
@@ -142,7 +149,61 @@ export function OltConfigBackupPanel({
         </button>
       )}
 
-      <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
+      <MobileList>
+        {listQuery.isLoading && <MobileListEmpty>Cargando…</MobileListEmpty>}
+        {!listQuery.isLoading && snapshots.length === 0 && (
+          <MobileListEmpty>
+            Aún no hay copias. Pulsa Respaldar ahora o espera el job diario.
+          </MobileListEmpty>
+        )}
+        {snapshots.map((row: OltConfigSnapshot) => (
+          <MobileListCard key={row.id}>
+            <div className="flex items-start justify-between gap-2">
+              <label className="flex min-w-0 items-start gap-2">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={pickedSet.has(row.id)}
+                  onChange={() => togglePick(row.id)}
+                  aria-label="Elegir para diff"
+                />
+                <span className="min-w-0">
+                  <p className="text-sm font-semibold tabular-nums">
+                    {new Date(row.createdAt).toLocaleString()}
+                  </p>
+                  <p className="text-xs text-[var(--text-muted)]">
+                    {row.source === 'manual' ? 'Manual' : 'Programado'}
+                  </p>
+                </span>
+              </label>
+              <button
+                type="button"
+                className={`${btnGhost} shrink-0`}
+                onClick={() => {
+                  void downloadOltConfigBackup(
+                    deviceId,
+                    row.id,
+                    row.fileName || 'olt.cfg',
+                  ).catch((e: Error) => setErr(e.message))
+                }}
+              >
+                Descargar
+              </button>
+            </div>
+            <MobileListMeta>
+              <span>{formatBytes(row.byteSize)}</span>
+              <span>·</span>
+              {row.complete ? (
+                <span className="text-emerald-500">Completo</span>
+              ) : (
+                <span className="text-amber-500">Truncado</span>
+              )}
+            </MobileListMeta>
+          </MobileListCard>
+        ))}
+      </MobileList>
+
+      <DesktopTableWrap>
         <table className="min-w-full text-left text-sm">
           <thead className="bg-[var(--bg)] text-xs uppercase text-[var(--text-muted)]">
             <tr>
@@ -212,7 +273,7 @@ export function OltConfigBackupPanel({
             ))}
           </tbody>
         </table>
-      </div>
+      </DesktopTableWrap>
 
       {aId && bId && (
         <div className="space-y-2">

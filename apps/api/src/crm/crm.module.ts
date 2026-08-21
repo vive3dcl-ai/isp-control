@@ -16,9 +16,9 @@ import { MapDraftsService } from './map-drafts.service';
 @Module({
   imports: [
     DatabaseModule,
-    AuthModule,
-    TopologyModule,
-    BillingModule,
+    forwardRef(() => AuthModule),
+    forwardRef(() => TopologyModule),
+    forwardRef(() => BillingModule),
     InventoryModule,
     forwardRef(() => ClientPortalModule),
     TypeOrmModule.forFeature([Tenant, TenantMapDraft]),

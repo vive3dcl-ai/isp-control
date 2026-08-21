@@ -15,27 +15,14 @@ import {
 } from '../../../../topology/shared/genieacs-nbi.client';
 import type { OnuModelProvisionWanPlan } from '../../types';
 import type { WanConnectionRef } from '../../infra/wan-datamodel';
+import {
+  assessServiceLanBind,
+  TENDA_HG9_DEFAULT_LAN_BIND,
+} from '../../infra/lan-bind';
+
+export { TENDA_HG9_DEFAULT_LAN_BIND };
 
 const WAN_DEV = 'InternetGatewayDevice.WANDevice';
-
-/**
- * Bind LAN+Wi‑Fi. En campo el factory solo tenía WLAN0/1-AP*;
- * sin LAN1–4 el cable no navega aunque ARP WAN esté OK.
- */
-export const TENDA_HG9_DEFAULT_LAN_BIND = [
-  'LAN1',
-  'LAN2',
-  'LAN3',
-  'LAN4',
-  'WLAN0-AP1',
-  'WLAN0-AP2',
-  'WLAN0-AP3',
-  'WLAN0-AP4',
-  'WLAN1-AP1',
-  'WLAN1-AP2',
-  'WLAN1-AP3',
-  'WLAN1-AP4',
-].join(',');
 
 export type TendaWanConnSummary = {
   cd: number;
@@ -222,7 +209,7 @@ export function isTendaServiceWanApplied(
   if (target.gateway && target.gateway !== wan.wanGateway) return false;
   const wantDns = expectedTendaDns(wan);
   if (wantDns && (target.dnsServers ?? '').trim() !== wantDns) return false;
-  return true;
+  return assessServiceLanBind(device, target.conn).ok;
 }
 
 /**

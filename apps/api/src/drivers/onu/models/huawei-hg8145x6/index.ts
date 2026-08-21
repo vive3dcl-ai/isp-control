@@ -38,6 +38,7 @@ import {
   isServiceWanApplied,
   resolveHuaweiLibraryServiceWan,
 } from './wan';
+import { huaweiInternetCarrierOk } from '../../infra/huawei-carrier';
 
 export { HG8145X6_INFORM_INTERVAL_S, HG8145X6_INFORM_STALE_SEC } from './steps';
 export {
@@ -72,6 +73,7 @@ export function diagnoseGapsHg8145x6(
     mgmtReady: hg8145MgmtReady(device, opts?.mgmtIp),
     hasServiceWan: hg8145HasServiceWan(device),
     serviceWanOk: isServiceWanApplied(device, wan),
+    serviceCarrierOk: huaweiInternetCarrierOk(device),
   };
 }
 

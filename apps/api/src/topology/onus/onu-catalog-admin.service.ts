@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { ILike, Repository } from 'typeorm';
+import { DataSource, ILike, Repository } from 'typeorm';
 import { OnuCatalogItem } from '../shared/entities/onu-catalog.entity';
 import { Tenant } from '../../tenants/entities/tenant.entity';
 import { TenantConnectionService } from '../../database/tenant-connection.service';
@@ -13,8 +13,13 @@ import {
   ONU_CATALOG_SEEDS,
   imageKeyForVendorCapability,
   inferOnuVendor,
+  isCustomOnuImageUrl,
+  isPlaceholderOnuModel,
   normalizeOnuModelName,
+  resolveOnuCatalogDisplayImage,
   resolveOnuImageUrl,
+  sanitizeOnuImageInput,
+  usableOnuModelName,
 } from './onu-model-catalog';
 import { loadAcsModelsBySerial } from './onu-orphan-enrich.util';
 import { shouldApplyAcsModelToOnuType } from './onu-acs-model-reconcile.util';
@@ -32,6 +37,8 @@ export type UpsertOnuCatalogDto = {
   allowCustomProfiles?: boolean;
   defaultProfileCode?: string | null;
   imageKey?: string;
+  /** Custom photo (data URL / http). null clears. */
+  customImageUrl?: string | null;
   note?: string;
   isActive?: boolean;
   registrationStatus?: 'approved' | 'pending';
@@ -98,9 +105,19 @@ export class OnuCatalogAdminService {
     @InjectRepository(Tenant)
     private readonly tenantsRepo: Repository<Tenant>,
     private readonly tenantConnections: TenantConnectionService,
+    private readonly dataSource: DataSource,
   ) {}
 
+  /** DDL idempotente (prod tiene synchronize=false). */
+  private async ensureSchema() {
+    await this.dataSource.query(`
+      ALTER TABLE public.onu_catalog
+        ADD COLUMN IF NOT EXISTS "custom_image_url" text;
+    `);
+  }
+
   private serialize(row: OnuCatalogItem) {
+    const imageUrl = resolveOnuCatalogDisplayImage(row);
     return {
       id: row.id,
       vendor: row.vendor,
@@ -109,7 +126,9 @@ export class OnuCatalogAdminService {
           ? 'ZTE'
           : row.vendor === 'huawei'
             ? 'Huawei'
-            : row.vendor,
+            : row.vendor === 'fiberhome'
+              ? 'FiberHome'
+              : row.vendor,
       name: row.name,
       ponType: row.ponType,
       ponTypeLabel: row.ponType.toUpperCase(),
@@ -123,11 +142,26 @@ export class OnuCatalogAdminService {
       allowCustomProfiles: row.allowCustomProfiles,
       defaultProfileCode: row.defaultProfileCode,
       imageKey: row.imageKey,
-      imageUrl: resolveOnuImageUrl(row.imageKey),
+      customImageUrl: row.customImageUrl ?? null,
+      imageUrl,
       note: row.note,
       isActive: row.isActive,
       registrationStatus: row.registrationStatus ?? 'approved',
     };
+  }
+
+  private applyCustomImageUrl(
+    raw: string | null | undefined,
+  ): string | null | undefined {
+    if (raw === undefined) return undefined;
+    if (raw == null || raw === '') return null;
+    try {
+      return sanitizeOnuImageInput(raw);
+    } catch (e) {
+      throw new BadRequestException(
+        e instanceof Error ? e.message : 'Imagen inválida',
+      );
+    }
   }
 
   /** Rename legacy Huawei-/ZTE- prefixed catalog names to model codes. */
@@ -150,6 +184,7 @@ export class OnuCatalogAdminService {
   }
 
   async ensureSeeded() {
+    await this.ensureSchema();
     await this.migrateLegacyModelNames();
     const existing = await this.catalogRepo.find({ select: ['name'] });
     const have = new Set(
@@ -213,6 +248,7 @@ export class OnuCatalogAdminService {
     const vendor = dto.vendor.trim().toLowerCase();
     const imageKey =
       dto.imageKey?.trim() || imageKeyForVendorCapability(vendor, capability);
+    const customImageUrl = this.applyCustomImageUrl(dto.customImageUrl);
     const row = await this.catalogRepo.save(
       this.catalogRepo.create({
         vendor,
@@ -226,6 +262,7 @@ export class OnuCatalogAdminService {
         allowCustomProfiles: dto.allowCustomProfiles ?? true,
         defaultProfileCode: dto.defaultProfileCode ?? null,
         imageKey,
+        customImageUrl: customImageUrl ?? null,
         note: dto.note ?? '',
         isActive: dto.isActive ?? true,
         registrationStatus: dto.registrationStatus ?? 'approved',
@@ -269,6 +306,9 @@ export class OnuCatalogAdminService {
       row.imageKey = dto.imageKey.trim();
     } else if (dto.vendor !== undefined || dto.capability !== undefined) {
       row.imageKey = imageKeyForVendorCapability(row.vendor, row.capability);
+    }
+    if (dto.customImageUrl !== undefined) {
+      row.customImageUrl = this.applyCustomImageUrl(dto.customImageUrl) ?? null;
     }
     if (dto.note !== undefined) row.note = dto.note;
     if (dto.isActive !== undefined) row.isActive = dto.isActive;
@@ -404,6 +444,7 @@ export class OnuCatalogAdminService {
   /**
    * Drop tenant types never shown in the user list (sync leftovers).
    * Keeps: listed=true (registered/manual) — even with 0 ONUs until user deletes.
+   * Placeholders (N/A, sn, …) se des-listan pero no se borran aquí.
    */
   async pruneUndetectedCatalogTypes(
     schemaName: string,
@@ -416,6 +457,13 @@ export class OnuCatalogAdminService {
     const types = await typeRepo.find();
     let removed = 0;
     for (const t of types) {
+      if (isPlaceholderOnuModel(t.name)) {
+        if (t.listed) {
+          t.listed = false;
+          await typeRepo.save(t);
+        }
+        continue;
+      }
       if (t.listed) continue;
       await typeRepo.remove(t);
       removed += 1;
@@ -431,6 +479,14 @@ export class OnuCatalogAdminService {
     const types = await typeRepo.find();
     let updated = 0;
     for (const t of types) {
+      if (isPlaceholderOnuModel(t.name)) {
+        if (t.listed) {
+          t.listed = false;
+          await typeRepo.save(t);
+          updated += 1;
+        }
+        continue;
+      }
       const key = normalizeOnuModelName(t.name).toLowerCase();
       if (!t.listed && counts.get(key)) {
         t.listed = true;
@@ -479,13 +535,20 @@ export class OnuCatalogAdminService {
     let removed = 0;
     for (const [, group] of byNorm) {
       if (group.length === 0) continue;
-      // Prefer row whose name is already the code (no vendor prefix).
+      // Prefer row whose name is already the code (no vendor prefix / -10).
       const preferred =
         group.find(
           (r) =>
             normalizeOnuModelName(r.name).toLowerCase() ===
             r.name.trim().toLowerCase(),
-        ) ?? group[0];
+        ) ??
+        group.find(
+          (r) =>
+            !r.useDefaultImage &&
+            !!r.imageUrl?.trim() &&
+            !r.imageUrl.startsWith('/onu/'),
+        ) ??
+        group[0];
       const keepName = normalizeOnuModelName(preferred.name);
       if (preferred.name !== keepName) {
         preferred.name = keepName;
@@ -518,7 +581,28 @@ export class OnuCatalogAdminService {
       ]),
     );
 
-    const imageUrl = resolveOnuImageUrl(item.imageKey);
+    const defaultSvg = resolveOnuImageUrl(item.imageKey);
+    const catalogCustom = item.customImageUrl?.trim() || null;
+    const applyImage = (target: {
+      imageUrl: string | null;
+      useDefaultImage: boolean;
+    }) => {
+      if (catalogCustom) {
+        target.imageUrl = catalogCustom;
+        target.useDefaultImage = false;
+        return;
+      }
+      // Preserve a tenant custom photo until the catalog has a verified one.
+      if (
+        isCustomOnuImageUrl(target.imageUrl) &&
+        !target.useDefaultImage
+      ) {
+        return;
+      }
+      target.imageUrl = defaultSvg;
+      target.useDefaultImage = true;
+    };
+
     const defaultProfile = item.defaultProfileCode
       ? profileByCode.get(item.defaultProfileCode)
       : null;
@@ -542,8 +626,8 @@ export class OnuCatalogAdminService {
         allowCustomProfiles: item.allowCustomProfiles,
         defaultProfileId: defaultProfile?.id ?? null,
         capability: item.capability,
-        useDefaultImage: true,
-        imageUrl,
+        useDefaultImage: !catalogCustom,
+        imageUrl: catalogCustom ?? defaultSvg,
       });
       await typeRepo.save(row);
       return row;
@@ -560,9 +644,11 @@ export class OnuCatalogAdminService {
       found.capability = item.capability;
       found.allowCustomProfiles = item.allowCustomProfiles;
       found.defaultProfileId = defaultProfile?.id ?? found.defaultProfileId;
-      found.imageUrl = imageUrl;
-      found.useDefaultImage = true;
+      applyImage(found);
       found.fromCatalog = true;
+    } else if (item.registrationStatus === 'approved' && catalogCustom) {
+      // Official photo for tenants that already customized other fields.
+      applyImage(found);
     }
     if (markListed) found.listed = true;
     await typeRepo.save(found);
@@ -580,7 +666,7 @@ export class OnuCatalogAdminService {
     rawType: string | null | undefined,
     opts?: { syncToTenant?: boolean; vendor?: string | null },
   ): Promise<OnuCatalogItem | null> {
-    const name = normalizeOnuModelName(rawType ?? '');
+    const name = usableOnuModelName(rawType);
     if (!name) return null;
     await this.ensureSeeded();
 
@@ -793,8 +879,9 @@ export class OnuCatalogAdminService {
   }
 
   /**
-   * Tenant manually created a type: keep it local and register pending in
+   * Tenant created/updated a type: keep it local and register pending in
    * admin catalog (unless already approved — then reuse catalog specs).
+   * Custom photos from the tenant are stored on pending catalog rows for review.
    */
   async registerTenantCreatedType(opts: {
     schemaName: string;
@@ -808,10 +895,16 @@ export class OnuCatalogAdminService {
     capability: string;
     allowCustomProfiles: boolean;
     defaultProfileCode?: string | null;
+    /** Custom photo from tenant (data URL / http); null clears pending draft photo. */
+    imageUrl?: string | null;
   }): Promise<OnuCatalogItem> {
     await this.ensureSeeded();
-    const name = normalizeOnuModelName(opts.name);
-    if (!name) throw new BadRequestException('Modelo requerido');
+    const name = usableOnuModelName(opts.name);
+    if (!name) {
+      throw new BadRequestException(
+        'Modelo inválido (placeholders ACS como N/A o sn no se registran)',
+      );
+    }
 
     let item = await this.findCatalogByModel(name);
     if (item?.registrationStatus === 'approved') {
@@ -824,6 +917,10 @@ export class OnuCatalogAdminService {
     const vendor = opts.vendor?.trim().toLowerCase() || inferOnuVendor(name);
     const capability = opts.capability || 'bridging_routing';
     const imageKey = imageKeyForVendorCapability(vendor, capability);
+    let customImageUrl: string | null | undefined = undefined;
+    if (opts.imageUrl !== undefined) {
+      customImageUrl = this.applyCustomImageUrl(opts.imageUrl) ?? null;
+    }
 
     if (!item) {
       item = await this.catalogRepo.save(
@@ -839,6 +936,7 @@ export class OnuCatalogAdminService {
           allowCustomProfiles: opts.allowCustomProfiles,
           defaultProfileCode: opts.defaultProfileCode ?? 'generic_6',
           imageKey,
+          customImageUrl: customImageUrl ?? null,
           note: 'Creado por un tenant — pendiente de registro',
           isActive: true,
           registrationStatus: 'pending',
@@ -858,6 +956,12 @@ export class OnuCatalogAdminService {
         item.defaultProfileCode = opts.defaultProfileCode;
       }
       item.imageKey = imageKey;
+      if (customImageUrl !== undefined) {
+        item.customImageUrl = customImageUrl;
+      }
+      if (!item.note?.trim()) {
+        item.note = 'Creado por un tenant — pendiente de registro';
+      }
       await this.catalogRepo.save(item);
     }
     return item;

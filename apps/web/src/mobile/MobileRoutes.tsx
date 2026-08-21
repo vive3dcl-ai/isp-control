@@ -12,6 +12,17 @@ import { MobileLoginPage } from './MobileLoginPage'
 import { MobileRequireAuth } from './MobileRequireAuth'
 import { ForgotPasswordPage } from '../pages/ForgotPasswordPage'
 import { ResetPasswordPage } from '../pages/ResetPasswordPage'
+import { AsistenteChatProvider } from '../asistente/AsistenteChatContext'
+import { AsistenteLauncher } from '../asistente/AsistenteLauncher'
+
+function MobileAsistenteLayout() {
+  return (
+    <AsistenteChatProvider>
+      <MobileShell />
+      <AsistenteLauncher />
+    </AsistenteChatProvider>
+  )
+}
 
 export function MobileRoutes() {
   return (
@@ -30,7 +41,7 @@ export function MobileRoutes() {
         }
       />
       <Route element={<MobileRequireAuth />}>
-        <Route element={<MobileShell />}>
+        <Route element={<MobileAsistenteLayout />}>
           <Route index element={<MobileHomePage />} />
           <Route path="instalar" element={<MobileInstallWizard />} />
           <Route path="calendario" element={<MobileCalendarDayPage />} />

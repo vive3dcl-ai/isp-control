@@ -9,6 +9,13 @@ import {
 import { useMoney } from '../lib/currency'
 import { useNotify } from './NotifyProvider'
 import { CreateInvoiceModal } from './CreateInvoiceModal'
+import {
+  DesktopTableWrap,
+  MobileList,
+  MobileListCard,
+  MobileListEmpty,
+  MobileListMeta,
+} from './MobileList'
 import { ModalPortal } from './ModalPortal'
 
 
@@ -77,7 +84,64 @@ export function ClientInvoicesSection({
         )}
       </div>
 
-      <div className="overflow-x-auto overflow-hidden rounded-xl border border-[var(--border)]">
+      <MobileList>
+        {invoicesQuery.isLoading && (
+          <p className="text-sm text-[var(--text-muted)]">Cargando facturas…</p>
+        )}
+        {!invoicesQuery.isLoading && invoices.length === 0 && (
+          <MobileListEmpty>
+            Aún no hay facturas generadas para este cliente.
+          </MobileListEmpty>
+        )}
+        {invoices.map((inv) => (
+          <MobileListCard key={inv.id}>
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold">{inv.number}</p>
+                <p className="text-xs text-[var(--text-muted)]">
+                  {invoiceTypeLabel(inv.type)}
+                </p>
+              </div>
+              <div className="shrink-0 text-right">
+                <p className="text-sm font-medium">
+                  {money(Number(inv.total))}
+                </p>
+                <p className="text-xs text-[var(--text-muted)]">
+                  {invoiceStatusLabel(inv.status)}
+                </p>
+              </div>
+            </div>
+            <MobileListMeta>
+              <span>Emisión {inv.issueDate}</span>
+              {inv.periodStart && inv.periodEnd ? (
+                <span>
+                  {inv.periodStart} → {inv.periodEnd}
+                </span>
+              ) : null}
+            </MobileListMeta>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              <button
+                type="button"
+                onClick={() => setViewId(inv.id)}
+                className="rounded-md border border-[var(--border)] px-2.5 py-1 text-xs hover:border-[var(--accent)] hover:text-[var(--accent)]"
+              >
+                Ver
+              </button>
+              {canWrite && (
+                <button
+                  type="button"
+                  onClick={() => setResend(inv)}
+                  className="rounded-md bg-[var(--accent)] px-2.5 py-1 text-xs font-medium text-white hover:bg-[var(--accent-hover)]"
+                >
+                  Reenviar
+                </button>
+              )}
+            </div>
+          </MobileListCard>
+        ))}
+      </MobileList>
+
+      <DesktopTableWrap>
         <table className="w-full min-w-[720px] text-left text-sm">
           <thead className="bg-[var(--bg)] text-[var(--text-muted)]">
             <tr>
@@ -153,7 +217,7 @@ export function ClientInvoicesSection({
             ))}
           </tbody>
         </table>
-      </div>
+      </DesktopTableWrap>
 
       {createOpen && (
         <CreateInvoiceModal
@@ -201,7 +265,7 @@ export function ClientInvoicesSection({
   )
 }
 
-function InvoiceViewModal({
+export function InvoiceViewModal({
   invoiceId,
   onClose,
 }: {

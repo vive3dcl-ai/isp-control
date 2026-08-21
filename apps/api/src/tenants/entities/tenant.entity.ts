@@ -159,7 +159,28 @@ export class Tenant {
   enabledModules: string[];
 
   /**
-   * Código del plan de plataforma (users_15, users_50, …).
+   * Si false, el tenant no puede usar el proveedor IA interno de la plataforma
+   * (solo API propia en Asistente IA).
+   */
+  @Column({
+    name: 'ai_internal_enabled',
+    type: 'boolean',
+    default: true,
+  })
+  aiInternalEnabled: boolean;
+
+  /**
+   * Empresa interna de ISP Control: siempre activa, sin cobros ni mora.
+   */
+  @Column({
+    name: 'is_internal_company',
+    type: 'boolean',
+    default: false,
+  })
+  isInternalCompany: boolean;
+
+  /**
+   * Código del plan de plataforma (users_15, users_50, …, lifetime).
    * Columna histórica `billing_cycle`; antes guardaba monthly/quarterly/….
    */
   @Column({

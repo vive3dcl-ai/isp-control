@@ -24,6 +24,11 @@ import { PlatformPaymentMethod } from './modules/entities/platform-payment-metho
 import { PlatformModulePricing } from './modules/entities/platform-module-pricing.entity';
 import { PlatformFxRate } from './modules/entities/platform-fx-rate.entity';
 import { PlatformSmtpSettings } from './platform/entities/platform-smtp-settings.entity';
+import { PlatformAiSettings } from './platform/entities/platform-ai-settings.entity';
+import { PlatformAiUsageDaily } from './platform/entities/platform-ai-usage-daily.entity';
+import { PlatformAiCapability } from './platform/entities/platform-ai-capability.entity';
+import { PlatformAiRestorePoint } from './platform/entities/platform-ai-restore-point.entity';
+import { PlatformAiChatSession } from './platform/entities/platform-ai-chat-session.entity';
 import { PlatformPublicUrls } from './platform/entities/platform-public-urls.entity';
 import { PlatformSystemPlan } from './platform/entities/platform-system-plan.entity';
 import { PlatformBillingSettings } from './platform/entities/platform-billing-settings.entity';
@@ -39,6 +44,7 @@ import { PushSubscriptionEntity } from './support/entities/push-subscription.ent
 import { ClientPortalUser } from './client-portal/entities/client-portal-user.entity';
 import { ClientPortalInvite } from './client-portal/entities/client-portal-invite.entity';
 import { TenantMapDraft } from './crm/entities/tenant-map-draft.entity';
+import { AiModule } from './ai/ai.module';
 
 @Module({
   imports: [
@@ -88,6 +94,11 @@ import { TenantMapDraft } from './crm/entities/tenant-map-draft.entity';
             PlatformModulePricing,
             PlatformFxRate,
             PlatformSmtpSettings,
+            PlatformAiSettings,
+            PlatformAiUsageDaily,
+            PlatformAiCapability,
+            PlatformAiRestorePoint,
+            PlatformAiChatSession,
             PlatformPublicUrls,
             PlatformSystemPlan,
             PlatformBillingSettings,
@@ -114,6 +125,7 @@ import { TenantMapDraft } from './crm/entities/tenant-map-draft.entity';
     TopologyModule,
     BillingModule,
     ModulesModule,
+    AiModule,
     PlatformModule,
     SupportModule,
     ClientPortalModule,

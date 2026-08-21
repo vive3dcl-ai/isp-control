@@ -1,9 +1,12 @@
 /**
  * Planes de plataforma por cupo de ONUs («usuarios») + bloques extra de 50.
- * Facturación siempre mensual, alineada a mes calendario (UTC).
+ * Facturación mensual (salvo `lifetime`, pago único).
  */
 
 export const EXTRA_USER_BLOCK_SIZE = 50;
+
+/** Fin de vigencia simbólico para planes lifetime (UTC). */
+export const LIFETIME_PERIOD_END = new Date(Date.UTC(2099, 11, 31, 23, 59, 59));
 
 export const USER_PLAN_TIERS = [
   { code: 'users_15', userLimit: 15, label: '15 usuarios', sortOrder: 1 },
@@ -11,6 +14,12 @@ export const USER_PLAN_TIERS = [
   { code: 'users_100', userLimit: 100, label: '100 usuarios', sortOrder: 3 },
   { code: 'users_200', userLimit: 200, label: '200 usuarios', sortOrder: 4 },
   { code: 'users_500', userLimit: 500, label: '500 usuarios', sortOrder: 5 },
+  {
+    code: 'lifetime',
+    userLimit: 10_000,
+    label: 'Lifetime',
+    sortOrder: 6,
+  },
 ] as const;
 
 export type UserPlanCode = (typeof USER_PLAN_TIERS)[number]['code'];
@@ -25,17 +34,29 @@ export function isUserPlanCode(code: string): code is UserPlanCode {
   return (USER_PLAN_CODES as readonly string[]).includes(code);
 }
 
-/** Precio mensual USD por defecto de cada plan. */
+export function isLifetimePlanCode(code: string | null | undefined): boolean {
+  return code === 'lifetime';
+}
+
+/** Precio USD por defecto de cada plan (mensual, o único si lifetime). */
 export const DEFAULT_USER_PLAN_PRICES: Record<UserPlanCode, number> = {
   users_15: 49,
   users_50: 99,
   users_100: 179,
   users_200: 299,
   users_500: 499,
+  lifetime: 4_999,
 };
 
 /** Precio mensual USD por defecto de un bloque extra de 50 usuarios. */
 export const DEFAULT_EXTRA_BLOCK_PRICE_USD = 40;
+
+/**
+ * Factura de renovación: se emite N días antes del aniversario (día de contrato).
+ * Vence el aniversario; gracia adicional antes del bloqueo del panel.
+ */
+export const SUBSCRIPTION_INVOICE_LEAD_DAYS = 10;
+export const SUBSCRIPTION_GRACE_DAYS = 5;
 
 export type ModuleContractMode = 'one_time' | 'recurring';
 export type ModuleContractStatus = 'active' | 'expired' | 'cancelled';
@@ -58,6 +79,45 @@ export function startOfUtcDay(date: Date): Date {
   return new Date(
     Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
   );
+}
+
+export function addDaysUtc(date: Date, days: number): Date {
+  const d = new Date(date.getTime());
+  d.setUTCDate(d.getUTCDate() + days);
+  return d;
+}
+
+/** Fin del período mensual por aniversario de contrato (+1 mes desde el inicio). */
+export function anniversaryPeriodEnd(periodStart: Date): Date {
+  return addMonthsUtc(periodStart, 1);
+}
+
+/** Siguiente ciclo tras el aniversario actual. */
+export function nextAnniversaryPeriod(periodEnd: Date): {
+  coversFrom: Date;
+  coversTo: Date;
+} {
+  return {
+    coversFrom: periodEnd,
+    coversTo: addMonthsUtc(periodEnd, 1),
+  };
+}
+
+/** Momento en que el cron puede emitir la factura de renovación. */
+export function subscriptionInvoiceIssueAt(periodEnd: Date): Date {
+  return addDaysUtc(periodEnd, -SUBSCRIPTION_INVOICE_LEAD_DAYS);
+}
+
+/** Fin de la gracia tras el vencimiento (día de contrato). */
+export function subscriptionGraceEndsAt(dueAt: Date): Date {
+  return addDaysUtc(dueAt, SUBSCRIPTION_GRACE_DAYS);
+}
+
+export function isSubscriptionPastGrace(
+  dueAt: Date,
+  now = new Date(),
+): boolean {
+  return now > subscriptionGraceEndsAt(dueAt);
 }
 
 /** Primer instante del mes calendario siguiente (UTC). */
@@ -130,6 +190,42 @@ export function addMonthsUtc(date: Date, months: number): Date {
     d.setUTCDate(0);
   }
   return d;
+}
+
+/**
+ * Flags de acceso a partir de un cobro de renovación pending.
+ * - overdue: dueAt <= now (modal nag)
+ * - blocked: past grace (panel lock)
+ */
+export function subscriptionAccessFromDueAt(
+  dueAt: Date | null | undefined,
+  now = new Date(),
+): {
+  invoiceOverdue: boolean;
+  accessBlocked: boolean;
+  graceEndsAt: Date | null;
+  daysUntilDue: number | null;
+  daysOverdue: number | null;
+} {
+  if (!dueAt) {
+    return {
+      invoiceOverdue: false,
+      accessBlocked: false,
+      graceEndsAt: null,
+      daysUntilDue: null,
+      daysOverdue: null,
+    };
+  }
+  const graceEndsAt = subscriptionGraceEndsAt(dueAt);
+  const overdue = now.getTime() >= dueAt.getTime();
+  const blocked = isSubscriptionPastGrace(dueAt, now);
+  return {
+    invoiceOverdue: overdue,
+    accessBlocked: blocked,
+    graceEndsAt,
+    daysUntilDue: overdue ? 0 : daysBetweenUtc(now, dueAt),
+    daysOverdue: overdue ? daysBetweenUtc(dueAt, now) : null,
+  };
 }
 
 export function onuCapacity(userLimit: number, extraBlocks: number): number {

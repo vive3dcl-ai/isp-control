@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '../lib/api'
@@ -15,6 +15,7 @@ import {
   type OnuRunningConfigResponse,
   type OnuSwInfoResponse,
 } from '../lib/onu-connected'
+import { runOnuApplyAndVerify } from '../lib/onu-apply-verify-progress'
 import {
   MetricWindowPicker,
   SignalChart,
@@ -37,6 +38,12 @@ import type { Tr069ProfilesResponse } from '../lib/tr069'
 import type { Zone } from './ZonasSettingsTab'
 import { useNotify } from './NotifyProvider'
 import { ModalPortal } from './ModalPortal'
+import {
+  DesktopTableWrap,
+  MobileList,
+  MobileListCard,
+  MobileListMeta,
+} from './MobileList'
 
 function pendingBtn(label: string) {
   return (
@@ -74,7 +81,7 @@ function isUuid(id: string | undefined): id is string {
 function verifyTooltip(detail: Record<string, unknown> | undefined): string {
   if (!detail || typeof detail !== 'object') return ''
   const parts: string[] = []
-  for (const key of ['arp', 'connreq', 'wan', 'dns', 'route', 'uplinkVlan', 'traffic'] as const) {
+  for (const key of ['arp', 'connreq', 'wan', 'dns', 'route', 'uplinkVlan', 'lanBind', 'traffic'] as const) {
     const c = detail[key] as { ok?: boolean; message?: string } | undefined
     if (!c?.message) continue
     parts.push(`${key}: ${c.ok ? 'ok' : 'fail'} (${c.message})`)
@@ -158,12 +165,15 @@ export function OnuDetailModal({
   canWrite,
   onClose,
   onRebooted,
+  embedded = false,
 }: {
   oltId: string
   onuIf: string
   canWrite: boolean
   onClose: () => void
   onRebooted?: () => void
+  /** Renderiza el contenido sin portal/backdrop (panel del Asistente). */
+  embedded?: boolean
 }) {
   const queryClient = useQueryClient()
   const { confirm } = useNotify()
@@ -194,11 +204,11 @@ export function OnuDetailModal({
   const [resyncRunning, setResyncRunning] = useState(false)
   const [resyncFailed, setResyncFailed] = useState(false)
   const [resyncDone, setResyncDone] = useState(false)
-  const [resyncRunners, setResyncRunners] = useState<
-    Record<string, () => Promise<string | void>>
-  >({})
+  const [resyncDriverId, setResyncDriverId] = useState<string | null>(null)
+  const resyncGeneration = useRef(0)
   const [checkOpen, setCheckOpen] = useState(false)
   const [checkRunOnOpen, setCheckRunOnOpen] = useState(false)
+  const [imageZoomOpen, setImageZoomOpen] = useState(false)
 
   const detailQuery = useQuery({
     queryKey: ['app', 'onus', 'detail', oltId, onuIf],
@@ -446,6 +456,8 @@ export function OnuDetailModal({
       void detailQuery.refetch()
       void queryClient.invalidateQueries({ queryKey: ['app', 'onus'] })
       void queryClient.invalidateQueries({ queryKey: ['app', 'onus', 'denied'] })
+      void queryClient.invalidateQueries({ queryKey: ['app', 'clients'] })
+      void queryClient.invalidateQueries({ queryKey: ['app', 'dashboard'] })
     },
     onError: (e: Error) => setError(e.message),
   })
@@ -462,6 +474,8 @@ export function OnuDetailModal({
       void detailQuery.refetch()
       void queryClient.invalidateQueries({ queryKey: ['app', 'onus'] })
       void queryClient.invalidateQueries({ queryKey: ['app', 'onus', 'denied'] })
+      void queryClient.invalidateQueries({ queryKey: ['app', 'clients'] })
+      void queryClient.invalidateQueries({ queryKey: ['app', 'dashboard'] })
     },
     onError: (e: Error) => setError(e.message),
   })
@@ -479,6 +493,48 @@ export function OnuDetailModal({
       void queryClient.invalidateQueries({ queryKey: ['app', 'onus', 'uncfg'] })
       void queryClient.invalidateQueries({ queryKey: ['app', 'onus', 'denied'] })
       onClose()
+    },
+    onError: (e: Error) => setError(e.message),
+  })
+
+  const dbaProbeMutation = useMutation({
+    mutationFn: () => {
+      if (!isUuid(onuDbId)) throw new Error('ONU no importada')
+      return apiFetch<{
+        ok: boolean
+        matched: boolean
+        expected: string | null
+        actual: string | null
+        message: string
+      }>(`/app/onus/${onuDbId}/dba/probe`, { method: 'POST' })
+    },
+    onSuccess: (r) => {
+      setMsg(r.message)
+      void queryClient.invalidateQueries({
+        queryKey: ['app', 'onus', 'detail', oltId, onuIf],
+      })
+    },
+    onError: (e: Error) => setError(e.message),
+  })
+
+  const dbaApplyMutation = useMutation({
+    mutationFn: () => {
+      if (!isUuid(onuDbId)) throw new Error('ONU no importada')
+      return apiFetch<{
+        ok: boolean
+        matched: boolean
+        message: string
+        verifyStatus?: string
+      }>(`/app/onus/${onuDbId}/dba/apply`, { method: 'POST' })
+    },
+    onSuccess: (r) => {
+      setMsg(
+        `${r.message}${r.verifyStatus ? ` · Salud ${r.verifyStatus}` : ''}`,
+      )
+      void queryClient.invalidateQueries({ queryKey: ['app', 'onus'] })
+      void queryClient.invalidateQueries({
+        queryKey: ['app', 'onus', 'detail', oltId, onuIf],
+      })
     },
     onError: (e: Error) => setError(e.message),
   })
@@ -600,6 +656,9 @@ export function OnuDetailModal({
 
   const o = detailQuery.data?.onu
   const isAdminDisabled = /disable|disabled/i.test(o?.adminState ?? '')
+  const crmServiceSuspended = serviceClient?.serviceStatus === 'suspended'
+  /** Con portal la ONU puede seguir “enable” aunque el cliente esté suspendido. */
+  const showEnableAccess = isAdminDisabled || crmServiceSuspended
   const tr069OnFromServer = !!(o?.tr069Enabled || o?.tr069ProfileId)
   const tr069On =
     tr069LocalOn != null ? tr069LocalOn : tr069OnFromServer
@@ -624,66 +683,116 @@ export function OnuDetailModal({
     }
   }, [tr069LocalOn, tr069OnFromServer])
 
-  async function executeResync(
-    steps: ProgressStep[],
-    runners: Record<string, () => Promise<string | void>>,
-  ) {
+  async function executeResync() {
+    if (!isUuid(onuDbId) || !o) return
+    const gen = ++resyncGeneration.current
     setResyncRunning(true)
     setResyncFailed(false)
     setResyncDone(false)
-    const result = await runProgressSteps(steps, setResyncSteps, runners)
-    setResyncRunning(false)
-    if (result.ok) {
-      setResyncDone(true)
-      void queryClient.invalidateQueries({
-        queryKey: ['app', 'onus', 'detail', oltId, onuIf],
-      })
-    } else {
-      setResyncFailed(true)
+    setResyncDriverId(null)
+    setError(null)
+
+    const body = {
+      ...(o.mgmtVlanId != null ? { mgmtVlanId: o.mgmtVlanId } : {}),
+      wanVlanId: o.wanVlanId ?? null,
+      ...(o.tr069ProfileId ? { tr069ProfileId: o.tr069ProfileId } : {}),
     }
-  }
 
-  function startResync() {
-    if (!isUuid(onuDbId) || !o) return
-
-    const steps: ProgressStep[] = [
+    const pre: ProgressStep[] = [
       {
         id: 'model',
         label: 'Detectando modelo real en ACS (ProductClass)',
         status: 'pending',
       },
       {
-        id: 'health',
-        label: 'Chequeo de salud (DBA del plan + WAN si aplica)',
+        id: 'olt',
+        label: 'Reaplicando VLANs en la OLT (service-port / OMCI)',
+        status: 'pending',
+      },
+      {
+        id: 'assign',
+        label: 'Reasignando IPs del pool (mgmt / WAN)',
         status: 'pending',
       },
     ]
+    setResyncSteps(pre)
 
-    const runners: Record<string, () => Promise<string | void>> = {
+    const preResult = await runProgressSteps(pre, setResyncSteps, {
       model: async () => {
-        const r = await apiFetch<{
-          ok?: boolean
-          changed?: boolean
-          previous?: string | null
-          model?: string | null
-          message?: string
-        }>(`/app/onus/${onuDbId}/model/sync-acs`, { method: 'POST' })
+        const r = await apiFetch<{ message?: string }>(
+          `/app/onus/${onuDbId}/model/sync-acs`,
+          { method: 'POST' },
+        )
         return r.message || 'Modelo ACS OK'
       },
-      health: async () => {
-        const r = await apiFetch<{
-          ok?: boolean
-          verifyStatus?: string
-          message?: string
-        }>(`/app/onus/${onuDbId}/verify/run`, { method: 'POST' })
-        return r.message || `Salud ${r.verifyStatus ?? ''}`.trim()
+      olt: async () => {
+        const r = await apiFetch<{ message?: string }>(
+          `/app/onus/${onuDbId}/network-vlans/olt`,
+          { method: 'POST', body: JSON.stringify(body) },
+        )
+        return r.message || 'OLT OK'
       },
+      assign: async () => {
+        const r = await apiFetch<{ message?: string }>(
+          `/app/onus/${onuDbId}/network-vlans/assign`,
+          { method: 'POST', body: JSON.stringify(body) },
+        )
+        return r.message || 'Asignación OK'
+      },
+    })
+
+    if (gen !== resyncGeneration.current) return
+
+    if (!preResult.ok) {
+      setResyncRunning(false)
+      setResyncFailed(true)
+      return
     }
 
-    setResyncSteps(steps)
-    setResyncRunners(runners)
+    const applyResult = await runOnuApplyAndVerify({
+      onuId: onuDbId,
+      body,
+      headSteps: preResult.steps,
+      setProgressSteps: setResyncSteps,
+      setDriverId: setResyncDriverId,
+      expect: {
+        ...(o.mgmtVlanId != null ? { mgmtVlan: o.mgmtVlanId } : {}),
+        wanVlan: o.wanVlanId ?? null,
+        requireWanIp: o.wanVlanId != null,
+      },
+      waitMs: 120_000,
+    })
+
+    if (gen !== resyncGeneration.current) return
+
+    void queryClient.invalidateQueries({
+      queryKey: ['app', 'onus', 'detail', oltId, onuIf],
+    })
+    void queryClient.invalidateQueries({ queryKey: ['app', 'onus'] })
+    setResyncRunning(false)
+    if (applyResult.ok) {
+      setResyncDone(true)
+      setMsg(
+        applyResult.verifyStatus === 'ok'
+          ? 'Resync OK — ONU reaprovisionada'
+          : 'Resync aplicado — el chequeo sigue en segundo plano',
+      )
+    } else {
+      setResyncFailed(true)
+      setError(applyResult.error || 'Resync falló')
+    }
+  }
+
+  function startResync() {
+    if (!isUuid(onuDbId) || !o) return
+    if (o.mgmtVlanId == null && o.wanVlanId == null) {
+      setError(
+        'La ONU no tiene VLANs de mgmt/WAN: configúralas antes de Resync.',
+      )
+      return
+    }
     setResyncOpen(true)
-    void executeResync(steps, runners)
+    void executeResync()
   }
 
   function startCheckOnu() {
@@ -708,9 +817,13 @@ export function OnuDetailModal({
     (s) => s.kind === 'tx_bps',
   )
 
-  return (
-    <ModalPortal><div className="fixed inset-0 z-[100] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/60 sm:items-center sm:p-4">
-      <div className="flex h-[100dvh] max-h-[100dvh] w-full max-w-4xl flex-col overflow-hidden rounded-none border-0 sm:h-auto sm:max-h-[min(92dvh,920px)] sm:rounded-xl sm:border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl">
+  const panelClass = embedded
+    ? 'flex h-full min-h-0 w-full flex-1 flex-col overflow-hidden bg-[var(--bg-elevated)]'
+    : 'flex h-[100dvh] max-h-[100dvh] w-full max-w-4xl flex-col overflow-hidden rounded-none border-0 sm:h-auto sm:max-h-[min(92dvh,920px)] sm:rounded-xl sm:border border-[var(--border)] bg-[var(--bg-elevated)] shadow-xl'
+
+  const panel = (
+      <div className={panelClass}>
+        {!embedded && (
         <div className="flex shrink-0 items-center justify-between gap-2 border-b border-[var(--border)] px-4 py-3 sm:px-5">
           <h3 className="min-w-0 truncate text-lg font-semibold">ONU · {onuIf}</h3>
           <button
@@ -721,6 +834,7 @@ export function OnuDetailModal({
             ✕
           </button>
         </div>
+        )}
 
         <div className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain px-4 py-4 text-sm sm:px-5">
           {detailQuery.isLoading && (
@@ -736,8 +850,8 @@ export function OnuDetailModal({
 
           {o && (
             <>
-              <div className="grid gap-4 md:grid-cols-2">
-                <dl className="space-y-1.5 text-sm">
+              <div className="relative">
+                <dl className="space-y-1.5 text-sm md:w-[calc(50%-0.5rem)]">
                   <Row label="OLT" value={o.oltName} />
                   <Row label="Board" value={o.board} />
                   <Row label="Port" value={o.port} />
@@ -856,15 +970,20 @@ export function OnuDetailModal({
                   <Row label="ID externo" value={o.sn ?? '—'} mono />
                 </dl>
 
-                <div className="space-y-3">
-                  <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] p-3">
+                  <div className="mt-4 flex flex-col md:absolute md:inset-y-0 md:left-[calc(50%+0.5rem)] md:right-0 md:mt-0">
+                  <button
+                    type="button"
+                    title="Clic para ampliar"
+                    onClick={() => setImageZoomOpen(true)}
+                    className="flex min-h-[180px] flex-1 cursor-zoom-in items-center justify-center overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--bg)] p-2 md:min-h-0"
+                  >
                     <img
                       src={imageSrc}
                       alt={o.onuType ?? 'ONU'}
-                      className="mx-auto h-[100px] object-contain"
+                      className="max-h-full max-w-full object-contain"
                     />
-                  </div>
-                  <div className="space-y-1.5">
+                  </button>
+                  <div className="shrink-0 space-y-1.5 pt-3">
                     <p>
                       <span className="text-[var(--text-muted)]">Estado: </span>
                       {o.online ? (
@@ -1016,7 +1135,12 @@ export function OnuDetailModal({
                             o.provisionMode !== 'manual'
                           }
                           onOpenProgress={() => {
-                            setCheckRunOnOpen(false)
+                            // test/fail: disparar checker (heal) al abrir;
+                            // ok/idle: solo ver progreso.
+                            setCheckRunOnOpen(
+                              o.verifyStatus === 'test' ||
+                                o.verifyStatus === 'fail',
+                            )
                             setCheckOpen(true)
                           }}
                         />
@@ -1234,31 +1358,150 @@ export function OnuDetailModal({
                 </div>
               </div>
 
-              <Section title="Perfiles de velocidad">
-                <table className="w-full text-sm">
+              <Section title="Perfiles de velocidad (DBA OLT)">
+                {/* Móvil: bloque apilado (1 fila); desktop: tabla */}
+                <dl className="space-y-2 text-sm md:hidden">
+                  <div>
+                    <dt className="text-xs text-[var(--text-muted)]">Plan</dt>
+                    <dd>
+                      {o.speedProfile?.name ? (
+                        <>
+                          <div>{o.speedProfile.name}</div>
+                          <div className="text-xs text-[var(--text-muted)]">
+                            ↓{o.speedProfile.download ?? '—'} · ↑
+                            {o.speedProfile.upload ?? '—'}
+                          </div>
+                        </>
+                      ) : (
+                        'Sin plan ligado'
+                      )}
+                    </dd>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <dt className="text-xs text-[var(--text-muted)]">
+                        Esperado OLT
+                      </dt>
+                      <dd className="font-mono text-xs">
+                        {o.speedProfile?.oltUpProfile ?? '—'}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs text-[var(--text-muted)]">
+                        En OLT ahora
+                      </dt>
+                      <dd className="font-mono text-xs">
+                        {o.speedProfile?.actualUpProfile ??
+                          (o.speedProfile?.dbaMessage?.includes('—')
+                            ? '— (sin leer)'
+                            : '—')}
+                      </dd>
+                    </div>
+                  </div>
+                  <div>
+                    <dt className="text-xs text-[var(--text-muted)]">Estado</dt>
+                    <dd>
+                      {o.speedProfile?.dbaOk === true ? (
+                        <span className="text-emerald-400">OK</span>
+                      ) : o.speedProfile?.dbaOk === false ? (
+                        <span className="text-amber-400">Desviado</span>
+                      ) : (
+                        <span className="text-[var(--text-muted)]">
+                          Sin verificar
+                        </span>
+                      )}
+                    </dd>
+                  </div>
+                </dl>
+                <table className="hidden w-full text-sm md:table">
                   <thead>
                     <tr className="text-[var(--text-muted)]">
-                      <th className="py-1 text-left font-medium">Download</th>
-                      <th className="py-1 text-left font-medium">Upload</th>
-                      <th className="py-1 text-left font-medium">Acción</th>
+                      <th className="py-1 text-left font-medium">Plan</th>
+                      <th className="py-1 text-left font-medium">Esperado OLT</th>
+                      <th className="py-1 text-left font-medium">En OLT ahora</th>
+                      <th className="py-1 text-left font-medium">Estado</th>
                     </tr>
                   </thead>
                   <tbody>
                     <tr>
                       <td className="py-1">
-                        {o.speedProfile?.download ?? 'Pendiente'}
+                        {o.speedProfile?.name ? (
+                          <>
+                            <div>{o.speedProfile.name}</div>
+                            <div className="text-xs text-[var(--text-muted)]">
+                              ↓{o.speedProfile.download ?? '—'} · ↑
+                              {o.speedProfile.upload ?? '—'}
+                            </div>
+                          </>
+                        ) : (
+                          'Sin plan ligado'
+                        )}
+                      </td>
+                      <td className="py-1 font-mono text-xs">
+                        {o.speedProfile?.oltUpProfile ?? '—'}
+                      </td>
+                      <td className="py-1 font-mono text-xs">
+                        {o.speedProfile?.actualUpProfile ??
+                          (o.speedProfile?.dbaMessage?.includes('—')
+                            ? '— (sin leer)'
+                            : '—')}
                       </td>
                       <td className="py-1">
-                        {o.speedProfile?.upload ?? 'Pendiente'}
-                      </td>
-                      <td className="py-1">
-                        <span className="text-[var(--text-muted)]">
-                          Configurar (Pendiente)
-                        </span>
+                        {o.speedProfile?.dbaOk === true ? (
+                          <span className="text-emerald-400">OK</span>
+                        ) : o.speedProfile?.dbaOk === false ? (
+                          <span className="text-amber-400">Desviado</span>
+                        ) : (
+                          <span className="text-[var(--text-muted)]">
+                            Sin verificar
+                          </span>
+                        )}
                       </td>
                     </tr>
                   </tbody>
                 </table>
+                {o.speedProfile?.dbaMessage ? (
+                  <p className="mt-2 text-xs text-[var(--text-muted)]">
+                    {o.speedProfile.dbaMessage}
+                  </p>
+                ) : null}
+                {canWrite && isUuid(onuDbId) && o.speedProfile?.oltUpProfile ? (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      disabled={
+                        dbaProbeMutation.isPending || dbaApplyMutation.isPending
+                      }
+                      onClick={() => void dbaProbeMutation.mutateAsync()}
+                      className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs hover:bg-[var(--bg)] disabled:opacity-60"
+                    >
+                      {dbaProbeMutation.isPending
+                        ? 'Leyendo OLT…'
+                        : 'Leer T-CONT en OLT'}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={
+                        dbaApplyMutation.isPending || dbaProbeMutation.isPending
+                      }
+                      onClick={() => void dbaApplyMutation.mutateAsync()}
+                      className="rounded-lg bg-[var(--accent)] px-3 py-1.5 text-xs font-medium text-white hover:bg-[var(--accent-hover)] disabled:opacity-60"
+                    >
+                      {dbaApplyMutation.isPending
+                        ? 'Aplicando…'
+                        : 'Aplicar perfil del plan'}
+                    </button>
+                  </div>
+                ) : canWrite &&
+                  isUuid(onuDbId) &&
+                  o.speedProfile?.name &&
+                  !o.speedProfile?.oltUpProfile ? (
+                  <p className="mt-3 text-xs text-amber-300">
+                    El plan está ligado al cliente, pero falta el perfil de
+                    velocidad (speed profile) en el plan CRM para poder
+                    aplicarlo en la OLT.
+                  </p>
+                ) : null}
               </Section>
 
               <Section title="Puertos Ethernet">
@@ -1267,33 +1510,62 @@ export function OnuDetailModal({
                     Sin datos en running-config (Pendiente OMCI)
                   </p>
                 ) : (
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="text-[var(--text-muted)]">
-                        <th className="py-1 text-left font-medium">Puerto</th>
-                        <th className="py-1 text-left font-medium">Admin</th>
-                        <th className="py-1 text-left font-medium">Modo</th>
-                        <th className="py-1 text-left font-medium">DHCP</th>
-                        <th className="py-1 text-left font-medium">Acción</th>
-                      </tr>
-                    </thead>
-                    <tbody>
+                  <>
+                    <MobileList>
                       {o.ethernetPorts.map((p) => (
-                        <tr
-                          key={p.port}
-                          className="border-t border-[var(--border)]"
-                        >
-                          <td className="py-1.5">{p.port}</td>
-                          <td className="py-1.5">{p.adminState}</td>
-                          <td className="py-1.5">{p.mode}</td>
-                          <td className="py-1.5">{p.dhcp}</td>
-                          <td className="py-1.5 text-[var(--text-muted)]">
-                            Configurar (Pendiente)
-                          </td>
-                        </tr>
+                        <MobileListCard key={p.port} className="py-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-sm font-semibold">
+                              {p.port}
+                            </span>
+                            <span className="text-xs text-[var(--text-muted)]">
+                              Configurar (Pendiente)
+                            </span>
+                          </div>
+                          <MobileListMeta>
+                            <span>Admin {p.adminState}</span>
+                            <span>·</span>
+                            <span>{p.mode}</span>
+                            <span>·</span>
+                            <span>DHCP {p.dhcp}</span>
+                          </MobileListMeta>
+                        </MobileListCard>
                       ))}
-                    </tbody>
-                  </table>
+                    </MobileList>
+                    <DesktopTableWrap bordered={false}>
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="text-[var(--text-muted)]">
+                            <th className="py-1 text-left font-medium">
+                              Puerto
+                            </th>
+                            <th className="py-1 text-left font-medium">Admin</th>
+                            <th className="py-1 text-left font-medium">Modo</th>
+                            <th className="py-1 text-left font-medium">DHCP</th>
+                            <th className="py-1 text-left font-medium">
+                              Acción
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {o.ethernetPorts.map((p) => (
+                            <tr
+                              key={p.port}
+                              className="border-t border-[var(--border)]"
+                            >
+                              <td className="py-1.5">{p.port}</td>
+                              <td className="py-1.5">{p.adminState}</td>
+                              <td className="py-1.5">{p.mode}</td>
+                              <td className="py-1.5">{p.dhcp}</td>
+                              <td className="py-1.5 text-[var(--text-muted)]">
+                                Configurar (Pendiente)
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </DesktopTableWrap>
+                  </>
                 )}
               </Section>
 
@@ -1303,42 +1575,79 @@ export function OnuDetailModal({
                     No detectado / Pendiente
                   </p>
                 ) : (
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="text-[var(--text-muted)]">
-                        <th className="py-1 text-left font-medium">Puerto</th>
-                        <th className="py-1 text-left font-medium">Admin</th>
-                        <th className="py-1 text-left font-medium">Modo</th>
-                        <th className="py-1 text-left font-medium">SSID</th>
-                        <th className="py-1 text-left font-medium">DHCP</th>
-                        <th className="py-1 text-left font-medium">Acción</th>
-                      </tr>
-                    </thead>
-                    <tbody>
+                  <>
+                    <MobileList>
                       {o.wifiPorts.map((p) => (
-                        <tr
-                          key={p.port}
-                          className="border-t border-[var(--border)]"
-                        >
-                          <td className="py-1.5">
-                            <span className="rounded bg-[var(--accent)]/20 px-1.5 text-xs text-[var(--accent)]">
-                              {p.band}
-                            </span>
-                            <div className="text-xs text-[var(--text-muted)]">
-                              {p.port}
+                        <MobileListCard key={p.port} className="py-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="min-w-0">
+                              <span className="rounded bg-[var(--accent)]/20 px-1.5 text-xs text-[var(--accent)]">
+                                {p.band}
+                              </span>
+                              <p className="mt-0.5 truncate text-sm font-semibold">
+                                {p.ssid || '—'}
+                              </p>
+                              <p className="text-[11px] text-[var(--text-muted)]">
+                                {p.port}
+                              </p>
                             </div>
-                          </td>
-                          <td className="py-1.5">{p.adminState}</td>
-                          <td className="py-1.5">{p.mode}</td>
-                          <td className="py-1.5">{p.ssid || '—'}</td>
-                          <td className="py-1.5">{p.dhcp}</td>
-                          <td className="py-1.5 text-[var(--text-muted)]">
-                            Configurar (Pendiente)
-                          </td>
-                        </tr>
+                            <span className="shrink-0 text-xs text-[var(--text-muted)]">
+                              Configurar (Pendiente)
+                            </span>
+                          </div>
+                          <MobileListMeta>
+                            <span>Admin {p.adminState}</span>
+                            <span>·</span>
+                            <span>{p.mode}</span>
+                            <span>·</span>
+                            <span>DHCP {p.dhcp}</span>
+                          </MobileListMeta>
+                        </MobileListCard>
                       ))}
-                    </tbody>
-                  </table>
+                    </MobileList>
+                    <DesktopTableWrap bordered={false}>
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="text-[var(--text-muted)]">
+                            <th className="py-1 text-left font-medium">
+                              Puerto
+                            </th>
+                            <th className="py-1 text-left font-medium">Admin</th>
+                            <th className="py-1 text-left font-medium">Modo</th>
+                            <th className="py-1 text-left font-medium">SSID</th>
+                            <th className="py-1 text-left font-medium">DHCP</th>
+                            <th className="py-1 text-left font-medium">
+                              Acción
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {o.wifiPorts.map((p) => (
+                            <tr
+                              key={p.port}
+                              className="border-t border-[var(--border)]"
+                            >
+                              <td className="py-1.5">
+                                <span className="rounded bg-[var(--accent)]/20 px-1.5 text-xs text-[var(--accent)]">
+                                  {p.band}
+                                </span>
+                                <div className="text-xs text-[var(--text-muted)]">
+                                  {p.port}
+                                </div>
+                              </td>
+                              <td className="py-1.5">{p.adminState}</td>
+                              <td className="py-1.5">{p.mode}</td>
+                              <td className="py-1.5">{p.ssid || '—'}</td>
+                              <td className="py-1.5">{p.dhcp}</td>
+                              <td className="py-1.5 text-[var(--text-muted)]">
+                                Configurar (Pendiente)
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </DesktopTableWrap>
+                  </>
                 )}
               </Section>
 
@@ -1430,45 +1739,58 @@ export function OnuDetailModal({
                       type="button"
                       disabled={actionBusy}
                       onClick={() => {
-                        if (isAdminDisabled) {
+                        if (showEnableAccess) {
+                          const crmNote = clientLink
+                            ? `\n\nEsta ONU está ligada a ${clientLink.label}: se reactivarán todos sus servicios suspendidos (portal o enable OLT según la empresa).`
+                            : ''
                           void confirm(
-                            `¿Rehabilitar ONU ${onuIf}?\n\n` +
-                              `ENABLE: vuelve a dar servicio sin pedir autorización de nuevo.`,
+                            `¿Rehabilitar acceso${clientLink ? ' del cliente' : ` ONU ${onuIf}`}?${crmNote || `\n\nENABLE: vuelve a dar servicio sin pedir autorización de nuevo.`}`,
                             {
-                              title: 'Rehabilitar ONU',
-                              confirmLabel: 'Enable',
+                              title: clientLink
+                                ? 'Reactivar cliente'
+                                : 'Rehabilitar ONU',
+                              confirmLabel: clientLink
+                                ? 'Reactivar'
+                                : 'Enable',
                             },
                           ).then((ok) => {
                             if (ok) enableMutation.mutate()
                           })
                           return
                         }
+                        const crmNote = clientLink
+                          ? `\n\nEsta ONU está ligada a ${clientLink.label}: se suspenderán todos sus servicios (portal cautivo o disable en OLT, según la empresa).`
+                          : `\n\nDISABLE: queda autorizada en la OLT pero sin servicio (admin disable).\nNo pide autorización de nuevo. Para eso usa Delete.`
                         void confirm(
-                          `¿Deshabilitar ONU ${onuIf}?\n\n` +
-                            `DISABLE: queda autorizada en la OLT pero sin servicio (admin disable).\n` +
-                            `No pide autorización de nuevo. Para eso usa Delete.`,
+                          `¿Suspender${clientLink ? ` a ${clientLink.label}` : ` ONU ${onuIf}`}?${crmNote}`,
                           {
-                            title: 'Deshabilitar ONU',
+                            title: clientLink
+                              ? 'Suspender cliente'
+                              : 'Deshabilitar ONU',
                             danger: true,
-                            confirmLabel: 'Disable',
+                            confirmLabel: clientLink ? 'Suspender' : 'Disable',
                           },
                         ).then((ok) => {
                           if (ok) disableMutation.mutate()
                         })
                       }}
                       className={
-                        isAdminDisabled
+                        showEnableAccess
                           ? 'rounded-lg border border-emerald-500/50 bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-400 hover:bg-emerald-500/20 disabled:opacity-60'
                           : 'rounded-lg border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-sm font-medium text-amber-400 hover:bg-amber-500/20 disabled:opacity-60'
                       }
                     >
-                      {isAdminDisabled
+                      {showEnableAccess
                         ? enableMutation.isPending
-                          ? 'Rehabilitando…'
-                          : 'Enable ONU'
+                          ? 'Reactivando…'
+                          : clientLink
+                            ? 'Reactivar cliente'
+                            : 'Enable ONU'
                         : disableMutation.isPending
-                          ? 'Deshabilitando…'
-                          : 'Disable ONU'}
+                          ? 'Suspendiendo…'
+                          : clientLink
+                            ? 'Suspender cliente'
+                            : 'Disable ONU'}
                     </button>
                     <button
                       type="button"
@@ -1494,20 +1816,15 @@ export function OnuDetailModal({
                     </button>
                   </>
                 ) : null}
-                {canWrite &&
-                isUuid(onuDbId) &&
-                o?.verifyStatus === 'fail' ? (
+                {canWrite && isUuid(onuDbId) ? (
                   <button
                     type="button"
                     disabled={resyncRunning || checkOpen || actionBusy}
                     onClick={() => startResync()}
-                    title={
-                      verifyTooltip(o.verifyDetail) ||
-                      'Reaprovisionar y reiniciar el chequeo'
-                    }
+                    title="Reaprovisionamiento completo: modelo ACS, VLANs OLT, IPs, OMCI/TR-069 y arranque del chequeo. Puedes cerrar y seguir en segundo plano."
                     className="rounded-lg border border-amber-500/50 bg-amber-500/10 px-3 py-1.5 text-sm font-medium text-amber-200 hover:bg-amber-500/20 disabled:opacity-50"
                   >
-                    Resync config
+                    {resyncRunning ? 'Resync…' : 'Resync config'}
                   </button>
                 ) : (
                   pendingBtn('Resync config')
@@ -1517,7 +1834,7 @@ export function OnuDetailModal({
                     type="button"
                     disabled={checkOpen || resyncRunning || actionBusy}
                     onClick={() => startCheckOnu()}
-                    title="Correr ahora el plan de verify del modelo"
+                    title="Chequeo del plan de verify: mide y repara si algo falla (no reaprovisiona todo)."
                     className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm font-medium hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:opacity-50"
                   >
                     {checkOpen ? 'Checking…' : 'Check ONU'}
@@ -1529,28 +1846,52 @@ export function OnuDetailModal({
             </>
           )}
         </div>
-      </div>
 
       <OperationProgressModal
         open={resyncOpen}
-        title="Resync config"
+        title="Resync config — reaprovisionamiento completo"
         steps={resyncSteps}
         running={resyncRunning}
         failed={resyncFailed}
         allDone={resyncDone}
-        onRetry={() => void executeResync(resyncSteps, resyncRunners)}
+        doneLabel={
+          resyncDriverId
+            ? `ONU reaprovisionada · driver ${resyncDriverId}`
+            : 'ONU reaprovisionada'
+        }
+        failedLabel="Resync falló — puedes reintentar o seguir en segundo plano"
+        closeWhileRunning
+        closeLabel={
+          resyncRunning
+            ? 'Seguir en segundo plano'
+            : resyncDone
+              ? 'Listo'
+              : 'Cerrar'
+        }
+        onRetry={
+          resyncFailed
+            ? () => {
+                void executeResync()
+              }
+            : undefined
+        }
         onClose={() => {
           setResyncOpen(false)
           void queryClient.invalidateQueries({
             queryKey: ['app', 'onus', 'detail', oltId, onuIf],
           })
         }}
-      />
+      >
+        <p className="mx-5 mb-2 text-xs text-[var(--text-muted)]">
+          Vuelve a empujar OLT + IPs + OMCI/ACS. No es solo un chequeo: para
+          eso usa <span className="text-[var(--text)]">Check ONU</span>.
+        </p>
+      </OperationProgressModal>
 
       <OnuProvisionProgressModal
         open={checkOpen && isUuid(onuDbId)}
         onuId={onuDbId ?? ''}
-        title="Aprovisionamiento / Check ONU"
+        title="Check ONU — chequeo y reparación"
         runCheckOnOpen={checkRunOnOpen}
         onClose={() => {
           setCheckOpen(false)
@@ -1736,7 +2077,42 @@ export function OnuDetailModal({
           </div>
         </div></ModalPortal>
       )}
-    </div></ModalPortal>
+
+      {imageZoomOpen && (
+        <ModalPortal>
+          <div
+            className="fixed inset-0 z-[120] modal-backdrop flex items-center justify-center bg-black/80 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Imagen ONU ampliada"
+            onClick={() => setImageZoomOpen(false)}
+          >
+            <button
+              type="button"
+              className="absolute right-4 top-4 rounded-md bg-black/50 px-3 py-1.5 text-sm text-white hover:bg-black/70"
+              onClick={() => setImageZoomOpen(false)}
+            >
+              ✕
+            </button>
+            <img
+              src={imageSrc}
+              alt={o?.onuType ?? 'ONU'}
+              className="max-h-[min(92dvh,900px)] max-w-[min(96vw,1100px)] object-contain"
+              onClick={(e) => e.stopPropagation()}
+            />
+          </div>
+        </ModalPortal>
+      )}
+    </div>
+  )
+
+  if (embedded) return panel
+  return (
+    <ModalPortal>
+      <div className="fixed inset-0 z-[100] modal-backdrop flex items-stretch justify-center overflow-hidden bg-black/60 sm:items-center sm:p-4">
+        {panel}
+      </div>
+    </ModalPortal>
   )
 }
 

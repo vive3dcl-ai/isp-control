@@ -43,6 +43,8 @@ export type OnuType = {
   capability: 'bridging' | 'bridging_routing' | string
   capabilityLabel: string
   useDefaultImage: boolean
+  /** Custom upload (data URL or http), null when using default SVG. */
+  customImageUrl: string | null
   imageUrl: string | null
   imageDisplayUrl: string
   localImageUrl: string

@@ -13,6 +13,7 @@ import {
 import type { IpPoolsResponse } from '../lib/ip-pools'
 import type { Tr069ProfilesResponse } from '../lib/tr069'
 import type { Client, ClientService, ServicePlan } from '../lib/crm'
+import type { BillingSettings } from '../lib/billing'
 import {
   inventoryLabel,
   type InventoryItem,
@@ -94,6 +95,7 @@ export function NewServiceWizardModal({
   const [inventoryOnuItemId, setInventoryOnuItemId] = useState('')
   const [inventoryDecoItemId, setInventoryDecoItemId] = useState('')
   const [additionalDecoCount, setAdditionalDecoCount] = useState('0')
+  const [billingProrate, setBillingProrate] = useState(false)
 
   // Paso 4 — Red
   const [mgmtVlanPick, setMgmtVlanPick] = useState('')
@@ -158,6 +160,7 @@ export function NewServiceWizardModal({
     setInventoryOnuItemId('')
     setInventoryDecoItemId('')
     setAdditionalDecoCount('0')
+    setBillingProrate(false)
     setMgmtVlanPick('')
     setWanVlanPick('')
     setTr069ProfilePick('')
@@ -203,6 +206,12 @@ export function NewServiceWizardModal({
     queryKey: ['app', 'service-plans'],
     queryFn: () => apiFetch<ServicePlan[]>('/app/service-plans'),
     enabled: open && step === 3,
+  })
+  const billingQuery = useQuery({
+    queryKey: ['app', 'settings', 'billing'],
+    queryFn: () => apiFetch<BillingSettings>('/app/settings/billing'),
+    enabled: open && step === 3,
+    staleTime: 60_000,
   })
   const inventoryQuery = useQuery({
     queryKey: ['app', 'inventory', 'items', 'inStock'],
@@ -296,6 +305,8 @@ export function NewServiceWizardModal({
     : 0
   const decoCharge =
     extraDecos * Number(selectedPlan?.additionalDecoPrice ?? 0)
+  const billingRegime = billingQuery.data?.billingRegime ?? 'calendar_month'
+  const showBillingProrate = billingRegime === 'from_install'
 
   function validateStep(current: number): string | null {
     if (current === 1) {
@@ -486,6 +497,7 @@ export function NewServiceWizardModal({
               inventoryOnuItemId: inventoryOnuItemId || undefined,
               inventoryDecoItemId: inventoryDecoItemId || undefined,
               additionalDecoCount: planHasTv ? extraDecos : 0,
+              billingProrate: showBillingProrate ? billingProrate : undefined,
             }),
           },
         )
@@ -903,6 +915,28 @@ export function NewServiceWizardModal({
                     </li>
                   )}
                 </ul>
+
+                {servicePlanId && showBillingProrate && (
+                  <label className="flex items-start gap-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2.5 text-sm">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5"
+                      checked={billingProrate}
+                      onChange={(e) => setBillingProrate(e.target.checked)}
+                    />
+                    <span>
+                      <span className="font-medium">Cobro proporcional</span>
+                      <span className="mt-0.5 block text-[11px] text-[var(--text-muted)]">
+                        Factura el proporcional hasta fin de mes; después cobro
+                        mensual el día 1 con {billingQuery.data?.defaultDueDays ?? 5}{' '}
+                        días para pagar. Corte automático{' '}
+                        {(billingQuery.data?.defaultDueDays ?? 5) +
+                          (billingQuery.data?.graceDaysAfterDue ?? 2)}{' '}
+                        días después de emitida.
+                      </span>
+                    </span>
+                  </label>
+                )}
 
                 {servicePlanId && (
                   <div className="space-y-3 rounded-lg border border-[var(--border)] p-3">

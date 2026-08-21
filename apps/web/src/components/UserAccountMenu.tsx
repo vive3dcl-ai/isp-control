@@ -66,7 +66,7 @@ export function UserAccountMenu({
         {open && (
           <div
             role="menu"
-            className="absolute right-0 z-[60] mt-1.5 min-w-[11rem] overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] py-1 shadow-lg"
+            className="absolute right-0 z-[60] mt-1.5 max-h-[min(24rem,calc(100dvh-var(--safe-top)-var(--safe-bottom)-5rem))] min-w-[11rem] overflow-y-auto overflow-x-hidden rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] py-1 shadow-lg"
           >
             {subtitle && (
               <p className="truncate border-b border-[var(--border)] px-3 py-1.5 text-[11px] text-[var(--text-muted)]">

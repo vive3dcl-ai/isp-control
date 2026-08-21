@@ -8,17 +8,19 @@ import {
   forwardRef,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import type { AuthUser } from '../auth/auth.types';
 import { Tenant } from '../tenants/entities/tenant.entity';
 import { TenantConnectionService } from '../database/tenant-connection.service';
 import {
+  EMPTY_ASISTENTE_IA_CONFIG,
   EMPTY_MERCADOPAGO_CONFIG,
   EMPTY_SMTP_CONFIG,
   EMPTY_WHATSAPP_CONFIG,
   baileysNeedsAttention,
   formatMercadoPagoCountries,
   getModuleDefinition,
+  isAsistenteIaConfigured,
   isMercadoPagoCheckoutProCountry,
   isMercadoPagoConfigured,
   isSmtpConfigured,
@@ -28,6 +30,7 @@ import {
   MODULE_CATALOG,
   normalizeEnabledModules,
   WHATSAPP_BAILEYS_MAX_SLOTS,
+  type AsistenteIaModuleConfig,
   type MercadoPagoModuleConfig,
   type ModuleId,
   type SmtpModuleConfig,
@@ -36,6 +39,7 @@ import {
 } from './module-catalog';
 import {
   assertKnownModules,
+  UpdateAsistenteIaConfigDto,
   UpdateMercadoPagoConfigDto,
   UpdateModulePricingDto,
   UpdateSmtpConfigDto,
@@ -50,10 +54,20 @@ import { PlatformBrandingService } from '../platform/platform-branding.service';
 import { escapeHtml } from '../platform/platform-email-layout';
 import { WhatsAppBaileysClient } from './whatsapp-baileys.client';
 import { TenantMailerService } from './tenant-mailer.service';
+import { PlatformAiQuotaService } from '../ai/platform-ai-quota.service';
+import { PlatformAiSettingsService } from '../ai/platform-ai-settings.service';
+import { PlatformAiCapabilitiesService } from '../ai/platform-ai-capabilities.service';
+import { AiProviderRouter } from '../ai/ai-provider.router';
+import { AI_VENDORS, isAiVendorId } from '../ai/ai-providers';
+import { listAiModels } from '../ai/adapters/list-models';
+import { PlatformAiRestorePointsService } from '../ai/platform-ai-restore-points.service';
+import { PlatformAiChatSessionsService } from '../ai/platform-ai-chat-sessions.service';
+import type { AsistenteChatDto } from './dto/modules.dto';
 
 @Injectable()
 export class ModulesService {
   private readonly logger = new Logger(ModulesService.name);
+  private aiInternalColumnEnsured = false;
 
   constructor(
     @InjectRepository(Tenant)
@@ -67,6 +81,13 @@ export class ModulesService {
     private readonly baileys: WhatsAppBaileysClient,
     private readonly tenantMailer: TenantMailerService,
     private readonly branding: PlatformBrandingService,
+    private readonly aiRouter: AiProviderRouter,
+    private readonly aiQuota: PlatformAiQuotaService,
+    private readonly platformAi: PlatformAiSettingsService,
+    private readonly aiCapabilities: PlatformAiCapabilitiesService,
+    private readonly aiRestorePoints: PlatformAiRestorePointsService,
+    private readonly aiChatSessions: PlatformAiChatSessionsService,
+    private readonly dataSource: DataSource,
   ) {}
 
   async listCatalog() {
@@ -88,7 +109,7 @@ export class ModulesService {
     const enabled = new Set(normalizeEnabledModules(tenant.enabledModules));
     const catalog = await this.catalogWithPricingAndFx();
     const country = (tenant.country || '').toUpperCase();
-    return catalog.map((m) => {
+    const modules = catalog.map((m) => {
       const available =
         !m.availableCountries || m.availableCountries.includes(country);
       return {
@@ -103,6 +124,10 @@ export class ModulesService {
             : 'No disponible para el país de esta empresa.',
       };
     });
+    return {
+      modules,
+      aiInternalEnabled: tenant.aiInternalEnabled !== false,
+    };
   }
 
   async updateModulePricing(moduleId: string, dto: UpdateModulePricingDto) {
@@ -152,6 +177,9 @@ export class ModulesService {
       }
     }
     tenant.enabledModules = requested;
+    if (dto.aiInternalEnabled != null) {
+      tenant.aiInternalEnabled = dto.aiInternalEnabled;
+    }
     await this.tenants.save(tenant);
     return this.listForTenantAdmin(tenantId);
   }
@@ -232,6 +260,8 @@ export class ModulesService {
           configured = isMercadoPagoConfigured(row?.config ?? {});
         } else if (m.id === 'whatsapp') {
           configured = isWhatsAppConfigured(row?.config ?? {});
+        } else if (m.id === 'asistente_ia') {
+          configured = isAsistenteIaConfigured(row?.config ?? {});
         } else if (row?.config && Object.keys(row.config).length > 0) {
           configured = true;
         }
@@ -475,6 +505,297 @@ export class ModulesService {
     return this.getWhatsAppConfig(user);
   }
 
+  async getAsistenteIaConfig(user: AuthUser) {
+    await this.assertModuleEnabled(user, 'asistente_ia');
+    const tenant = await this.requireTenantFromUser(user);
+    const repo = await this.tenantConnections.getModuleConfigRepository(
+      tenant.schemaName,
+    );
+    const row = await repo.findOne({ where: { moduleId: 'asistente_ia' } });
+    const cfg = {
+      ...EMPTY_ASISTENTE_IA_CONFIG,
+      ...((row?.config ?? {}) as Partial<AsistenteIaModuleConfig>),
+    };
+    const internalAllowed = tenant.aiInternalEnabled !== false;
+    const platform = await this.platformAi.getPublic();
+    const quota =
+      cfg.mode === 'internal'
+        ? await this.aiQuota.getSnapshot(tenant.id)
+        : null;
+    return {
+      mode: cfg.mode,
+      provider: cfg.provider,
+      model: cfg.model,
+      enabled: cfg.enabled,
+      hasApiKey: !!cfg.apiKey?.trim(),
+      apiKey: '',
+      internalAllowed,
+      vendors: AI_VENDORS.map((v) => ({
+        id: v.id,
+        label: v.label,
+        models: v.models,
+        defaultModel: v.defaultModel,
+      })),
+      quota: quota
+        ? {
+            requestsUsed: quota.requestsUsed,
+            requestsLimit: quota.requestsLimit,
+            tokensUsed: quota.tokensUsed,
+            tokensLimit: quota.tokensLimit,
+            platformEnabled: platform.enabled,
+            platformProvider: platform.provider,
+            platformModel: platform.model,
+          }
+        : undefined,
+    };
+  }
+
+  async updateAsistenteIaConfig(
+    user: AuthUser,
+    dto: UpdateAsistenteIaConfigDto,
+  ) {
+    await this.assertModuleEnabled(user, 'asistente_ia');
+    const tenant = await this.requireTenantFromUser(user);
+    if (dto.mode === 'internal' && tenant.aiInternalEnabled === false) {
+      throw new ForbiddenException(
+        'El proveedor interno no está habilitado para esta empresa. Usa API propia o contacta a soporte.',
+      );
+    }
+    const repo = await this.tenantConnections.getModuleConfigRepository(
+      tenant.schemaName,
+    );
+    let row = await repo.findOne({ where: { moduleId: 'asistente_ia' } });
+    const prev = {
+      ...EMPTY_ASISTENTE_IA_CONFIG,
+      ...((row?.config ?? {}) as Partial<AsistenteIaModuleConfig>),
+    };
+    const next: AsistenteIaModuleConfig = {
+      mode: dto.mode,
+      provider: dto.provider ?? prev.provider,
+      model: (dto.model ?? prev.model).trim(),
+      apiKey:
+        dto.apiKey != null && dto.apiKey !== ''
+          ? dto.apiKey.trim()
+          : prev.apiKey,
+      enabled: dto.enabled ?? prev.enabled,
+    };
+    if (!row) {
+      row = repo.create({ moduleId: 'asistente_ia', config: next });
+    } else {
+      row.config = next;
+    }
+    await repo.save(row);
+    return this.getAsistenteIaConfig(user);
+  }
+
+  async testAsistenteIa(user: AuthUser) {
+    await this.assertModuleEnabled(user, 'asistente_ia');
+    return this.aiRouter.testConnection(user);
+  }
+
+  async chatAsistenteIa(
+    user: AuthUser,
+    dto: AsistenteChatDto,
+    onEvent?: (event: import('../ai/ai-tool.types').AiChatStreamEvent) => void,
+  ) {
+    await this.assertModuleEnabled(user, 'asistente_ia');
+    const dialogue = (dto.messages ?? [])
+      .filter((m) => m.role === 'user' || m.role === 'assistant')
+      .map((m) => ({
+        role: m.role as 'user' | 'assistant',
+        content: m.content,
+      }));
+    const result = await this.aiRouter.chat(user, dialogue, {
+      readOnly: dto.readOnly === true,
+      restorePoints: dto.restorePoints === true,
+      thinking: dto.thinking === true,
+      sessionId: dto.sessionId?.trim() || undefined,
+      contextSummary: dto.contextSummary?.trim() || undefined,
+      onEvent,
+    });
+
+    const sessionId = dto.sessionId?.trim();
+    if (sessionId && Array.isArray(dto.messages) && dto.messages.length > 0) {
+      try {
+        const tenant = await this.requireTenantFromUser(user);
+        const reply =
+          result && typeof result === 'object' && 'reply' in result
+            ? String((result as { reply?: string }).reply ?? '')
+            : '';
+        const turnActivities =
+          result &&
+          typeof result === 'object' &&
+          Array.isArray((result as { activities?: unknown }).activities)
+            ? (
+                result as {
+                  activities: Array<Record<string, unknown>>;
+                }
+              ).activities.filter(
+                (a) =>
+                  a &&
+                  typeof a === 'object' &&
+                  typeof a.slug === 'string' &&
+                  !String(a.slug).startsWith('_'),
+              )
+            : [];
+        const contextSummary =
+          result &&
+          typeof result === 'object' &&
+          typeof (result as { contextSummary?: unknown }).contextSummary ===
+            'string'
+            ? String((result as { contextSummary: string }).contextSummary)
+            : (dto.contextSummary ?? '');
+        const keptFromEnd =
+          result &&
+          typeof result === 'object' &&
+          typeof (result as { keptFromEnd?: unknown }).keptFromEnd === 'number'
+            ? (result as { keptFromEnd: number }).keptFromEnd
+            : null;
+        const contextCompacted =
+          result &&
+          typeof result === 'object' &&
+          (result as { contextCompacted?: boolean }).contextCompacted === true;
+
+        type SavedMsg = {
+          role: 'user' | 'assistant' | 'system';
+          content: string;
+          id?: string;
+          activities?: Array<Record<string, unknown>>;
+        };
+
+        let baseMessages: SavedMsg[] = dto.messages.map((m) => ({
+          role: m.role,
+          content: m.content,
+          ...(m.id ? { id: m.id } : {}),
+          ...(Array.isArray(m.activities) && m.activities.length
+            ? { activities: m.activities as Array<Record<string, unknown>> }
+            : {}),
+        }));
+
+        if (contextCompacted && keptFromEnd != null && keptFromEnd > 0) {
+          const dialogueOnly = baseMessages.filter(
+            (m) => m.role === 'user' || m.role === 'assistant',
+          );
+          const kept = dialogueOnly.slice(-keptFromEnd);
+          baseMessages = [
+            ...(contextSummary
+              ? ([
+                  {
+                    role: 'system' as const,
+                    content: contextSummary,
+                    id: `ctx-${Date.now()}`,
+                  },
+                ] satisfies SavedMsg[])
+              : []),
+            ...kept,
+          ];
+        }
+
+        const messages: SavedMsg[] = [
+          ...baseMessages,
+          ...(reply
+            ? [
+                {
+                  role: 'assistant' as const,
+                  content: reply,
+                  ...(turnActivities.length
+                    ? { activities: turnActivities }
+                    : {}),
+                },
+              ]
+            : []),
+        ];
+        await this.aiChatSessions.upsert({
+          tenantId: tenant.id,
+          userId: user.sub ?? null,
+          sessionId,
+          messages,
+          contextSummary,
+        });
+      } catch (err) {
+        this.logger.warn(
+          `No se pudo guardar sesión de chat: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    }
+
+    return result;
+  }
+
+  /** Tools/skills activos globales para el agente del tenant. */
+  async listAsistenteIaCapabilities(user: AuthUser) {
+    await this.assertModuleEnabled(user, 'asistente_ia');
+    return this.aiCapabilities.listActiveForAgent();
+  }
+
+  async listAsistenteIaRestorePoints(
+    user: AuthUser,
+    opts?: { sessionId?: string },
+  ) {
+    await this.assertModuleEnabled(user, 'asistente_ia');
+    const tenant = await this.requireTenantFromUser(user);
+    return this.aiRestorePoints.listForTenant(tenant.id, {
+      sessionId: opts?.sessionId?.trim() || undefined,
+      limit: 50,
+    });
+  }
+
+  async restoreAsistenteIaPoint(user: AuthUser, id: string) {
+    await this.assertModuleEnabled(user, 'asistente_ia');
+    const tenant = await this.requireTenantFromUser(user);
+    return this.aiRestorePoints.restore(tenant.id, id);
+  }
+
+  async listAsistenteIaSessions(user: AuthUser) {
+    await this.assertModuleEnabled(user, 'asistente_ia');
+    const tenant = await this.requireTenantFromUser(user);
+    return this.aiChatSessions.listForUser(
+      tenant.id,
+      user.sub ?? null,
+    );
+  }
+
+  async getAsistenteIaSession(user: AuthUser, sessionId: string) {
+    await this.assertModuleEnabled(user, 'asistente_ia');
+    const tenant = await this.requireTenantFromUser(user);
+    return this.aiChatSessions.get(
+      tenant.id,
+      sessionId,
+      user.sub ?? null,
+    );
+  }
+
+  async deleteAsistenteIaSession(user: AuthUser, sessionId: string) {
+    await this.assertModuleEnabled(user, 'asistente_ia');
+    const tenant = await this.requireTenantFromUser(user);
+    return this.aiChatSessions.remove(
+      tenant.id,
+      sessionId,
+      user.sub ?? null,
+    );
+  }
+
+  async listAsistenteIaModels(
+    user: AuthUser,
+    dto: { provider: string; apiKey?: string },
+  ) {
+    await this.assertModuleEnabled(user, 'asistente_ia');
+    if (!isAiVendorId(dto.provider)) {
+      throw new BadRequestException(`Proveedor inválido: ${dto.provider}`);
+    }
+    const tenant = await this.requireTenantFromUser(user);
+    const cfg = await this.aiRouter.readTenantConfig(tenant.schemaName);
+    const apiKey = dto.apiKey?.trim() || cfg.apiKey;
+    if (!apiKey?.trim()) {
+      throw new BadRequestException(
+        'Indica una API key (o guárdala primero) para listar modelos',
+      );
+    }
+    return listAiModels(dto.provider, apiKey);
+  }
+
   async startBaileysSession(user: AuthUser) {
     await this.assertModuleEnabled(user, 'whatsapp');
     const tenant = await this.requireTenantFromUser(user);
@@ -683,6 +1004,7 @@ export class ModulesService {
   }
 
   private async requireTenant(id: string) {
+    await this.ensureAiInternalColumn();
     const tenant = await this.tenants.findOne({ where: { id } });
     if (!tenant) throw new NotFoundException('Tenant not found');
     // Normaliza en lectura por si el tenant es anterior al sistema de módulos.
@@ -692,7 +1014,20 @@ export class ModulesService {
     } else {
       tenant.enabledModules = normalizeEnabledModules(tenant.enabledModules);
     }
+    if (tenant.aiInternalEnabled == null) {
+      tenant.aiInternalEnabled = true;
+    }
     return tenant;
+  }
+
+  /** Columna añadida sin migrate formal (prod con synchronize=false). */
+  private async ensureAiInternalColumn() {
+    if (this.aiInternalColumnEnsured) return;
+    await this.dataSource.query(`
+      ALTER TABLE public.tenants
+      ADD COLUMN IF NOT EXISTS ai_internal_enabled boolean NOT NULL DEFAULT true
+    `);
+    this.aiInternalColumnEnsured = true;
   }
 
   private async requireTenantFromUser(user: AuthUser) {

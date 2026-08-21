@@ -24,7 +24,7 @@ describe('onu-orphan-enrich', () => {
     const sight = enrichOrphanModel('HWTC3CD35FB2', null, {
       sightingModel: 'EG8145X6-10',
     });
-    expect(sight.model).toBe('EG8145X6-10');
+    expect(sight.model).toBe('EG8145X6');
     expect(sight.modelSource).toBe('sighting');
 
     const inv = enrichOrphanModel('HWTC3CD35FB2', null, {
@@ -71,7 +71,7 @@ describe('onu-orphan-enrich', () => {
     );
     expect(map.get('FHTT964E6978')).toBe('HG6143D');
     expect(map.get('ZTEGD7180770')).toBe('F6600P');
-    expect(map.get('HWTC3CD35FB2')).toBe('EG8145X6-10');
+    expect(map.get('HWTC3CD35FB2')).toBe('EG8145X6');
     expect(map.has('UNKNOWN123')).toBe(false);
   });
 
@@ -88,6 +88,6 @@ describe('onu-orphan-enrich', () => {
             }
           : null,
     });
-    expect(map.get('HWTC3CD35FB2')).toBe('EG8145X6-10');
+    expect(map.get('HWTC3CD35FB2')).toBe('EG8145X6');
   });
 });

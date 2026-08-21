@@ -4,13 +4,19 @@ import { apiFetch } from '../lib/api'
 import type { PlatformPaymentMethod } from '../lib/modules'
 import { PanelShell } from '../components/PanelShell'
 import { MercadoPagoConfigModal } from '../components/MercadoPagoConfigModal'
+import { PayPalConfigModal } from '../components/PayPalConfigModal'
 import {
   ListSearchInput,
   matchesSearch,
 } from '../components/ListSearchInput'
 
+function integrationLabel(m: PlatformPaymentMethod) {
+  if (m.provider === 'paypal') return 'PayPal Checkout'
+  return 'Checkout Pro'
+}
+
 export function AdminPaymentMethodsPage() {
-  const [editId, setEditId] = useState<string | null>(null)
+  const [edit, setEdit] = useState<PlatformPaymentMethod | null>(null)
   const [search, setSearch] = useState('')
 
   const query = useQuery({
@@ -26,6 +32,7 @@ export function AdminPaymentMethodsPage() {
         search,
         m.name,
         m.description,
+        m.provider,
         m.environment,
         m.enabled ? 'activo' : 'inactivo',
         m.configured ? 'configurado' : 'pendiente',
@@ -86,13 +93,13 @@ export function AdminPaymentMethodsPage() {
               {m.description}
             </p>
             <p className="mb-4 text-xs text-[var(--text-muted)]">
-              Checkout Pro ·{' '}
+              {integrationLabel(m)} ·{' '}
               {m.environment === 'production' ? 'Producción' : 'Sandbox'}
             </p>
             <div className="flex justify-end">
               <button
                 type="button"
-                onClick={() => setEditId(m.id)}
+                onClick={() => setEdit(m)}
                 className="rounded-lg bg-[var(--accent)] px-3 py-1.5 text-xs font-medium text-white hover:bg-[var(--accent-hover)]"
               >
                 Configurar
@@ -102,12 +109,20 @@ export function AdminPaymentMethodsPage() {
         ))}
       </div>
 
-      {editId && (
+      {edit?.provider === 'mercadopago' && (
         <MercadoPagoConfigModal
-          open={!!editId}
+          open
           canWrite
-          scope={{ kind: 'platform', methodId: editId }}
-          onClose={() => setEditId(null)}
+          scope={{ kind: 'platform', methodId: edit.id }}
+          onClose={() => setEdit(null)}
+        />
+      )}
+      {edit?.provider === 'paypal' && (
+        <PayPalConfigModal
+          open
+          canWrite
+          methodId={edit.id}
+          onClose={() => setEdit(null)}
         />
       )}
     </PanelShell>

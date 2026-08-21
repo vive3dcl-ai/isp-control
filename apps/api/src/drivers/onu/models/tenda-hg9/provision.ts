@@ -9,6 +9,7 @@ import type {
   OnuModelProvisionCtx,
   OnuModelProvisionResult,
 } from '../../types';
+import { healServiceWanVlanToPanel } from '../../infra/service-wan-vlan';
 import {
   buildTendaDisableJunkParams,
   buildTendaServiceWanParams,
@@ -58,6 +59,19 @@ export async function ensureTendaHg9ServiceWan(
   let device = await refreshWanTree(ctx);
 
   let conns = listTendaWanIpConnections(device);
+  // INTERNET en VLAN ≠ panel: borrar WCD (recreate). No se puede SPV VLAN (9007).
+  const vlanHeal = await healServiceWanVlanToPanel(
+    { ...ctx, device },
+    { family: 'tenda', prefer: 'recreate' },
+  );
+  if (vlanHeal) {
+    return {
+      ok: vlanHeal.ok,
+      notes: [...notes, ...vlanHeal.notes],
+      progress: vlanHeal.progress,
+    };
+  }
+
   const junk = findTendaJunkInternetWans(conns, wan.wanVlan);
   for (const j of junk) {
     const params = buildTendaDisableJunkParams(j);

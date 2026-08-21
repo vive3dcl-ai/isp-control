@@ -63,6 +63,13 @@ export class OnuCatalogItem {
   })
   imageKey: string;
 
+  /**
+   * Optional verified photo (data URL or http(s)).
+   * When set, tenants that pick up this model use it instead of imageKey SVG.
+   */
+  @Column({ name: 'custom_image_url', type: 'text', nullable: true })
+  customImageUrl: string | null;
+
   @Column({ type: 'text', default: '' })
   note: string;
 

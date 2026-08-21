@@ -374,7 +374,7 @@ export class SuspensionPortalService {
         continue;
       }
       try {
-        await this.onus.enable(user, onu.oltId, onu.onuIf);
+        await this.onus.enable(user, onu.oltId, onu.onuIf, { fromCrm: true });
         await this.addSuspendedIp(user, service, wanIp);
         migrated += 1;
       } catch (err) {
@@ -384,7 +384,9 @@ export class SuspensionPortalService {
           }`,
         );
         try {
-          await this.onus.disable(user, onu.oltId, onu.onuIf);
+          await this.onus.disable(user, onu.oltId, onu.onuIf, {
+            fromCrm: true,
+          });
         } catch {
           /* keep previous OLT state if re-disable fails */
         }

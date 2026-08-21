@@ -28,6 +28,7 @@ import { IpPoolService } from '../routers/ip-pool.service';
 import { SetOnuTr069Dto, SetOnuNetworkVlansDto } from '../shared/dto/ip-pool.dto';
 import { OnuTr069ConfigService } from './onu-tr069-config.service';
 import { OnuPostProvisionVerifyService } from './onu-post-provision-verify.service';
+import { summarizeVerifyFailures } from './onu-post-provision-verify.util';
 import { ApplyTr069OnuConfigDto } from '../shared/dto/onu-tr069-config.dto';
 import {
   IsArray,
@@ -476,6 +477,87 @@ export class OnuConnectedController {
     };
   }
 
+  @Get('verify/dba-pending')
+  @TenantRoles(...FIELD_INSTALL_ROLES)
+  async dbaPending(@CurrentUser() user: AuthUser) {
+    const schema = user.schemaName;
+    if (!schema) throw new BadRequestException('Sin esquema de empresa');
+    const pending = await this.verify.countDbaPending(schema);
+    return { pending, show: pending > 0 };
+  }
+
+  @Post('verify/sync-dba')
+  @TenantRoles(...FIELD_INSTALL_ROLES)
+  async syncDba(@CurrentUser() user: AuthUser) {
+    const schema = user.schemaName;
+    if (!schema) throw new BadRequestException('Sin esquema de empresa');
+    const result = await this.verify.syncDbaAll(schema);
+    return {
+      ok: true,
+      queued: result.queued,
+      started: result.started,
+      message:
+        result.queued === 0
+          ? 'No hay ONUs pendientes de perfil de velocidad'
+          : result.started
+            ? `Verificación de perfiles en curso: ${result.queued} ONU(s)`
+            : `Ya hay una verificación de perfiles en curso (${result.queued} ONU(s))`,
+    };
+  }
+
+  /** Lee T-CONT internet en la OLT vs plan (sin escribir). */
+  @Post(':id/dba/probe')
+  @TenantRoles(...FIELD_INSTALL_ROLES)
+  async probeOnuDba(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    const schema = user.schemaName;
+    if (!schema) throw new BadRequestException('Sin esquema de empresa');
+    const result = await this.tr069Config.syncInternetDba(schema, id, {
+      heal: false,
+    });
+    await this.onus.recordDbaPlanCheck(schema, id, {
+      ok: result.matched,
+      message: result.message,
+      expected: result.expected,
+      actual: result.actual,
+    });
+    return {
+      ok: result.matched,
+      matched: result.matched,
+      expected: result.expected,
+      actual: result.actual,
+      message: result.message,
+    };
+  }
+
+  /** Crea perfil en OLT si falta y aplica T-CONT del plan. */
+  @Post(':id/dba/apply')
+  @TenantRoles(...FIELD_INSTALL_ROLES)
+  async applyOnuDba(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    const schema = user.schemaName;
+    if (!schema) throw new BadRequestException('Sin esquema de empresa');
+    const result = await this.tr069Config.syncInternetDba(schema, id, {
+      heal: true,
+    });
+    const onu = await this.verify.runOnuHealthPass(schema, id, {
+      force: true,
+    });
+    return {
+      ok: result.matched,
+      matched: result.matched,
+      expected: result.expected,
+      actual: result.actual,
+      healed: result.healed,
+      message: result.message,
+      verifyStatus: onu.verifyStatus,
+    };
+  }
+
   @Post(':id/verify/start')
   @TenantRoles(...FIELD_INSTALL_ROLES)
   async startPostProvisionVerify(
@@ -538,16 +620,23 @@ export class OnuConnectedController {
     if (!schema) throw new BadRequestException('Sin esquema de empresa');
     const onu = await this.verify.runManual(schema, id);
     const detail = (onu.verifyDetail ?? {}) as Record<string, unknown>;
+    const failureSummary =
+      onu.verifyStatus === 'fail'
+        ? summarizeVerifyFailures(onu.verifyDetail as never)
+        : '';
     return {
       ok: onu.verifyStatus === 'ok',
       verifyStatus: onu.verifyStatus,
       verifyCheckedAt: onu.verifyCheckedAt?.toISOString() ?? null,
       verifyDetail: detail,
+      failureSummary: failureSummary || undefined,
       message:
         onu.verifyStatus === 'ok'
           ? 'ONU OK'
           : onu.verifyStatus === 'fail'
-            ? 'Chequeo fallido'
+            ? failureSummary
+              ? `Chequeo fallido — ${failureSummary}`
+              : 'Chequeo fallido'
             : 'Chequeo en curso',
     };
   }

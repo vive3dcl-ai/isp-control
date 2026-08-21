@@ -12,11 +12,17 @@ export type OnuVerifyProgressResponse = {
   driverId: string | null
   verifyStatus: 'idle' | 'test' | 'ok' | 'fail' | string
   verifyAttempt: number
-  plan: Array<{ id: string; label: string; phase: 'acs' | 'net' }>
+  plan: Array<{ id: string; label: string; phase: 'acs' | 'olt' | 'net' }>
   progress: {
     currentStepId: string | null
     completed: string[]
     notes: string[]
+    history?: Array<{
+      id: string
+      status: 'done' | 'error' | 'skipped'
+      note?: string
+      at: string
+    }>
     updatedAt: string
   } | null
   checks: Record<
@@ -24,6 +30,20 @@ export type OnuVerifyProgressResponse = {
     { ok?: boolean; message?: string } | null | undefined
   >
   healed: string[]
+  failureSummary?: string
+}
+
+function latestHistoryById(
+  history: NonNullable<OnuVerifyProgressResponse['progress']>['history'],
+): Map<string, { status: 'done' | 'error' | 'skipped'; note?: string }> {
+  const map = new Map<
+    string,
+    { status: 'done' | 'error' | 'skipped'; note?: string }
+  >()
+  for (const h of history ?? []) {
+    map.set(h.id, { status: h.status, note: h.note })
+  }
+  return map
 }
 
 /** Mapea GET verify/progress → pasos del OperationProgressModal. */
@@ -31,30 +51,28 @@ export function mapOnuVerifyProgressSteps(
   data: OnuVerifyProgressResponse,
 ): ProgressStep[] {
   const completed = new Set(data.progress?.completed ?? [])
+  const historyMap = latestHistoryById(data.progress?.history)
   const current = data.progress?.currentStepId
   const status = data.verifyStatus
   const active = status === 'test' || status === 'idle'
-  const acsPending =
-    status !== 'ok' &&
-    data.plan.some((p) => p.phase === 'acs' && !completed.has(p.id))
+  const lastNotes = data.progress?.notes?.slice(-1)[0] ?? null
 
   let runningId: string | null = null
   if (active) {
-    if (current && !completed.has(current)) {
+    if (current && historyMap.get(current)?.status !== 'done') {
       runningId = current
     } else {
       for (const p of data.plan) {
-        if (p.phase === 'acs') {
-          if (!completed.has(p.id)) {
-            runningId = p.id
-            break
-          }
+        if (p.phase === 'net') {
+          const checkId = p.id.replace(/^net_/, '')
+          const check = data.checks[checkId]
+          if (check?.ok || completed.has(p.id)) continue
+          runningId = p.id
+          break
+        }
+        if (historyMap.get(p.id)?.status === 'done' || completed.has(p.id)) {
           continue
         }
-        if (acsPending) break
-        const checkId = p.id.replace(/^net_/, '')
-        const check = data.checks[checkId]
-        if (check?.ok || completed.has(p.id)) continue
         runningId = p.id
         break
       }
@@ -64,6 +82,7 @@ export function mapOnuVerifyProgressSteps(
   return data.plan.map((p) => {
     let stepStatus: ProgressStepStatus = 'pending'
     let detail: string | null = null
+    const hist = historyMap.get(p.id)
 
     if (status === 'ok') {
       const checkId = p.phase === 'net' ? p.id.replace(/^net_/, '') : null
@@ -72,34 +91,55 @@ export function mapOnuVerifyProgressSteps(
         id: p.id,
         label: p.label,
         status: 'done' as const,
-        detail: check?.message ?? 'OK',
+        detail: check?.message ?? hist?.note ?? 'OK',
       }
     }
 
     if (p.phase === 'net') {
       const checkId = p.id.replace(/^net_/, '')
       const check = data.checks[checkId]
-      if (check?.ok || completed.has(p.id)) {
+      if (check?.ok === true) {
         stepStatus = 'done'
-        detail = check?.message ?? 'OK'
+        detail = check.message ?? 'OK'
       } else if (check && check.ok === false && status === 'fail') {
         stepStatus = 'error'
         detail = check.message ?? 'Falló'
+      } else if (check && check.ok === false) {
+        stepStatus = p.id === runningId ? 'running' : 'pending'
+        detail = check.message ?? (p.id === runningId ? 'En curso…' : 'Pendiente')
+      } else if (completed.has(p.id) && !check) {
+        stepStatus = 'done'
+        detail = 'OK'
       } else if (p.id === runningId) {
         stepStatus = 'running'
-        detail =
-          check?.message ?? data.progress?.notes?.slice(-1)[0] ?? 'En curso…'
-      } else if (check && check.ok === false) {
-        detail = check.message ?? 'Pendiente'
+        detail = check?.message ?? lastNotes ?? 'En curso…'
+      } else {
+        detail = 'Pendiente'
       }
-    } else if (completed.has(p.id)) {
+      return { id: p.id, label: p.label, status: stepStatus, detail }
+    }
+
+    // ACS / OLT: historial real. Nunca marcar en masa como "Omitido".
+    if (hist?.status === 'done' || completed.has(p.id)) {
       stepStatus = 'done'
-      detail = 'OK'
+      detail = hist?.note ?? 'OK'
+    } else if (
+      hist?.status === 'error' ||
+      (status === 'fail' && p.id === current)
+    ) {
+      stepStatus = 'error'
+      detail = hist?.note ?? lastNotes ?? 'Falló aquí'
+    } else if (hist?.status === 'skipped') {
+      stepStatus = 'skipped'
+      detail = hist.note ?? 'No requerido'
     } else if (p.id === runningId) {
       stepStatus = 'running'
-      detail = data.progress?.notes?.slice(-1)[0] ?? 'En curso…'
-    } else if (current === p.id && status === 'fail') {
-      stepStatus = 'error'
+      detail = lastNotes ?? 'En curso…'
+    } else if (status === 'fail') {
+      stepStatus = 'pending'
+      detail = 'No ejecutado'
+    } else {
+      detail = 'Pendiente'
     }
 
     return { id: p.id, label: p.label, status: stepStatus, detail }
@@ -130,6 +170,7 @@ export function OnuProvisionProgressModal({
   const [verifyStatus, setVerifyStatus] = useState('test')
   const [driverId, setDriverId] = useState<string | null>(null)
   const [healed, setHealed] = useState<string[]>([])
+  const [failureSummary, setFailureSummary] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [runningCheck, setRunningCheck] = useState(false)
   const checkStarted = useRef(false)
@@ -144,6 +185,7 @@ export function OnuProvisionProgressModal({
       setDriverId(data.driverId)
       setVerifyStatus(data.verifyStatus)
       setHealed(data.healed ?? [])
+      setFailureSummary(data.failureSummary?.trim() || null)
       setSteps(mapOnuVerifyProgressSteps(data))
       setError(null)
       if (
@@ -165,10 +207,9 @@ export function OnuProvisionProgressModal({
       return
     }
     void refresh()
-    // Poll agresivo mientras el script/verify corre para ver pasos uno a uno.
     const t = window.setInterval(() => {
       void refresh()
-    }, 1_500)
+    }, 800)
     return () => window.clearInterval(t)
   }, [open, refresh])
 
@@ -179,6 +220,7 @@ export function OnuProvisionProgressModal({
     void (async () => {
       try {
         await apiFetch(`/app/onus/${onuId}/verify/run`, { method: 'POST' })
+        finishedNotified.current = false
         await refresh()
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e))
@@ -186,7 +228,6 @@ export function OnuProvisionProgressModal({
         setRunningCheck(false)
       }
     })()
-    // Solo al abrir con runCheckOnOpen: no re-disparar si `refresh` cambia de identidad.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional once-per-open
   }, [open, runCheckOnOpen, onuId])
 
@@ -207,7 +248,11 @@ export function OnuProvisionProgressModal({
           ? `ONU OK · driver ${driverId}`
           : 'ONU OK — aprovisionamiento verificado'
       }
-      failedLabel="Chequeo fallido — puedes reintentar o seguir en segundo plano"
+      failedLabel={
+        failureSummary
+          ? `Chequeo fallido — ${failureSummary}`
+          : 'Chequeo fallido — puedes reintentar o seguir en segundo plano'
+      }
       closeWhileRunning
       closeLabel={running ? 'Seguir en segundo plano' : 'Cerrar'}
       onRetry={

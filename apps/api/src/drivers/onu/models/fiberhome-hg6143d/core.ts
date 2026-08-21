@@ -1,8 +1,8 @@
 /**
- * FiberHome HG6143D (SN FHTT… / OUI 000AC2).
+ * FiberHome HG6143D / HG6244C / HG6145F (SN FHTT… / OUI 000AC2).
  *
- * Validado en FHTT964E6978. En OLT ZTE el `onu_type` a veces llega como
- * `F600` (perfil OMCI), pero el ACS publica ProductClass=HG6143D.
+ * Validado en FHTT964E6978 (HG6143D). En OLT ZTE el `onu_type` a veces llega
+ * como `F600` (perfil OMCI), pero el ACS publica ProductClass real.
  *
  * Camino TR-098 FiberHome:
  *  - Servicio: X_FH_ServiceList=INTERNET
@@ -27,21 +27,22 @@ import type {
   OnuModelProvisionWanPlan,
 } from '../../types';
 import type { WanConnectionRef } from '../../infra/wan-datamodel';
+import {
+  assessServiceLanBind,
+  FH_HG6143D_DEFAULT_LAN_BIND,
+  lanWifiStringBindOk,
+} from '../../infra/lan-bind';
+
+export { FH_HG6143D_DEFAULT_LAN_BIND };
 
 const WAN_DEV = 'InternetGatewayDevice.WANDevice';
 
-/** HG6143D y revisiones (HG6143D-10, etc.). */
-const MODEL_RE = /^HG6143D/i;
-
-/** Bind por defecto visto en FHTT964E6978 (4×GE + SSID 2.4 + 5 GHz). */
-export const FH_HG6143D_DEFAULT_LAN_BIND = [
-  'InternetGatewayDevice.LANDevice.1.LANEthernetInterfaceConfig.1',
-  'InternetGatewayDevice.LANDevice.1.LANEthernetInterfaceConfig.2',
-  'InternetGatewayDevice.LANDevice.1.LANEthernetInterfaceConfig.3',
-  'InternetGatewayDevice.LANDevice.1.LANEthernetInterfaceConfig.4',
-  'InternetGatewayDevice.LANDevice.1.WLANConfiguration.1',
-  'InternetGatewayDevice.LANDevice.1.WLANConfiguration.5',
-].join(',');
+/**
+ * HG6143D / HG6244C / HG6145F y revisiones (…-10, etc.).
+ * HG6145F usa el mismo árbol X_FH_* que HG6143D; si cae en generic-fiberhome
+ * (sin ownsWanSelection) el checker no cura WAN con connreq ajeno (RMS/Entel).
+ */
+const MODEL_RE = /^(HG6143D|HG6244C|HG6145F)/i;
 
 export type FiberhomeWanConnSummary = {
   cd: number;
@@ -156,8 +157,8 @@ export function isFiberhomeServiceWanApplied(
     return false;
   }
   const want = expectedFiberhomeDns(wan);
-  if (!want) return true;
-  return (target.dnsServers ?? '').trim() === want;
+  if (want && (target.dnsServers ?? '').trim() !== want) return false;
+  return assessServiceLanBind(device, target.conn).ok;
 }
 
 export function needsNewFiberhomeWanConnectionDevice(
@@ -184,6 +185,7 @@ export function buildFiberhomeServiceWanParams(
     [`${conn}.SubnetMask`, wan.wanMask, 'xsd:string'],
     [`${conn}.DefaultGateway`, wan.wanGateway, 'xsd:string'],
     [`${conn}.DNSServers`, dns, 'xsd:string'],
+    [`${conn}.DNSEnabled`, true, 'xsd:boolean'],
     [`${conn}.NATEnabled`, true, 'xsd:boolean'],
     [`${conn}.Enable`, true, 'xsd:boolean'],
     // Mode=2 = tagged service WAN (observado en HG6143D INTERNET).
@@ -200,8 +202,8 @@ export function buildFiberhomeServiceWanParams(
       'xsd:unsignedInt',
     ],
   ];
-  // No vaciar un bind ya curado por el panel (IPTV puede haber movido puertos).
-  if (!target.lanInterface?.trim()) {
+  // Boolean `true` lo escribió el genérico FiberHome y no liga LAN/Wi‑Fi.
+  if (!lanWifiStringBindOk(target.lanInterface)) {
     params.push([
       `${conn}.X_FH_LanInterface`,
       FH_HG6143D_DEFAULT_LAN_BIND,

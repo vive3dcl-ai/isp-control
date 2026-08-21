@@ -130,20 +130,28 @@
     list.innerHTML = plans
       .map(function (p) {
         var free = isFreePlan(p)
+        var lifetime = !!(p.isLifetime || p.code === 'lifetime')
         var limit = p.userLimit != null ? p.userLimit : '—'
         var label = p.label || limit + ' usuarios'
         var priceHtml = free
           ? '<div class="plan-price is-free">Gratis<small>por tiempo limitado</small></div>'
-          : '<div class="plan-price">' +
-            money(p.priceUsd) +
-            '<small>USD / mes</small></div>'
+          : lifetime
+            ? '<div class="plan-price">' +
+              money(p.priceUsd) +
+              '<small>USD pago único</small></div>'
+            : '<div class="plan-price">' +
+              money(p.priceUsd) +
+              '<small>USD / mes</small></div>'
         var ribbon = free
           ? '<span class="plan-ribbon" aria-hidden="true">Gratis</span>'
-          : ''
-        var cta = free ? 'Empezar gratis' : 'Elegir plan'
+          : lifetime
+            ? '<span class="plan-ribbon" aria-hidden="true">Lifetime</span>'
+            : ''
+        var cta = free ? 'Empezar gratis' : lifetime ? 'Comprar Lifetime' : 'Elegir plan'
         return (
           '<li class="plan' +
           (free ? ' is-free' : '') +
+          (lifetime ? ' is-lifetime' : '') +
           '">' +
           ribbon +
           '<p class="plan-name">' +

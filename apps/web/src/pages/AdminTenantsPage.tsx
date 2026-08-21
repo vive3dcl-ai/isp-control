@@ -163,7 +163,7 @@ export function AdminTenantsPage() {
               <span
                 className={`shrink-0 rounded-full px-2.5 py-0.5 text-[11px] font-medium ${statusTone[t.status]}`}
               >
-                {statusLabel[t.status]}
+                {t.isInternalCompany ? 'Interna' : statusLabel[t.status]}
               </span>
             </div>
             <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
@@ -217,7 +217,11 @@ export function AdminTenantsPage() {
                 </td>
                 <td className="px-4 py-3">{t.phone || '—'}</td>
                 <td className="px-4 py-3 font-mono text-xs">{t.slug}</td>
-                <td className="px-4 py-3">{statusLabel[t.status]}</td>
+                <td className="px-4 py-3">
+                  {t.isInternalCompany
+                    ? 'Empresa interna'
+                    : statusLabel[t.status]}
+                </td>
                 <td className="px-4 py-3">
                   <TenantActions t={t} />
                 </td>
@@ -242,7 +246,7 @@ export function AdminTenantsPage() {
           type="button"
           onClick={() => setCreateOpen(true)}
           aria-label="Nueva empresa"
-          className="fixed bottom-20 right-5 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-[var(--accent)] text-white shadow-lg shadow-black/25 hover:bg-[var(--accent-hover)] md:hidden"
+          className="app-fab-mobile fixed z-40 flex h-14 w-14 items-center justify-center rounded-full bg-[var(--accent)] text-white shadow-lg shadow-black/25 hover:bg-[var(--accent-hover)] md:hidden"
         >
           <svg
             width="28"

@@ -25,6 +25,7 @@ export function EditTenantModal({
   const [phone, setPhone] = useState('')
   const [address, setAddress] = useState('')
   const [status, setStatus] = useState<TenantStatus>('active')
+  const [isInternalCompany, setIsInternalCompany] = useState(false)
 
   useEffect(() => {
     if (!tenant) return
@@ -33,6 +34,7 @@ export function EditTenantModal({
     setPhone(tenant.phone || '')
     setAddress(tenant.address || '')
     setStatus(tenant.status)
+    setIsInternalCompany(!!tenant.isInternalCompany)
   }, [tenant])
 
   const updateMutation = useMutation({
@@ -59,6 +61,7 @@ export function EditTenantModal({
       phone: phone.trim(),
       address: address.trim(),
       status,
+      isInternalCompany,
     })
   }
 
@@ -150,11 +153,33 @@ export function EditTenantModal({
               value={status}
               onChange={(e) => setStatus(e.target.value as TenantStatus)}
               className={inputClass}
+              disabled={isInternalCompany}
             >
               <option value="active">Activa</option>
               <option value="inactive">Inactiva</option>
               <option value="suspended">Suspendida</option>
             </select>
+          </label>
+
+          <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-3">
+            <input
+              type="checkbox"
+              className="mt-1"
+              checked={isInternalCompany}
+              onChange={(e) => {
+                const on = e.target.checked
+                setIsInternalCompany(on)
+                if (on) setStatus('active')
+              }}
+            />
+            <span>
+              <span className="block text-sm font-medium text-[var(--text)]">
+                Empresa interna
+              </span>
+              <span className="mt-0.5 block text-xs text-[var(--text-muted)]">
+                Queda siempre activa, sin mora ni cobros de suscripción.
+              </span>
+            </span>
           </label>
 
           <p className="text-xs text-[var(--text-muted)]">
